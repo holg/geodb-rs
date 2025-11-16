@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2) Install Rust (workspace + wasm)
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # 3) Install tooling (only once, reused by all steps)
+      - name: Install CLI tools (trunk, wasm-bindgen, cargo-sort, taplo, cargo-deny)
+        # if you want deterministic versions, pin with `--version` here
+        run: |
+          cargo install trunk
+          cargo install wasm-bindgen-cli
+          cargo install cargo-sort
+          cargo install taplo-cli
+          cargo install cargo-deny
+
+      # ---------------------------
+      #  Lints & formatting
+      # ---------------------------
+
+      - name: cargo fmt -- --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo-sort -cwg
+        run: cargo-sort -cwg
+
+      - name: taplo format --check
+        run: taplo format --check
+
+      - name: cargo clippy --workspace
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: cargo-deny check
+        run: cargo-deny check --hide-inclusion-graph --show-stats
+
+      # ---------------------------
+      #  Docs & tests
+      # ---------------------------
+
+      - name: cargo doc --workspace
+        run: cargo doc --locked --workspace --document-private-items
+
+      - name: cargo test --workspace
+        run: cargo test --locked --workspace -- --test-threads=1
+
+      # ---------------------------
+      #  WASM build (Trunk)
+      # ---------------------------
+
+      - name: Build geodb-wasm (Trunk)
+        working-directory: crates/geodb-wasm
+        run: trunk build --release
+
+      - name: Upload WASM dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodb-wasm-dist
+          path: crates/geodb-wasm/dist
+          if-no-files-found: error
