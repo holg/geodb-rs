@@ -1,20 +1,20 @@
 [package]
+edition = "2021"
+license = "MIT"
 name = "geodb-wasm"
 version = "0.1.0"
-edition = "2021"
+[package.metadata.trunk]
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-geodb-core = { path = "../geodb-core" }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-serde-wasm-bindgen = { workspace = true }
-wasm-bindgen = { workspace = true }
-js-sys = { workspace = true }
-web-sys = { workspace = true, features = ["console"] }
 bincode = { workspace = true }
 console_error_panic_hook = "0.1"
-[package.metadata.trunk]
-# So index.html stays at crate root
+geodb-core = { path = "../geodb-core" }
+js-sys = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde-wasm-bindgen = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = ["console"] }

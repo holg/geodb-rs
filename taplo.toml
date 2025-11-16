@@ -18,7 +18,7 @@ compact_arrays = true
 # Compact inline tables
 compact_inline_tables = false
 # Column width for formatting
-column_width = 80
+column_width = 100
 # Indent tables
 indent_tables = false
 # Indent entries
@@ -36,7 +36,7 @@ crlf = false
 
 # Exclude patterns to avoid conflicts with cargo-sort
 # Cargo.toml is managed by cargo-sort, so we exclude it from taplo formatting
-exclude = ["config/**", "target/**", "**/Cargo.toml", "**/Cargo.lock"]
+exclude = ["target/**", "**/Cargo.toml", "**/Cargo.lock"]
 
 # Include patterns (optional - taplo will format all TOML files by default)
 include = ["**/*.toml"]

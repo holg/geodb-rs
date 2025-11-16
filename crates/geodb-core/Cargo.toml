@@ -6,7 +6,6 @@ license = "MIT"
 description = "Geographic database loader (countries, regions, cities, aliasses) with filtering and caching."
 repository = "https://github.com/holg/geodb-rs"
 
-
 [dependencies]
 bincode = "1"
 flate2 = { version = "1" }

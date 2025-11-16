@@ -195,7 +195,7 @@ pub fn search_country_prefix(prefix: &str) -> JsValue {
         .countries()
         .iter()
         .filter(|c| c.name().to_ascii_lowercase().starts_with(&p))
-        .map(|c| country_to_js(c))
+        .map(country_to_js)
         .collect();
     to_value(&items).unwrap()
 }

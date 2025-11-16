@@ -7,7 +7,7 @@
 # ============================================================================
 [licenses]
 # We want really high confidence when inferring licenses from text
-confidence-threshold = 0.93
+confidence-threshold = 0.8
 
 # List of explicitly allowed licenses
 # These are common open-source licenses used in the Rust ecosystem
@@ -33,7 +33,7 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 # Security Advisories
 # ============================================================================
 [advisories]
-# The path where the advisory database is cloned/fetched into
+# The path where the advisory database is cloned/fetch into
 db-path = "~/.cargo/advisory-db"
 
 # The url(s) of the advisory databases to use
@@ -56,7 +56,7 @@ multiple-versions = "warn"
 wildcards = "allow"
 
 # Highlight the lowest version of a crate that has a duplicate
-highlight = "lowest-version"
+highlight = "all"
 
 # List of crates that are allowed to have multiple versions
 allow = [
@@ -79,11 +79,11 @@ skip-tree = [
 [sources]
 # Lint level for what to happen when a crate from a crate registry that is not
 # in the allow list is encountered
-unknown-registry = "warn"
+unknown-registry = "deny"
 
 # Lint level for what to happen when a crate from a git repository that is not
 # in the allow list is encountered
-unknown-git = "warn"
+unknown-git = "deny"
 
 # List of URLs for allowed crate registries
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
