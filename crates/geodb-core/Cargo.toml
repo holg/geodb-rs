@@ -1,0 +1,22 @@
+[package]
+name = "geodb-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Geographic database loader (countries, regions, cities, aliasses) with filtering and caching."
+repository = "https://github.com/holg/geodb-rs"
+
+
+[dependencies]
+bincode = "1"
+flate2 = { version = "1" }
+once_cell = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+# optional (for future compact backend)
+smol_str = { version = "0.2", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

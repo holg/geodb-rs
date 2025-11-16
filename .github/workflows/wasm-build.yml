@@ -1,0 +1,38 @@
+name: Build WASM Demo
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "crates/geodb-wasm/**"
+      - "crates/geodb-core/**"
+      - "Cargo.toml"
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Trunk
+        run: |
+          cargo install trunk
+          cargo install wasm-bindgen-cli
+
+      - name: Build WASM demo
+        working-directory: crates/geodb-wasm
+        run: |
+          trunk build --release
+
+      - name: Upload dist folder
+        uses: actions/upload-artifact@v3
+        with:
+          name: geodb-wasm-dist
+          path: crates/geodb-wasm/dist
