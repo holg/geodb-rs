@@ -1,0 +1,168 @@
+{
+  "cities": [
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Coesfeld",
+      "aliases": ["Koesfeld"],
+      "regions": ["Münsterland"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Münster",
+      "aliases": ["Munster"],
+      "regions": ["Münsterland"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Dülmen",
+      "aliases": ["Duelmen"],
+      "regions": ["Münsterland"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Warendorf",
+      "aliases": [],
+      "regions": ["Münsterland"]
+    },
+
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Dortmund",
+      "aliases": [],
+      "regions": ["Ruhrgebiet"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Essen",
+      "aliases": [],
+      "regions": ["Ruhrgebiet"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Bochum",
+      "aliases": [],
+      "regions": ["Ruhrgebiet"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Duisburg",
+      "aliases": [],
+      "regions": ["Ruhrgebiet"]
+    },
+
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Köln",
+      "aliases": ["Cologne", "Koeln"],
+      "regions": ["Rheinland"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Bonn",
+      "aliases": [],
+      "regions": ["Rheinland"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Nordrhein-Westfalen",
+      "city": "Düsseldorf",
+      "aliases": ["Duesseldorf"],
+      "regions": ["Rheinland"]
+    },
+
+    {
+      "iso2": "DE",
+      "state": "Berlin",
+      "city": "Berlin",
+      "aliases": [],
+      "regions": ["Berlin/Brandenburg"]
+    },
+
+    {
+      "iso2": "DE",
+      "state": "Bayern",
+      "city": "München",
+      "aliases": ["Munich", "Muenchen"],
+      "regions": ["Oberbayern"]
+    },
+    {
+      "iso2": "DE",
+      "state": "Bayern",
+      "city": "Nürnberg",
+      "aliases": ["Nuernberg", "Nuremberg"],
+      "regions": ["Mittelfranken"]
+    },
+
+    {
+      "iso2": "DE",
+      "state": "Hamburg",
+      "city": "Hamburg",
+      "aliases": [],
+      "regions": ["Metropolregion Hamburg"]
+    },
+
+    {
+      "iso2": "CH",
+      "state": "Zürich",
+      "city": "Zürich",
+      "aliases": ["Zurich", "Zuerich"],
+      "regions": ["Greater Zurich Area"]
+    },
+    {
+      "iso2": "CH",
+      "state": "Zürich",
+      "city": "Winterthur",
+      "aliases": [],
+      "regions": ["Greater Zurich Area"]
+    },
+
+    {
+      "iso2": "CH",
+      "state": "Bern",
+      "city": "Bern",
+      "aliases": ["Berne"],
+      "regions": ["Bern-Mittelland"]
+    },
+
+    {
+      "iso2": "CH",
+      "state": "Basel-Stadt",
+      "city": "Basel",
+      "aliases": ["Bâle"],
+      "regions": ["Nordwestschweiz"]
+    },
+
+    {
+      "iso2": "CH",
+      "state": "Genève",
+      "city": "Genève",
+      "aliases": ["Geneva", "Genf"],
+      "regions": ["Lac Léman / Lake Geneva"]
+    },
+    {
+      "iso2": "CH",
+      "state": "Vaud",
+      "city": "Lausanne",
+      "aliases": [],
+      "regions": ["Lac Léman / Lake Geneva"]
+    },
+
+    {
+      "iso2": "CH",
+      "state": "Ticino",
+      "city": "Lugano",
+      "aliases": [],
+      "regions": ["Sottoceneri", "Svizzera italiana"]
+    }
+  ]
+}
