@@ -1,7 +1,9 @@
 # geodb-rs
 
+![CI](https://github.com/holg/geodb-rs/actions/workflows/ci.yml/badge.svg)
 [![Crates.io](https://img.shields.io/crates/v/geodb-core.svg)](https://crates.io/crates/geodb-core)
 [![Documentation](https://docs.rs/geodb-core/badge.svg)](https://docs.rs/geodb-core)
+![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance, pure-Rust geographic database with countries, states/regions, cities, aliases, phone codes, currencies, timezones, and WebAssembly support.
