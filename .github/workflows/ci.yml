@@ -59,7 +59,6 @@ jobs:
   # =========================
   build-cli:
     needs: lint-test
-    # avoid producing artifacts for PRs if you want, comment out to always run
     if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
@@ -91,8 +90,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Remove target folder
-        run: rm -rf target
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -163,11 +160,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      # IMPORTANT: no rust-cache here for manylinux builds,
+      # to avoid reusing host-built artifacts inside the container.
 
       - name: Build wheels with maturin
         uses: messense/maturin-action@v1
+        env:
+          # Ensure container uses its own clean target dir
+          CARGO_TARGET_DIR: /tmp/maturin-target
         with:
           manylinux: ${{ matrix.manylinux }}
           target: ${{ matrix.target }}
