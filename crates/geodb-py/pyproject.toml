@@ -1,3 +1,25 @@
 [build-system]
-requires = ["maturin>=1,<2"]
+requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
+
+[project]
+name = "geodb-py"
+# version comes from Cargo.toml
+dynamic = ["version"]
+description = "Python bindings for geodb-core"
+readme = "../../README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Holger Trahe" }]
+classifiers = [
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+  "Operating System :: OS Independent",
+]
+
+[tool.maturin]
+# The Cargo.toml is in the same directory as this pyproject.toml
+bindings = "pyo3"
+module-name = "geodb_py"

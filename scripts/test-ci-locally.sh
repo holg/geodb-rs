@@ -44,6 +44,7 @@ fi
 # Build geodb-py separately with maturin
 echo -e "${YELLOW}Step 3b: Building geodb-py with maturin...${NC}"
 if command -v maturin &> /dev/null; then
+#    if (source crates/geodb-py/.env_py312/bin/activate && maturin build --locked); then
     if (cd crates/geodb-py && source .env_py312/bin/activate && maturin build --locked); then
         echo -e "${GREEN}✓ geodb-py build passed${NC}\n"
     else
