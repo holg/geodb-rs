@@ -2,17 +2,20 @@
 edition = "2021"
 license = "MIT AND ODbL-1.0"
 name = "geodb-wasm"
-version = "0.1.0"
+version = "0.1.2"
 description = "WebAssembly bindings for geodb-core with simple JS API and embedded dataset"
 repository = "https://github.com/holg/geodb-rs"
 homepage = "https://github.com/holg/geodb-rs"
 readme = "../../README.md"
+# Configure docs.rs build
 [package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 default-target = "wasm32-unknown-unknown"
-[package.metadata.trunk]
+targets = ["wasm32-unknown-unknown"]
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bincode = { workspace = true }
@@ -24,3 +27,6 @@ serde-wasm-bindgen = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true, features = ["console"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

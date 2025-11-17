@@ -1,8 +1,8 @@
 
-import geodb
+import geodb_rs
 
 print("-- Load default bundled dataset --")
-db = geodb.PyGeoDb.load_default()
+db = geodb_rs.PyGeoDb.load_default()
 
 countries, states, cities = db.stats()
 print(f"Stats -> Countries: {countries}, States: {states}, Cities: {cities}")
@@ -31,7 +31,7 @@ print("\n-- Smart search --")
 print(db.smart_search("berlin")[:5])
 
 print("\n-- Filtered load (DE, FR) --")
-fdb = geodb.PyGeoDb.load_filtered(["DE", "FR"])
+fdb = geodb_rs.PyGeoDb.load_filtered(["DE", "FR"])
 print(fdb.stats())
 
 def __main__():

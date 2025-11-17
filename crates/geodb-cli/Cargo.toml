@@ -1,6 +1,6 @@
 [package]
 name = "geodb-cli"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Command-line interface for the geodb-core geographic database."
 license = "MIT"
@@ -10,6 +10,15 @@ homepage = "https://github.com/holg/geodb-rs"
 categories = ["command-line-utilities", "database"]
 keywords = ["geodb", "geo", "countries", "regions", "cities"]
 publish = true
+
+# Configure docs.rs build so the crate gets a proper documentation page
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "geodb_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "geodb-cli"

@@ -1,22 +1,41 @@
 [package]
 name = "geodb-core"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
-license = "MIT"
-description = "Geographic database loader (countries, regions, cities, aliasses) with filtering and caching."
-readme = "../../README.md"
+authors = ["Holger Trahe"]
+license = "MIT OR Apache-2.0"
+description = "A high-performance geographic database with countries, states, cities, and more"
 repository = "https://github.com/holg/geodb-rs"
+readme = "../../README.md"
+documentation = "https://docs.rs/geodb-core"
+keywords = ["geography", "database", "countries", "cities", "geo"]
+categories = ["database", "data-structures"]
+
+# Configure docs.rs build
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "geodb_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Future: compact backend for reduced memory usage
+compact = []
 
 [dependencies]
-bincode = "1"
-flate2 = { version = "1" }
-once_cell = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "1"
-
-# optional (for future compact backend)
-smol_str = { version = "0.2", optional = true }
+bincode = "1.3"
+flate2 = "1.0"
+once_cell = "1.19"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
 
 [dev-dependencies]
-tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "benchmarks"
+harness = false

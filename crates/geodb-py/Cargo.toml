@@ -13,9 +13,16 @@ categories = ["api-bindings", "database", "science"]
 # Exclude local Python venv and other non-package files from crates.io package
 exclude = [".env_py312/**", "venv/**", "*.pyc", "__pycache__/**"]
 
+# Configure docs.rs build so a docs page is rendered
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+[package.metadata.maturin]
+name = "geodb-rs"
+
 [lib]
-name = "geodb"
-crate-type = ["cdylib"]
+name = "geodb_rs"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 geodb-core = { version = "0.1", path = "../geodb-core" }

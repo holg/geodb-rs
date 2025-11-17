@@ -112,17 +112,31 @@ else
     echo -e "${YELLOW}Install with: cargo install cargo-deny${NC}"
 fi
 
-# Run tests
-echo -e "${YELLOW}Step 6: Running tests...${NC}"
-if cargo test --locked --workspace -- --test-threads=1; then
-    echo -e "${GREEN}✓ tests passed${NC}\n"
+# Run Rust tests (native)
+echo -e "${YELLOW}Step 6: Running Rust tests (native targets)...${NC}"
+if cargo test --locked --workspace --exclude geodb-wasm --exclude geodb-py -- --test-threads=1; then
+    echo -e "${GREEN}✓ native tests passed${NC}\n"
 else
-    echo -e "${RED}✗ tests failed${NC}\n"
+    echo -e "${RED}✗ native tests failed${NC}\n"
     exit 1
 fi
 
-# Build WASM target
-echo -e "${YELLOW}Step 7: Building WASM target...${NC}"
+# Run WASM tests for geodb-wasm if tooling is available
+echo -e "${YELLOW}Step 6b: Running geodb-wasm tests (wasm32, Node)...${NC}"
+if command -v wasm-pack &> /dev/null; then
+    if (cd crates/geodb-wasm && wasm-pack test --node); then
+        echo -e "${GREEN}✓ geodb-wasm tests passed (node)${NC}\n"
+    else
+        echo -e "${RED}✗ geodb-wasm tests failed${NC}\n"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠ wasm-pack not installed, skipping geodb-wasm tests${NC}"
+    echo -e "${YELLOW}Install with: cargo install wasm-pack${NC}"
+fi
+
+# Build WASM target (demo app)
+echo -e "${YELLOW}Step 7: Building WASM demo (Trunk)...${NC}"
 if command -v trunk &> /dev/null && command -v wasm-bindgen &> /dev/null; then
     echo "Building geodb-wasm with Trunk..."
     if (cd crates/geodb-wasm && trunk build --release); then
@@ -137,6 +151,48 @@ else
     echo -e "${YELLOW}  cargo install trunk${NC}"
     echo -e "${YELLOW}  cargo install wasm-bindgen-cli${NC}"
     echo -e "${YELLOW}  rustup target add wasm32-unknown-unknown${NC}"
+fi
+
+# Run Python tests for geodb-py if tooling is available
+echo -e "${YELLOW}Step 7b: Running Python tests for geodb-py...${NC}"
+if command -v python3 &> /dev/null && command -v maturin &> /dev/null; then
+    TMP_VENV=".venv_geodb_test"
+    python3 -m venv "$TMP_VENV"
+    # shellcheck disable=SC1090
+    source "$TMP_VENV/bin/activate"
+    python -m pip install --upgrade pip >/dev/null 2>&1
+    if python -c "import pytest" 2>/dev/null; then
+        echo "pytest already available in venv"
+    else
+        python -m pip install pytest >/dev/null 2>&1 || true
+    fi
+
+    echo "Building and installing geodb-py into venv (maturin develop)..."
+    if maturin develop -m crates/geodb-py/Cargo.toml --release >/dev/null; then
+        echo -e "${GREEN}✓ geodb-py built and installed${NC}"
+        echo "Running pytest..."
+        if (cd crates/geodb-py && pytest -q); then
+            echo -e "${GREEN}✓ geodb-py tests passed${NC}\n"
+        else
+            echo -e "${RED}✗ geodb-py tests failed${NC}\n"
+            deactivate || true
+            rm -rf "$TMP_VENV"
+            exit 1
+        fi
+    else
+        echo -e "${RED}✗ maturin develop failed for geodb-py${NC}"
+        deactivate || true
+        rm -rf "$TMP_VENV"
+        exit 1
+    fi
+
+    deactivate || true
+    rm -rf "$TMP_VENV"
+else
+    echo -e "${YELLOW}⚠ python3 or maturin not installed, skipping geodb-py tests${NC}"
+    echo -e "${YELLOW}Install with:${NC}"
+    echo -e "${YELLOW}  pipx install maturin  (or: pip install maturin)${NC}"
+    echo -e "${YELLOW}  pip install pytest${NC}"
 fi
 
 # Pre-publish checks
