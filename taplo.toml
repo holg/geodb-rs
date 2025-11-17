@@ -1,6 +1,12 @@
-
 # Taplo configuration for TOML formatting
 # This file configures how taplo formats TOML files in the project
+
+# Exclude patterns to avoid conflicts with cargo-sort
+# Cargo.toml files are managed by cargo-sort, so we exclude them from taplo formatting
+exclude = ["config/**", "target/**", "Cargo.toml", "taplo.toml", "crates/*/Cargo.toml", "**/Cargo.lock"]
+
+# Include patterns - only format non-Cargo TOML files
+include = ["**/*.toml"]
 
 [formatting]
 # Align entries in arrays
@@ -33,10 +39,3 @@ allowed_blank_lines = 1
 indent_string = "  "
 # CRLF line endings (false = LF)
 crlf = false
-
-# Exclude patterns to avoid conflicts with cargo-sort
-# Cargo.toml is managed by cargo-sort, so we exclude it from taplo formatting
-exclude = ["target/**", "**/Cargo.toml", "**/Cargo.lock"]
-
-# Include patterns (optional - taplo will format all TOML files by default)
-include = ["**/*.toml"]

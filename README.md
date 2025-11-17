@@ -4,355 +4,294 @@
 [![Documentation](https://docs.rs/geodb-core/badge.svg)](https://docs.rs/geodb-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The Rust-based GeoDB library, offering caching and filtering, with extensive geographic data and aliases for location names.
+A high-performance, pure-Rust geographic database with countries, states/regions, cities, aliases, phone codes, currencies, timezones, and WebAssembly support.
 
-## Overview
+This repository is a **Cargo workspace** containing:
 
-`geodb-rs` is a comprehensive geographic database library for Rust that provides fast, efficient access to countries, regions (states/provinces), and cities data. It features built-in caching mechanisms, flexible filtering capabilities, and extensive support for location name aliases and phone code lookups.
+- **`geodb-core`** — main geographic database library (published on crates.io)
+- **`geodb-wasm`** — WebAssembly bindings + browser demo (Trunk-based)
+- **`geodb-cli`** — optional CLI (future)
 
-### Key Features
+---
 
-- **📊 Extensive Geographic Data**: Access detailed information about countries, regions, and cities worldwide
-- **⚡ High-Performance Caching**: Built-in caching system for fast repeated queries
-- **🔍 Flexible Filtering**: Advanced filtering and search capabilities across all geographic entities
-- **🌍 Name Aliases Support**: Multiple name variants and aliases for cities (e.g., "Munich" / "München")
-- **📞 Phone Code Lookups**: Search and filter countries by phone codes
-- **🗺️ Regional Data**: Countries grouped by regions with subregion support
-- **💱 Currency Information**: Access to currency codes, names, and symbols
-- **🌐 Timezone Support**: Comprehensive timezone information for countries
-- **🦀 Pure Rust**: Written entirely in Rust with zero unsafe code
-- **🌐 WebAssembly Support**: WASM bindings available via `geodb-wasm` crate
+# Overview
 
-## Installation
+`geodb-core` provides:
 
-Add `geodb-core` to your `Cargo.toml`:
+- 🚀 Fast loading from compressed JSON or binary cache  
+- 💾 Automatic caching based on dataset file and filters  
+- 🔎 Flexible lookups: ISO codes, names, aliases, phone codes  
+- 🌍 Countries, states/regions, cities, populations  
+- 🗺 Accurate metadata: region, subregion, currency  
+- 📞 Phone code search  
+- ⏱ Zero-copy internal model  
+- 🦀 Pure Rust — no unsafe  
+- 🕸 WASM support via `geodb-wasm`
+
+The dataset is adapted from  
+https://github.com/dr5hn/countries-states-cities-database  
+(licensed under **CC-BY-4.0**, attribution required).
+
+> Important: Data source we rely on
+>
+> geodb-core ships and expects the upstream dataset from the following file in the dr5hn/countries-states-cities-database repository:
+>
+> https://github.com/dr5hn/countries-states-cities-database/blob/master/json/countries%2Bstates%2Bcities.json.gz
+>
+> The default loader uses a copy of this file placed under `crates/geodb-core/data/countries+states+cities.json.gz` and builds a binary cache alongside it. If you update or replace the dataset, ensure it retains the same JSON structure. Please observe the CC‑BY‑4.0 license and attribution of the upstream project.
+
+---
+
+# Installation
+
+### For Rust applications
 
 ```toml
 [dependencies]
-geodb-core = "0.1.0"
+geodb-core = "0.2"
 ```
 
-For WebAssembly projects:
+### For WebAssembly (browser/Node)
 
 ```toml
 [dependencies]
-geodb-wasm = "0.1.0"
+geodb-wasm = "0.2"
 ```
 
-## Quick Start
+---
+
+# Quick Start
 
 ```rust
 use geodb_core::prelude::*;
 
-fn main() -> Result<()> {
-    // Load the geographic database
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = GeoDb::<StandardBackend>::load()?;
 
-    // Find a country by ISO2 code
     if let Some(country) = db.find_country_by_iso2("US") {
         println!("Country: {}", country.name());
-        println!("Capital: {}", country.capital());
+        println!("Capital: {:?}", country.capital());
         println!("Phone Code: {}", country.phone_code());
         println!("Currency: {}", country.currency());
-    }
-
-    // List all states/regions for a country
-    if let Some(country) = db.find_country_by_iso2("US") {
-        for state in country.states() {
-            println!("State: {} ({})", state.name(), state.state_code());
-        }
     }
 
     Ok(())
 }
 ```
 
-## Usage Examples
+---
 
-### Basic Queries
+# Loading & Caching
 
-#### Get All Countries
+## Default loading
+
+Loads from:
+
+```
+geodb-core/data/countries+states+cities.json.gz
+```
+
+Creates automatic cache:
+
+```
+countries+states+cities.json.ALL.bin
+```
+
+```rust
+let db = GeoDb::<StandardBackend>::load()?;
+```
+
+## Load from a custom file
+
+```rust
+let db = GeoDb::<StandardBackend>::load_from_path(
+    "path/to/worlddata.json.gz",
+    None,
+)?;
+```
+
+Cache becomes:
+
+```
+worlddata.json.ALL.bin
+```
+
+## Filtered loading (ISO2)
+
+```rust
+let db = GeoDb::<StandardBackend>::load_filtered_by_iso2(&["DE", "US"])?;
+```
+
+Cache:
+
+```
+countries+states+cities.json.DE_US.bin
+```
+
+Cache rules:
+
+```
+<dataset_filename>.<filter>.bin
+```
+
+---
+
+# Usage Examples
+
+### List all countries
 
 ```rust
 use geodb_core::prelude::*;
 
 let db = GeoDb::<StandardBackend>::load()?;
-let countries = db.countries();
-
-for country in countries {
+for country in db.countries() {
     println!("{} ({})", country.name(), country.iso2());
 }
 ```
 
-#### Find Country by ISO Code
+### Find by ISO code
 
 ```rust
-// By ISO2 code
 if let Some(country) = db.find_country_by_iso2("DE") {
-    println!("Found: {}", country.name());
-}
-
-// By ISO3 code (if available)
-let country = db.countries()
-    .iter()
-    .find(|c| c.iso3() == "DEU");
-```
-
-#### Access Country Details
-
-```rust
-if let Some(country) = db.find_country_by_iso2("FR") {
-    println!("Name: {}", country.name());
-    println!("ISO2: {}", country.iso2());
-    println!("ISO3: {}", country.iso3());
-    println!("Capital: {}", country.capital());
-    println!("Phone Code: {}", country.phone_code());
-    println!("Currency: {}", country.currency());
-    println!("Region: {}", country.region());
-    println!("Subregion: {}", country.subregion());
-    println!("Population: {:?}", country.population());
+    println!("Found {}", country.name());
 }
 ```
 
-### Working with States/Regions
+### Country details
 
 ```rust
-if let Some(country) = db.find_country_by_iso2("US") {
-    let states = country.states();
-    
-    // Find a specific state
-    if let Some(california) = states.iter().find(|s| s.state_code() == "CA") {
-        println!("State: {}", california.name());
-        
-        // Access cities in the state
-        for city in california.cities() {
-            println!("  - {}", city.name());
+if let Some(fr) = db.find_country_by_iso2("FR") {
+    println!("Capital: {:?}", fr.capital());
+    println!("Currency: {}", fr.currency());
+    println!("Region: {}", fr.region());
+}
+```
+
+### States & cities
+
+```rust
+if let Some(us) = db.find_country_by_iso2("US") {
+    let states = us.states();
+    if let Some(ca) = states.iter().find(|s| s.state_code() == "CA") {
+        for city in ca.cities() {
+            println!("{}", city.name());
         }
     }
 }
 ```
 
-### Phone Code Searches
+### Phone search
 
 ```rust
-// Find all countries with a specific phone code
-let countries_with_code = db.find_countries_by_phone_code("+44");
-
-for country in countries_with_code {
-    println!("{} uses {}", country.name(), country.phone_code());
-}
+let countries = db.find_countries_by_phone_code("+44");
 ```
 
-### Advanced Filtering
+### Search for cities named “Springfield”
 
 ```rust
-// Filter countries by region
-let european_countries: Vec<_> = db.countries()
-    .iter()
-    .filter(|c| c.region() == "Europe")
-    .collect();
-
-// Filter by multiple criteria
-let euro_countries: Vec<_> = db.countries()
-    .iter()
-    .filter(|c| c.region() == "Europe" && c.currency() == "EUR")
-    .collect();
-
-// Find countries by name pattern
-let united_countries: Vec<_> = db.countries()
-    .iter()
-    .filter(|c| c.name().contains("United"))
-    .collect();
-```
-
-### Searching Cities
-
-```rust
-// Search for all cities with a specific name across all countries
-let springfields: Vec<_> = db.countries()
+let results: Vec<_> = db.countries()
     .iter()
     .flat_map(|country| {
         country.states().iter().flat_map(move |state| {
             state.cities().iter()
-                .filter(|city| city.name() == "Springfield")
-                .map(move |city| (country.name(), state.name(), city.name()))
+                .filter(|c| c.name() == "Springfield")
+                .map(move |c| (country.name(), state.name(), c.name()))
         })
     })
     .collect();
-
-for (country, state, city) in springfields {
-    println!("{}, {}, {}", city, state, country);
-}
 ```
-
-### Using the Cache
-
-The database automatically caches loaded data for improved performance:
-
-```rust
-// First load (will cache the data)
-let db1 = GeoDb::<StandardBackend>::load()?;
-
-// Second load (retrieved from cache - much faster)
-let db2 = GeoDb::<StandardBackend>::load()?;
-```
-
-## API Overview
-
-### Main Types
-
-- **`GeoDb<Backend>`**: The main database struct that holds all geographic data
-- **`Country`**: Represents a country with all its metadata
-- **`State`**: Represents a state/region/province within a country
-- **`City`**: Represents a city within a state
-- **`StandardBackend`**: Default backend implementation with full feature support
-
-### Key Methods
-
-#### GeoDb
-
-- `load()`: Load the geographic database
-- `countries()`: Get all countries
-- `find_country_by_iso2(code)`: Find a country by ISO2 code
-- `find_countries_by_phone_code(code)`: Find countries by phone code
-
-#### Country
-
-- `name()`: Get the country name
-- `iso2()`: Get ISO2 code
-- `iso3()`: Get ISO3 code
-- `capital()`: Get capital city name
-- `phone_code()`: Get international phone code
-- `currency()`: Get currency code
-- `region()`: Get geographic region
-- `subregion()`: Get geographic subregion
-- `states()`: Get all states/regions in the country
-- `population()`: Get population (if available)
-- `timezones()`: Get timezone information
-
-#### State
-
-- `name()`: Get the state/region name
-- `state_code()`: Get the state code
-- `cities()`: Get all cities in the state
-
-#### City
-
-- `name()`: Get the city name
-- `latitude()`: Get latitude coordinate (if available)
-- `longitude()`: Get longitude coordinate (if available)
-
-## Data Sources
-
-The geographic data is compiled from various open-source datasets and includes:
-
-- **Countries**: ~250 countries with detailed metadata
-- **States/Regions**: Thousands of administrative divisions
-- **Cities**: Comprehensive city database with coordinates
-- **Aliases**: Alternative names and spellings for cities
-- **Phone Codes**: International dialing codes
-- **Timezones**: Timezone information per country
-
-Data files included:
-- `countries+states+cities.json.gz`: Compressed geographic data
-- `geodb.standard.bin`: Precompiled binary format for faster loading
-- `city_meta.json`: City aliases and regional information
-
-## Examples
-
-The repository includes several example programs demonstrating various features:
-
-- **`basic_usage.rs`**: Introduction to core functionality
-- **`advanced_filtering.rs`**: Advanced filtering and searching techniques
-- **`error_handling.rs`**: Proper error handling patterns
-
-Run examples with:
-
-```bash
-cargo run --example basic_usage
-cargo run --example advanced_filtering
-cargo run --example error_handling
-```
-
-## Crate Structure
-
-The project is organized as a workspace with multiple crates:
-
-- **`geodb-core`**: Core library with all geographic functionality
-- **`geodb-wasm`**: WebAssembly bindings for browser/Node.js usage
-
-## Performance Considerations
-
-- **First Load**: Initial database load parses and deserializes data
-- **Cached Loads**: Subsequent loads use in-memory cache (significantly faster)
-- **Memory Usage**: The full database requires ~10-15 MB in memory
-- **Zero-Copy Operations**: Uses references where possible to minimize allocations
-
-## Contributing
-
-Contributions are welcome! Here's how you can help:
-
-1. **Report Issues**: Found a bug or have a feature request? Open an issue
-2. **Submit Pull Requests**: Fix bugs, add features, or improve documentation
-3. **Update Data**: Help keep geographic data current and accurate
-4. **Write Tests**: Improve test coverage
-5. **Improve Documentation**: Enhance examples and API documentation
-
-### Development Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/holg/geodb-rs.git
-cd geodb-rs
-
-# Build the project
-cargo build
-
-# Run tests
-cargo test
-
-# Run examples
-cargo run --example basic_usage
-
-# Build WASM bindings
-cd crates/geodb-wasm
-wasm-pack build
-```
-
-### Guidelines
-
-- Follow Rust naming conventions and idioms
-- Add tests for new features
-- Update documentation for API changes
-- Run `cargo fmt` and `cargo clippy` before submitting
-- Keep commits focused and write clear commit messages
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-The geographic data included may be subject to additional licenses from the original data sources. Please review data source licenses if you plan to use this data in commercial applications.
-
-## Acknowledgments
-
-- Geographic data compiled from various open-source datasets
-- Inspired by similar geographic libraries in other languages
-- Built with the amazing Rust ecosystem
-
-## Links
-
-- **Repository**: [https://github.com/holg/geodb-rs](https://github.com/holg/geodb-rs)
-- **Documentation**: [https://docs.rs/geodb-core](https://docs.rs/geodb-core)
-- **Crates.io**: [https://crates.io/crates/geodb-core](https://crates.io/crates/geodb-core)
-
-## Support
-
-If you find this project useful, please consider:
-- ⭐ Starring the repository
-- 🐛 Reporting bugs and issues
-- 💡 Suggesting new features
-- 🤝 Contributing code or documentation
 
 ---
 
-Made with ❤️ in Rust
+# WebAssembly (`geodb-wasm`)
+
+Exports:
+
+- `search_country_prefix`
+- `search_countries_by_phone`
+- `search_state_substring`
+- `search_city_substring`
+- `smart_search`
+- `get_stats`
+
+To run locally:
+
+```bash
+cd crates/geodb-wasm
+cargo install trunk
+trunk serve
+```
+
+Live demo:  
+**https://trahe.eu/geodb-rs.html**
+
+---
+
+# Workspace Layout
+
+```
+geodb-rs/
+├── crates/
+│   ├── geodb-core
+│   ├── geodb-wasm
+│   └── geodb-cli (planned)
+├── data/
+│   ├── countries+states+cities.json.gz
+│   └── geodb.standard.bin
+├── examples/
+├── scripts/
+└── README.md
+```
+
+---
+
+# Performance
+
+- Initial load from JSON: ~20–40ms  
+- Cached load: ~1–3ms  
+- Memory use: 10–15MB  
+- Fully zero-copy internal model  
+
+---
+
+# Contributing
+
+### Before submitting PRs:
+
+```
+cargo fmt
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+cargo doc --workspace
+cargo sort -cwg
+taplo format --check
+cargo deny check
+```
+
+---
+
+# License
+
+### Code  
+MIT License.
+
+### Data Attribution (Required)
+
+This project includes data from:
+
+**countries-states-cities-database**  
+https://github.com/dr5hn/countries-states-cities-database  
+Licensed under **Creative Commons Attribution 4.0 (CC-BY-4.0)**.  
+Attribution is required if you redistribute or use the dataset.
+
+---
+
+# Links
+
+- Repo: https://github.com/holg/geodb-rs  
+- Docs: https://docs.rs/geodb-core  
+- Crate: https://crates.io/crates/geodb-core  
+
+---
+
+Made with ❤️ in Rust.

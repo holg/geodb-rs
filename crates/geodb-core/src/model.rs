@@ -1,3 +1,4 @@
+use crate::phone::PhoneCodeSearch;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -19,7 +20,7 @@ pub struct CityRaw {
 ///   "abbreviation": "CET",
 ///   "tzName": "Central European Time"
 /// }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CountryTimezoneRaw {
     #[serde(rename = "zoneName")]
     pub zone_name: Option<String>,
@@ -111,12 +112,33 @@ pub struct CountryRaw {
     pub states: Vec<StateRaw>,
 }
 
+/// Simple aggregate statistics for the database.
+///
+/// Returned by [`GeoDb::stats`], these counts reflect the materialized
+/// in-memory database after any filtering that might have been applied at
+/// load time.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct DbStats {
+    pub countries: usize,
+    pub states: usize,
+    pub cities: usize,
+}
+
 pub type CountriesRaw = Vec<CountryRaw>;
 
 /// Backend abstraction: this controls how strings and floats are stored.
 ///
 /// For now we require serde for caching with bincode.
 /// Later we can add a `compact_backend` feature (SmolStr, etc.).
+/// Storage backend for strings and floats used by the database.
+///
+/// This abstraction allows the crate to swap how textual and floating-point
+/// data are stored internally (for example to use more compact types) without
+/// changing the public API of accessors that return `&str`/`f64` views.
+///
+/// Implementors must be `Clone + Send + Sync + 'static` and ensure the
+/// associated types can be serialized/deserialized so databases can be cached
+/// via bincode.
 pub trait GeoBackend: Clone + Send + Sync + 'static {
     type Str: Clone
         + Send
@@ -128,19 +150,25 @@ pub trait GeoBackend: Clone + Send + Sync + 'static {
 
     type Float: Copy + Send + Sync + std::fmt::Debug + serde::Serialize + for<'de> Deserialize<'de>;
 
+    /// Convert an `&str` into the backend string representation.
     fn str_from(s: &str) -> Self::Str;
+    /// Convert an `f64` into the backend float representation.
     fn float_from(f: f64) -> Self::Float;
 
-    /// NEW — convert backend string to owned Rust string
+    /// Convert backend string to owned Rust `String`.
     #[inline]
     fn str_to_string(v: &Self::Str) -> String {
         v.as_ref().to_string()
     }
 
-    /// NEW — convert backend float to f64 (required for WASM)
+    /// Convert backend float to plain `f64` (useful for WASM serialization).
     fn float_to_f64(v: Self::Float) -> f64;
 }
 /// Default backend: plain `String` + `f64`.
+///
+/// This backend is used by the convenient aliases
+/// [`StandardBackend`] and [`DefaultGeoDb`]. It provides the best
+/// ergonomics and is suitable for most applications.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DefaultBackend;
 
@@ -157,16 +185,21 @@ impl GeoBackend for DefaultBackend {
     fn float_from(f: f64) -> Self::Float {
         f
     }
-    fn float_to_f64(v: Self::Float) -> f64 {
-        v
-    }
+
     #[inline]
     fn str_to_string(v: &Self::Str) -> String {
         v.clone()
     }
+
+    fn float_to_f64(v: Self::Float) -> f64 {
+        v
+    }
 }
 
 /// A city in the normalized GeoDb.
+///
+/// This is an owned data node inside a [`State`]. Access string data via
+/// accessor methods on the view types or by calling `.name()` directly.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct City<B: GeoBackend> {
     pub name: B::Str,
@@ -176,6 +209,8 @@ pub struct City<B: GeoBackend> {
 }
 
 /// A region / state within a country.
+///
+/// Contains the list of contained cities as well as optional codes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State<B: GeoBackend> {
     pub name: B::Str,
@@ -233,12 +268,19 @@ pub struct Country<B: GeoBackend> {
 }
 
 /// Top-level database structure.
+///
+/// Holds the list of countries and provides search helpers. Constructed by
+/// the loader module from the bundled JSON dataset and optionally filtered
+/// by ISO2 country codes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GeoDb<B: GeoBackend> {
     pub countries: Vec<Country<B>>,
 }
 
 impl<B: GeoBackend> GeoDb<B> {
+    /// Total number of countries in the database.
+    ///
+    /// Equivalent to `self.countries().len()`; provided for convenience.
     pub fn country_count(&self) -> usize {
         self.countries.len()
     }
@@ -249,11 +291,33 @@ pub type DefaultGeoDb = GeoDb<DefaultBackend>;
 /// Convenient alias used in examples.
 pub type StandardBackend = DefaultBackend;
 
+/// Result item of [`GeoDb::smart_search`] with relevance score and matched entity.
+#[derive(Debug, Clone, Copy)]
+pub struct SmartHit<'a, B: GeoBackend> {
+    pub score: i32,
+    pub item: SmartItem<'a, B>,
+}
+
+/// Matched entity variant for [`GeoDb::smart_search`].
+#[derive(Debug, Clone, Copy)]
+pub enum SmartItem<'a, B: GeoBackend> {
+    Country(&'a Country<B>),
+    State {
+        country: &'a Country<B>,
+        state: &'a State<B>,
+    },
+    City {
+        country: &'a Country<B>,
+        state: &'a State<B>,
+        city: &'a City<B>,
+    },
+}
+
 fn parse_opt_f64(s: &Option<String>) -> Option<f64> {
     s.as_ref().and_then(|v| v.trim().parse::<f64>().ok())
 }
 
-/// Convert raw JSON data into a `GeoDb` using the given backend.
+/// Convert raw JSON data into a [`GeoDb`] using the given backend.
 pub fn build_geodb<B: GeoBackend>(raw: CountriesRaw) -> GeoDb<B> {
     let countries = raw
         .into_iter()
@@ -353,18 +417,218 @@ impl<B: GeoBackend> GeoDb<B> {
             .iter()
             .find(|c| c.iso2.as_ref().eq_ignore_ascii_case(iso2))
     }
+    /// Find a country by ISO3 code, case-insensitive (e.g. "DEU", "usa").
+    pub fn find_country_by_iso3(&self, iso3: &str) -> Option<&Country<B>> {
+        self.countries.iter().find(|c| {
+            c.iso3
+                .as_ref()
+                .is_some_and(|s| s.as_ref().eq_ignore_ascii_case(iso3))
+        })
+    }
 
-    /// Alias used in examples: `db.country("US")`.
-    pub fn country(&self, iso2: &str) -> Option<&Country<B>> {
-        self.find_country_by_iso2(iso2)
+    /// Find a country by code, trying ISO2 first and then ISO3 (both case-insensitive).
+    ///
+    /// Examples:
+    /// - "DE"  → matches ISO2
+    /// - "de"  → matches ISO2 (case-insensitive)
+    /// - "DEU" → matches ISO3
+    /// - "deu" → matches ISO3 (case-insensitive)
+    pub fn find_country_by_code(&self, code: &str) -> Option<&Country<B>> {
+        let code = code.trim();
+        if code.is_empty() {
+            return None;
+        }
+
+        // Try ISO2 first, then ISO3.
+        self.find_country_by_iso2(code)
+            .or_else(|| self.find_country_by_iso3(code))
+    }
+    /// Aggregate statistics for the database.
+    pub fn stats(&self) -> DbStats {
+        let countries = self.countries.len();
+
+        let mut states = 0usize;
+        let mut cities = 0usize;
+
+        for country in &self.countries {
+            states += country.states.len();
+            for state in &country.states {
+                cities += state.cities.len();
+            }
+        }
+
+        DbStats {
+            countries,
+            states,
+            cities,
+        }
+    }
+
+    /// Iterate over all cities together with their state and country.
+    pub fn iter_cities(&self) -> impl Iterator<Item = (&City<B>, &State<B>, &Country<B>)> {
+        self.countries.iter().flat_map(|country| {
+            country
+                .states
+                .iter()
+                .flat_map(move |state| state.cities.iter().map(move |city| (city, state, country)))
+        })
+    }
+
+    /// Find all states whose name contains the given ASCII substring (case-insensitive).
+    /// Returns pairs of (state, country) for convenience.
+    pub fn find_states_by_substring(&self, substr: &str) -> Vec<(&State<B>, &Country<B>)> {
+        let q = substr.to_ascii_lowercase();
+        let mut out = Vec::new();
+        for c in &self.countries {
+            for s in &c.states {
+                if s.name().to_ascii_lowercase().contains(&q) {
+                    out.push((s, c));
+                }
+            }
+        }
+        out
+    }
+
+    /// Find all cities whose name contains the given ASCII substring (case-insensitive).
+    /// Returns triplets of (city, state, country).
+    pub fn find_cities_by_substring(
+        &self,
+        substr: &str,
+    ) -> Vec<(&City<B>, &State<B>, &Country<B>)> {
+        let q = substr.to_ascii_lowercase();
+        let mut out = Vec::new();
+        for c in &self.countries {
+            for s in &c.states {
+                for city in &s.cities {
+                    if city.name().to_ascii_lowercase().contains(&q) {
+                        out.push((city, s, c));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Smart search across countries, states, cities, and phone codes.
+    ///
+    /// Scoring (descending priority):
+    /// - Country ISO2 exact match: 100
+    /// - Country name exact: 90
+    /// - Country name starts with: 80
+    /// - Country name contains: 70
+    /// - State name starts with: 60
+    /// - State name contains: 50
+    /// - City name starts with: 40
+    /// - City name contains: 30
+    /// - Country phone code match: 20
+    pub fn smart_search(&self, query: &str) -> Vec<SmartHit<'_, B>> {
+        let q = query.trim().to_ascii_lowercase();
+        if q.is_empty() {
+            return Vec::new();
+        }
+
+        let phone = q.trim_start_matches('+');
+        let mut out: Vec<SmartHit<'_, B>> = Vec::new();
+
+        // Countries
+        for c in self.countries() {
+            let name = c.name().to_ascii_lowercase();
+            if c.iso2().eq_ignore_ascii_case(&q) {
+                out.push(SmartHit {
+                    score: 100,
+                    item: SmartItem::Country(c),
+                });
+            } else if name == q {
+                out.push(SmartHit {
+                    score: 90,
+                    item: SmartItem::Country(c),
+                });
+            } else if name.starts_with(&q) {
+                out.push(SmartHit {
+                    score: 80,
+                    item: SmartItem::Country(c),
+                });
+            } else if name.contains(&q) {
+                out.push(SmartHit {
+                    score: 70,
+                    item: SmartItem::Country(c),
+                });
+            }
+        }
+
+        // States
+        for c in self.countries() {
+            for s in c.states() {
+                let sn = s.name().to_ascii_lowercase();
+                if sn.starts_with(&q) {
+                    out.push(SmartHit {
+                        score: 60,
+                        item: SmartItem::State {
+                            country: c,
+                            state: s,
+                        },
+                    });
+                } else if sn.contains(&q) {
+                    out.push(SmartHit {
+                        score: 50,
+                        item: SmartItem::State {
+                            country: c,
+                            state: s,
+                        },
+                    });
+                }
+            }
+        }
+
+        // Cities
+        for (city, state, country) in self.iter_cities() {
+            let cn = city.name().to_ascii_lowercase();
+            if cn.starts_with(&q) {
+                out.push(SmartHit {
+                    score: 40,
+                    item: SmartItem::City {
+                        country,
+                        state,
+                        city,
+                    },
+                });
+            } else if cn.contains(&q) {
+                out.push(SmartHit {
+                    score: 30,
+                    item: SmartItem::City {
+                        country,
+                        state,
+                        city,
+                    },
+                });
+            }
+        }
+
+        // Phone code
+        for c in self.find_countries_by_phone_code(phone) {
+            out.push(SmartHit {
+                score: 20,
+                item: SmartItem::Country(c),
+            });
+        }
+
+        // Sort by score desc (stable sort to preserve relative order within score)
+        out.sort_by(|a, b| b.score.cmp(&a.score));
+        out
     }
 }
 
 impl<B: GeoBackend> Country<B> {
+    /// Country display name.
+    ///
+    /// Always non-empty.
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
 
+    /// ISO 3166-1 alpha-2 country code (e.g. "US", "DE").
+    ///
+    /// Always present for all countries.
     pub fn iso2(&self) -> &str {
         self.iso2.as_ref()
     }
@@ -374,34 +638,49 @@ impl<B: GeoBackend> Country<B> {
         self.iso2.as_ref()
     }
 
+    /// ISO 3166-1 alpha-3 code if available, or an empty string otherwise.
+    ///
+    /// Use this method when a `&str` is more convenient than dealing with
+    /// an `Option`. If you need to distinguish absence, check for empty string.
     pub fn iso3(&self) -> &str {
         self.iso3.as_ref().map(|s| s.as_ref()).unwrap_or("")
     }
 
+    /// International phone calling code rendered as a string (e.g. "+49").
+    ///
+    /// Returns an empty string when no code is available in the dataset.
     pub fn phone_code(&self) -> &str {
         self.phonecode.as_ref().map(|s| s.as_ref()).unwrap_or("")
     }
 
+    /// ISO currency code for the primary currency (e.g. "USD", "EUR").
+    ///
+    /// Returns an empty string when not available.
     pub fn currency(&self) -> &str {
         self.currency.as_ref().map(|s| s.as_ref()).unwrap_or("")
     }
 
+    /// Capital city name, if provided by the dataset.
     pub fn capital(&self) -> Option<&str> {
         self.capital.as_ref().map(|s| s.as_ref())
     }
 
+    /// Country population (if present in the dataset).
     pub fn population(&self) -> Option<i64> {
         self.population
     }
 
+    /// Region/continent label (e.g. "Europe"), or empty string if unknown.
     pub fn region(&self) -> &str {
         self.region.as_ref().map(|s| s.as_ref()).unwrap_or("")
     }
 
+    /// Read-only slice of states/regions belonging to this country.
     pub fn states(&self) -> &[State<B>] {
         &self.states
     }
 
+    /// List of country timezones as provided by the dataset.
     pub fn timezones(&self) -> &[CountryTimezone<B>] {
         &self.timezones
     }
@@ -413,20 +692,24 @@ impl<B: GeoBackend> Country<B> {
 }
 
 impl<B: GeoBackend> State<B> {
+    /// State/region display name.
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
 
+    /// Short code for the state when available (e.g. "CA"), or empty string otherwise.
     pub fn state_code(&self) -> &str {
         self.state_code.as_ref().map(|s| s.as_ref()).unwrap_or("")
     }
 
+    /// Read-only slice of cities belonging to this state.
     pub fn cities(&self) -> &[City<B>] {
         &self.cities
     }
 }
 
 impl<B: GeoBackend> City<B> {
+    /// City display name.
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }

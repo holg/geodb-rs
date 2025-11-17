@@ -4,72 +4,174 @@ on:
   push:
     branches: [ main ]
   pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
+  # =========================
+  #  Lint / Test / Docs
+  # =========================
+  lint-test:
     runs-on: ubuntu-latest
-
     steps:
-      # 1) Checkout
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Install Rust (workspace + wasm)
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
 
-      # 3) Install tooling (only once, reused by all steps)
-      - name: Install CLI tools (trunk, wasm-bindgen, cargo-sort, taplo, cargo-deny)
-        # if you want deterministic versions, pin with `--version` here
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install tooling (cargo-sort, taplo-cli, cargo-deny)
         run: |
-          cargo install trunk
-          cargo install wasm-bindgen-cli
-          cargo install cargo-sort
-          cargo install taplo-cli
-          cargo install cargo-deny
+          cargo install cargo-sort taplo-cli cargo-deny --locked || true
 
-      # ---------------------------
-      #  Lints & formatting
-      # ---------------------------
+      - name: cargo fmt
+        run: cargo fmt -- --check
 
-      - name: cargo fmt -- --check
-        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: cargo-sort -cwg
-        run: cargo-sort -cwg
+      - name: cargo doc
+        run: cargo doc --locked --workspace --document-private-items
+
+      - name: cargo-sort
+        run: cargo sort -cwg
 
       - name: taplo format --check
         run: taplo format --check
 
-      - name: cargo clippy --workspace
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: cargo-deny
+        run: cargo deny check --hide-inclusion-graph --show-stats
 
-      - name: cargo-deny check
-        run: cargo-deny check --hide-inclusion-graph --show-stats
-
-      # ---------------------------
-      #  Docs & tests
-      # ---------------------------
-
-      - name: cargo doc --workspace
-        run: cargo doc --locked --workspace --document-private-items
-
-      - name: cargo test --workspace
+      - name: cargo test
         run: cargo test --locked --workspace -- --test-threads=1
 
-      # ---------------------------
-      #  WASM build (Trunk)
-      # ---------------------------
+  # =========================
+  #  Build geodb-cli binaries
+  # =========================
+  build-cli:
+    needs: lint-test
+    # avoid producing artifacts for PRs if you want, comment out to always run
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+            ext: ""
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+            ext: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            use_cross: false
+            ext: ""
+          - os: macos-14
+            target: aarch64-apple-darwin
+            use_cross: false
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            use_cross: false
+            ext: ".exe"
 
-      - name: Build geodb-wasm (Trunk)
-        working-directory: crates/geodb-wasm
-        run: trunk build --release
+    runs-on: ${{ matrix.os }}
 
-      - name: Upload WASM dist artifact
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross (if needed)
+        if: matrix.use_cross == true
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: Build geodb-cli
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release -p geodb-cli --target ${{ matrix.target }}
+          else
+            cargo build --release -p geodb-cli --target ${{ matrix.target }}
+          fi
+
+      - name: Upload geodb-cli binary
         uses: actions/upload-artifact@v4
         with:
-          name: geodb-wasm-dist
-          path: crates/geodb-wasm/dist
-          if-no-files-found: error
+          name: geodb-cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/geodb${{ matrix.ext }}
+
+  # =========================
+  #  Build geodb-py wheels
+  # =========================
+  build-wheels:
+    needs: lint-test
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: auto
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: auto
+          - os: macos-13
+            target: x86_64
+            manylinux: ""
+          - os: macos-14
+            target: aarch64
+            manylinux: ""
+          - os: windows-latest
+            target: x64
+            manylinux: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build wheels with maturin
+        uses: messense/maturin-action@v1
+        with:
+          manylinux: ${{ matrix.manylinux }}
+          target: ${{ matrix.target }}
+          args: --release -m crates/geodb-py/Cargo.toml -o dist
+
+      - name: Upload geodb-py wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodb-py-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl

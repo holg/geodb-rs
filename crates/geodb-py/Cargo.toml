@@ -1,0 +1,27 @@
+[package]
+name = "geodb-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for geodb-rs"
+license = "MIT"
+authors = ["Holger Trahe"]
+repository = "https://github.com/holg/geodb-rs"
+homepage = "https://github.com/holg/geodb-rs"
+readme = "../../README.md"
+keywords = ["geodb", "geo", "countries", "regions", "cities"]
+categories = ["api-bindings", "database", "science"]
+# Exclude local Python venv and other non-package files from crates.io package
+exclude = [".env_py312/**", "venv/**", "*.pyc", "__pycache__/**"]
+
+[lib]
+name = "geodb"
+crate-type = ["cdylib"]
+
+[dependencies]
+geodb-core = { version = "0.1", path = "../geodb-core" }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py37"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+pyo3-build-config = "0.22"

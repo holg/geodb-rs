@@ -1,8 +1,14 @@
 [package]
 edition = "2021"
-license = "MIT"
+license = "MIT AND ODbL-1.0"
 name = "geodb-wasm"
 version = "0.1.0"
+description = "WebAssembly bindings for geodb-core with simple JS API and embedded dataset"
+repository = "https://github.com/holg/geodb-rs"
+homepage = "https://github.com/holg/geodb-rs"
+readme = "../../README.md"
+[package.metadata.docs.rs]
+default-target = "wasm32-unknown-unknown"
 [package.metadata.trunk]
 
 [lib]
@@ -11,7 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 bincode = { workspace = true }
 console_error_panic_hook = "0.1"
-geodb-core = { path = "../geodb-core" }
+geodb-core = { version = "0.1", path = "../geodb-core" }
 js-sys = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde-wasm-bindgen = { workspace = true }

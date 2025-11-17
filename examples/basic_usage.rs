@@ -6,7 +6,7 @@
 //! - Use the caching mechanism
 //! - Search by phone codes
 
-use geodb_rs::prelude::*;
+use geodb_core::prelude::*;
 
 fn main() -> Result<()> {
     println!("=== GeoDB-RS Basic Usage Example ===\n");
@@ -105,18 +105,10 @@ fn main() -> Result<()> {
 
     // Example 8: Get country statistics
     println!("--- Example 8: Database statistics ---");
-    let total_countries = db.countries().len();
-    let total_states: usize = db.countries().iter().map(|c| c.states().len()).sum();
-    let total_cities: usize = db
-        .countries()
-        .iter()
-        .flat_map(|c| c.states())
-        .map(|s| s.cities().len())
-        .sum();
-
-    println!("Total countries: {total_countries}");
-    println!("Total states/regions: {total_states}");
-    println!("Total cities: {total_cities}");
+    let stats = db.stats();
+    println!("Total countries: {}", stats.countries);
+    println!("Total states/regions: {}", stats.states);
+    println!("Total cities: {}", stats.cities);
 
     println!("\n=== Example completed successfully ===");
     Ok(())

@@ -2,7 +2,7 @@
 //!
 //! This example demonstrates advanced filtering and searching capabilities
 
-use geodb_rs::prelude::*;
+use geodb_core::prelude::*;
 
 fn main() -> Result<()> {
     println!("=== GeoDB-RS Advanced Filtering Example ===\n");
