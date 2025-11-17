@@ -289,4 +289,4 @@ echo -e "  ${YELLOW}1.${NC} Review the documentation that was just opened"
 echo -e "  ${YELLOW}2.${NC} Ensure all changes are committed"
 echo -e "  ${YELLOW}3.${NC} Publish ${BLUE}geodb-core${NC} first (it has no dependencies):"
 echo -e "     ${YELLOW}cd crates/geodb-core && cargo publish${NC}"
-echo -e "  ${YELLOW}4.${NC} Wait for geodb-core to be available on crates.io (~1-
+echo -e "  ${YELLOW}4.${NC} Wait for geodb-core to be available on crates.io"

@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   release:
-    types: [published]
+    types: [ published ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -107,6 +107,7 @@ jobs:
           cargo install cross --git https://github.com/cross-rs/cross --locked
 
       - name: Build geodb-cli
+        shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release -p geodb-cli --target ${{ matrix.target }}
