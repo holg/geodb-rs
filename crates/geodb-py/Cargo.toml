@@ -7,7 +7,7 @@ license = "MIT"
 authors = ["Holger Trahe"]
 repository = "https://github.com/holg/geodb-rs"
 homepage = "https://github.com/holg/geodb-rs"
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["geodb", "geo", "countries", "regions", "cities"]
 categories = ["api-bindings", "database", "science"]
 # Exclude local Python venv and other non-package files from crates.io package

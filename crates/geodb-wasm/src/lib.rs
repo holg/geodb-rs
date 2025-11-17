@@ -56,7 +56,8 @@ use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-static EMBEDDED_DB: &[u8] = include_bytes!("../../geodb-core/data/geodb.standard.bin");
+static EMBEDDED_DB: &[u8] =
+    include_bytes!("../../geodb-core/data/countries+states+cities.json.gz.ALL.bin");
 
 static DB: OnceLock<GeoDb<StandardBackend>> = OnceLock::new();
 

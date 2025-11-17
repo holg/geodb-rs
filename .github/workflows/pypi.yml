@@ -1,0 +1,101 @@
+name: Publish geodb_rs to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# =====================================================================
+# 1) Build and publish SDIST once (Linux only)
+# =====================================================================
+jobs:
+  publish-sdist:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build & publish sdist
+        uses: messense/maturin-action@v1
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        with:
+          command: publish
+          args: >
+            --release
+            --sdist
+            --skip-existing
+            -m crates/geodb-py/Cargo.toml
+  
+
+  # =====================================================================
+  # 2) Build and publish platform wheels
+  # =====================================================================
+  publish-wheels:
+    needs: publish-sdist
+    if: github.event_name != 'pull_request'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: auto
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: auto
+          - os: macos-13
+            target: x86_64
+            manylinux: ""
+          - os: macos-14
+            target: aarch64
+            manylinux: ""
+          - os: windows-latest
+            target: x64
+            manylinux: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # No rust-cache for maturin manylinux builds
+
+      - name: Build & publish wheel
+        uses: messense/maturin-action@v1
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          CARGO_TARGET_DIR: /tmp/maturin-target
+        with:
+          manylinux: ${{ matrix.manylinux }}
+          target: ${{ matrix.target }}
+          command: publish
+          args: >
+            --release
+            --skip-existing
+            --no-sdist
+            -m crates/geodb-py/Cargo.toml
