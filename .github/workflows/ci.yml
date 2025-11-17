@@ -91,6 +91,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Remove target folder
+        run: rm -rf target
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -119,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: geodb-cli-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/geodb${{ matrix.ext }}
+          path: target/${{ matrix.target }}/release/geodb-cli${{ matrix.ext }}
 
   # =========================
   #  Build geodb-py wheels
