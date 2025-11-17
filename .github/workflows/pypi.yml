@@ -96,7 +96,6 @@ jobs:
           target: ${{ matrix.target }}
           command: publish
           args: >
-            --release
             --skip-existing
             --no-sdist
             -m crates/geodb-py/Cargo.toml
