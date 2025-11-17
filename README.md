@@ -1,18 +1,23 @@
 # geodb-rs
 
 ![CI](https://github.com/holg/geodb-rs/actions/workflows/ci.yml/badge.svg)
+[![Build WASM Demo](https://github.com/holg/geodb-rs/actions/workflows/wasm-build.yml/badge.svg)](https://github.com/holg/geodb-rs/actions/workflows/wasm-build.yml)
+
 [![Crates.io](https://img.shields.io/crates/v/geodb-core.svg)](https://crates.io/crates/geodb-core)
 [![Documentation](https://docs.rs/geodb-core/badge.svg)](https://docs.rs/geodb-core)
-![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)
+
+[![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
+[![Publish geodb_rs to PyPI](https://github.com/holg/geodb-rs/actions/workflows/pypi.yml/badge.svg)](https://github.com/holg/geodb-rs/actions/workflows/pypi.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance, pure-Rust geographic database with countries, states/regions, cities, aliases, phone codes, currencies, timezones, and WebAssembly support.
 
 This repository is a **Cargo workspace** containing:
 
-- **`geodb-core`** — main geographic database library (published on crates.io)
-- **`geodb-wasm`** — WebAssembly bindings + browser demo (Trunk-based)
-- **`geodb-cli`** — optional CLI (future)
+- **`geodb-core`** — main geographic database library (published on crates.io) — docs: https://docs.rs/geodb-core
+- **`geodb-cli`** — finished command‑line interface — docs: https://docs.rs/geodb-cli
+- **`geodb-wasm`** — WebAssembly bindings + browser demo — docs: https://docs.rs/geodb-wasm
+- **`geodb-py`** — Python bindings (published on PyPI as “geodb‑rs”) — https://pypi.org/project/geodb-rs/
 
 ---
 
@@ -229,6 +234,66 @@ Live demo:
 
 ---
 
+# Command-line interface (`geodb-cli`)
+
+The CLI is finished and available on crates.io. It provides quick access to the
+database for exploration, scripting, or data checks.
+
+Install:
+
+```bash
+cargo install geodb-cli
+```
+
+Examples:
+
+```bash
+geodb-cli --help
+geodb-cli stats
+geodb-cli find-country US
+geodb-cli list-cities --country US --state CA
+```
+
+Docs.rs: https://docs.rs/geodb-cli
+
+---
+
+# Python bindings (`geodb-py`)
+
+- Package name on PyPI: **geodb-rs**  
+  https://pypi.org/project/geodb-rs/
+- Module to import in Python: `geodb_rs`
+- Built and published wheels for these targets:
+
+```
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: auto
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: auto
+          - os: macos-13
+            target: x86_64
+            manylinux: ""
+          - os: macos-14
+            target: aarch64
+            manylinux: ""
+          - os: windows-latest
+            target: x64
+            manylinux: ""
+```
+
+Quick start:
+
+```python
+import geodb_rs
+
+db = geodb_rs.PyGeoDb.load_default()  # tries bundled data first
+print(db.stats())  # (countries, states, cities)
+```
+
+---
+
 # Workspace Layout
 
 ```
@@ -236,7 +301,8 @@ geodb-rs/
 ├── crates/
 │   ├── geodb-core
 │   ├── geodb-wasm
-│   └── geodb-cli (planned)
+│   ├── geodb-cli
+│   └── geodb-py
 ├── data/
 │   ├── countries+states+cities.json.gz
 │   └── geodb.standard.bin
@@ -291,8 +357,12 @@ Attribution is required if you redistribute or use the dataset.
 # Links
 
 - Repo: https://github.com/holg/geodb-rs  
-- Docs: https://docs.rs/geodb-core  
-- Crate: https://crates.io/crates/geodb-core  
+- Rust docs:
+  - geodb-core: https://docs.rs/geodb-core
+  - geodb-cli: https://docs.rs/geodb-cli
+  - geodb-wasm: https://docs.rs/geodb-wasm
+- Crates.io: https://crates.io/crates/geodb-core  
+- PyPI (Python bindings): https://pypi.org/project/geodb-rs/
 
 ---
 

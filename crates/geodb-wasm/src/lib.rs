@@ -55,9 +55,17 @@ use serde_wasm_bindgen::to_value;
 use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
+// IMPORTANT: On docs.rs each crate is built in isolation, so paths outside
+// the crate (like pulling bytes from `../geodb-core/…`) are unavailable.
+// To ensure docs.rs builds succeed, provide a tiny stub during docs builds.
+// Normal builds (workspace/demo) still embed the real bytes.
+#[cfg(all(target_arch = "wasm32", not(docsrs)))]
 static EMBEDDED_DB: &[u8] =
     include_bytes!("../../geodb-core/data/countries+states+cities.json.gz.ALL.bin");
+
+// Stub for docs.rs so documentation compiles without accessing external files.
+#[cfg(all(target_arch = "wasm32", docsrs))]
+static EMBEDDED_DB: &[u8] = b"";
 
 static DB: OnceLock<GeoDb<StandardBackend>> = OnceLock::new();
 
