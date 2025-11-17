@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bincode",
  "flate2",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "geodb-core",
  "pyo3",

@@ -1,9 +1,10 @@
 [package]
 name = "geodb-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Geographic database loader (countries, regions, cities, aliasses) with filtering and caching."
+readme = "../../README.md"
 repository = "https://github.com/holg/geodb-rs"
 
 [dependencies]
