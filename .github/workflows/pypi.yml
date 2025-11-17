@@ -29,17 +29,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build & publish sdist
-        uses: messense/maturin-action@v1
+      - name: Install maturin
+        run: pip install "maturin>=1.7,<2.0"
+
+      - name: Build sdist
+        run: maturin sdist -m crates/geodb-py/Cargo.toml -o dist
+
+      - name: Upload sdist to PyPI with maturin
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        with:
-          command: publish
-          args: >
-            --sdist
-            --skip-existing
-            -m crates/geodb-py/Cargo.toml
-  
+        run: maturin upload --skip-existing dist/*.tar.gz
+
+
+
 
   # =====================================================================
   # 2) Build and publish platform wheels
