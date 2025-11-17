@@ -36,7 +36,6 @@ jobs:
         with:
           command: publish
           args: >
-            --release
             --sdist
             --skip-existing
             -m crates/geodb-py/Cargo.toml
