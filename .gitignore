@@ -20,3 +20,30 @@ Thumbs.db
 # Testing
 *.profraw
 *.profdata
+# GeoDB cache binaries – ignore all generated caches…
+crates/geodb-core/data/countries+states+cities.json.gz.*.bin
+# …but keep the canonical ALL cache in git (needed for WASM build)
+!crates/geodb-core/data/countries+states+cities.json.gz.ALL.bin
+# Local blog content (not tracked)
+blog/
+
+# Local helper scripts (not tracked)
+scripts/
+
+# Python cache / bytecode
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Local venvs
+.venv/
+venv/
+.env_py312/
+
+# Python / maturin artifacts
+dist/
+geodb-py-wheels/
+
+# WASM demo output (runtime build, not the committed one under crates/geodb-wasm/dist if you decide to keep that checked in)
+#crates/geodb-wasm/
