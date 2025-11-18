@@ -182,3 +182,30 @@ jobs:
         with:
           name: geodb-py-${{ matrix.os }}-${{ matrix.target }}
           path: dist/*.whl
+
+  # =========================
+  #  Attach artifacts to GitHub Release
+  # =========================
+  attach-release-assets:
+    # Wait for binaries + wheels to be built
+    needs: [ build-cli, build-wheels ]
+
+    # Only run for real releases, not pushes/PRs
+    if: github.event_name == 'release' && github.event.action == 'published'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Upload artifacts to GitHub Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}           # e.g. v0.1.3
+          files: release-artifacts/**               # all binaries + wheels
