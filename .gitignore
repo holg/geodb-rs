@@ -45,7 +45,7 @@ __pycache__/
 .venv/
 venv/
 .env_py312/
-
+target/
 # Python / maturin artifacts
 dist/*.tar.gz
 geodb-py-wheels/
