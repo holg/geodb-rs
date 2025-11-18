@@ -25,7 +25,10 @@ crates/geodb-core/data/countries+states+cities.json.gz.*.bin
 # …but keep the canonical ALL cache in git (needed for WASM build)
 !crates/geodb-core/data/countries+states+cities.json.gz.ALL.bin
 !crates/geodb-core/data/countries+states+cities.json.gz
-!crates/geodb-wasm/dist/
+!crates/geodb-wasm/dist/*.js
+!crates/geodb-wasm/dist/*.wasm
+!crates/geodb-wasm/dist/*.html
+
 # Local blog content (not tracked)
 blog/
 
@@ -44,7 +47,7 @@ venv/
 .env_py312/
 
 # Python / maturin artifacts
-dist/
+dist/*.tar.gz
 geodb-py-wheels/
 
 # WASM demo output (runtime build, not the committed one under crates/geodb-wasm/dist if you decide to keep that checked in)

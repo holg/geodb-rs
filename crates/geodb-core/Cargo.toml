@@ -1,6 +1,6 @@
 [package]
 name = "geodb-core"
-version = "0.1.3"
+version = "0.1.2"
 edition = "2021"
 authors = ["Holger Trahe"]
 license = "MIT OR Apache-2.0"

@@ -2,7 +2,7 @@
 edition = "2021"
 license = "MIT AND ODbL-1.0"
 name = "geodb-wasm"
-version = "0.1.3"
+version = "0.1.2"
 description = "WebAssembly bindings for geodb-core with simple JS API and embedded dataset"
 repository = "https://github.com/holg/geodb-rs"
 homepage = "https://github.com/holg/geodb-rs"
