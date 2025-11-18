@@ -1,6 +1,6 @@
 [package]
 name = "geodb-py"
-version = "0.1.3"
+version = "0.1.2"
 edition = "2021"
 description = "Python bindings for geodb-rs"
 license = "MIT"
