@@ -25,6 +25,7 @@ crates/geodb-core/data/countries+states+cities.json.gz.*.bin
 # …but keep the canonical ALL cache in git (needed for WASM build)
 !crates/geodb-core/data/countries+states+cities.json.gz.ALL.bin
 !crates/geodb-core/data/countries+states+cities.json.gz
+!crates/geodb-wasm/dist/
 # Local blog content (not tracked)
 blog/
 
