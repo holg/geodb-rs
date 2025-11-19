@@ -27,8 +27,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 geodb-core = { version = "0.1", path = "../geodb-core" }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py37"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [build-dependencies]
 pyo3-build-config = "0.22"

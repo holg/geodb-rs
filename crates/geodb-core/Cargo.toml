@@ -21,20 +21,46 @@ name = "geodb_core"
 path = "src/lib.rs"
 
 [features]
-default = []
-# Future: compact backend for reduced memory usage
-compact = []
+default = ["json", "builder", "compact", "legacy_model"]
+
+# -----------------------------------------------------------------------------
+# Feature Flags
+# -----------------------------------------------------------------------------
+
+# "builder" = The Tooling.
+# Needs to Download (fetch), Read Source (json), and Handle Gzip (compact).
+builder = ["json", "compact", "dep:reqwest"]
+
+# "json" = Read capability for legacy/source files.
+# Enables the `loader/legacy_json.rs` module.
+json = ["dep:serde_json"]
+
+# "compact" = Compression support (GZIP).
+# Affects both Binary (smaller .bin) and JSON (reading .json.gz).
+compact = ["dep:flate2"]
+
+# ⚠️ ARCHITECTURE SWITCH ⚠️
+# If enabled: Uses the old "Nested" tree structure (Vec<Country> -> Vec<State>).
+# If disabled (Default): Uses the new "Flat" array structure.
+legacy_model = []
 
 [dependencies]
-bincode = "1.3"
-flate2 = "1.0"
-once_cell = "1.19"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
+bincode = { workspace = true }
+deunicode = { workspace = true }
+# --- Optional / Feature Gated ---
+# Used by 'compact' or 'builder'
+flate2 = { workspace = true, optional=true }
+once_cell = { workspace = true }
+#  HTTP Client (Blocking for CLI/Server usage)
+# Used by 'fetch'
+reqwest = { version = "0.12", features = ["blocking"], optional = true }
+serde = { workspace = true }
+# Used by 'json' or 'builder'
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.7"
 
 [[bench]]
 name = "benchmarks"

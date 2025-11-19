@@ -52,3 +52,5 @@ geodb-py-wheels/
 
 # WASM demo output (runtime build, not the committed one under crates/geodb-wasm/dist if you decide to keep that checked in)
 #crates/geodb-wasm/
+# tmp, to be removed after refactor
+/crates/geodb-core-before-refactor/

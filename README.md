@@ -6,7 +6,7 @@
 [![Crates.io](https://img.shields.io/crates/v/geodb-core.svg)](https://crates.io/crates/geodb-core)
 [![Documentation](https://docs.rs/geodb-core/badge.svg)](https://docs.rs/geodb-core)
 
-\[![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
+[![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
 [![Publish geodb_rs to PyPI](https://github.com/holg/geodb-rs/actions/workflows/pypi.yml/badge.svg)](https://github.com/holg/geodb-rs/actions/workflows/pypi.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

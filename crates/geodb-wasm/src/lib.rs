@@ -48,10 +48,14 @@
 //! - All exported functions are `wasm_bindgen` bindings and return plain types
 //!   or `JsValue` containing JSON-serializable arrays/objects.
 //! - See the `dist/` folder for a Trunk-based demo setup.
+#[cfg(target_arch = "wasm32")] // act
+use flate2::read::GzDecoder;
 use geodb_core::{CityView, CountryView, StateView};
 use geodb_core::{GeoDb, PhoneCodeSearch, SmartItem, StandardBackend};
 use serde_json::json;
 use serde_wasm_bindgen::to_value;
+#[cfg(target_arch = "wasm32")]
+use std::io::Read;
 use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 
@@ -81,8 +85,19 @@ pub fn start() {
     web_sys::console::log_1(&"Initializing GeoDB WASM module...".into());
 
     DB.get_or_init(|| {
-        web_sys::console::log_1(&"Deserializing embedded DB...".into());
-        match bincode::deserialize::<GeoDb<StandardBackend>>(EMBEDDED_DB) {
+        web_sys::console::log_1(&"Decompressing and deserializing embedded DB...".into());
+
+        // Decompress the gzipped data
+        let mut decoder = GzDecoder::new(EMBEDDED_DB);
+        let mut decompressed = Vec::new();
+
+        if let Err(e) = decoder.read_to_end(&mut decompressed) {
+            web_sys::console::error_1(&format!("✗ Decompression failed: {e}").into());
+            panic!("Failed to decompress DB: {e}");
+        }
+
+        // Deserialize the decompressed data
+        match bincode::deserialize::<GeoDb<StandardBackend>>(&decompressed) {
             Ok(db) => {
                 web_sys::console::log_1(
                     &format!("✓ Loaded {} countries", db.countries().len()).into(),

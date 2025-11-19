@@ -1,4 +1,4 @@
-// src/alias.rs
+/*// src/alias.rs
 use crate::error::Result;
 use crate::model::{GeoBackend, GeoDb};
 use serde::{Deserialize, Serialize};
@@ -156,3 +156,4 @@ impl CityMetaIndex {
         Self::load_from_path(path)
     }
 }
+*/
