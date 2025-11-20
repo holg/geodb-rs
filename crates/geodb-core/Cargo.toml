@@ -52,7 +52,7 @@ flate2 = { workspace = true, optional = true }
 once_cell = { workspace = true }
 #  HTTP Client (Blocking for CLI/Server usage)
 # Used by 'fetch'
-reqwest = { version = "0.12", features = ["blocking"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 serde = { workspace = true }
 # Used by 'json' or 'builder'
 serde_json = { workspace = true, optional = true }
