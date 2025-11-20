@@ -7,7 +7,7 @@ use geodb_core::prelude::*;
 fn main() -> Result<()> {
     println!("=== GeoDB-RS Advanced Filtering Example ===\n");
 
-    let db = GeoDb::<StandardBackend>::load()?;
+    let db = GeoDb::<DefaultBackend>::load()?;
 
     // Example 1: Find all countries in a specific region with a specific currency
     println!("--- Example 1: Countries in Europe using Euro ---");

@@ -13,18 +13,17 @@
 //! -----------
 //!
 //! ```no_run
-//! use geodb_core::GeoDb;
-//! use geodb_core::StandardBackend;
+//! use geodb_core::prelude::*;
 //!
 //! // Load a filtered database (here: United States only) using the bundled dataset
-//! let db = GeoDb::<StandardBackend>::load_filtered_by_iso2(&["US"]).unwrap();
+//! let db = GeoDb::<DefaultBackend>::load_filtered_by_iso2(&["US"]).unwrap();
 //!
 //! // Lookup by ISO2 / ISO3 / generic code
 //! let us = db.find_country_by_code("us").unwrap();
 //! assert_eq!(us.iso2(), "US");
 //!
 //! // Iterate cities
-//! for (city, state, country) in db.iter_cities() {
+//! for (city, state, country) in db.cities() {
 //!     // Do something with city/state/country
 //!     let _ = (city.name(), state.name(), country.name());
 //! }
@@ -52,28 +51,19 @@
 //! JSON structure matches the upstream file format. You can retrieve the
 //! canonical URL we rely on via `GeoDb::<DefaultBackend>::get_3rd_party_data_url()`.
 //! Please keep the upstream CC‑BY‑4.0 attribution when distributing data.
-pub mod alias;
-pub mod api;
-pub mod error;
-pub mod filter;
-pub mod loader;
-pub mod model;
-pub mod phone;
-pub mod prelude;
-pub mod region;
-pub mod traits;
-
+pub mod nested;
+// pub mod region;
+pub mod convert;
+pub mod search;
 // Re-exports for convenience
-pub use alias::{CityMeta, CityMetaIndex};
-pub use api::{CityView, CountryView, StateView};
-pub use error::{GeoDbError, GeoError, Result};
-pub use model::{
-    City, Country, CountryTimezone, DefaultBackend, DefaultGeoDb, GeoDb, SmartHit, SmartItem,
-    StandardBackend, State,
-};
+pub use super::{CityView, CountryView, StateView};
+pub use crate::alias::{CityMeta, CityMetaIndex};
+pub use crate::common::raw::{CityRaw, CountriesRaw, CountryRaw, StateRaw};
 pub use crate::common::DbStats;
-pub use crate::raw::{CountryRaw, CountriesRaw, CityRaw, StateRaw};
-pub use phone::PhoneCodeSearch;
-pub use traits::GeoBackend;
-pub use filter::{equals_folded, fold_ascii_lower, fold_key, build_geodb};
-
+pub use crate::error::{GeoDbError, GeoError, Result};
+pub use crate::text::{equals_folded, fold_ascii_lower, fold_key};
+pub use nested::{City, Country, CountryTimezone, GeoDb, State};
+#[cfg(not(feature = "compact"))]
+pub const CACHE_SUFFIX: &str = ".nested.bin";
+#[cfg(feature = "compact")]
+pub const CACHE_SUFFIX: &str = ".comp.nested.bin";

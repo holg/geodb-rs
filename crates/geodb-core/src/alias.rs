@@ -1,6 +1,7 @@
-/*// src/alias.rs
+// src/alias.rs
+use super::model::GeoDb;
 use crate::error::Result;
-use crate::model::{GeoBackend, GeoDb};
+use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -156,4 +157,3 @@ impl CityMetaIndex {
         Self::load_from_path(path)
     }
 }
-*/

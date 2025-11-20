@@ -45,4 +45,15 @@ pub enum Commands {
         /// Substring to search (case-insensitive)
         query: String,
     },
+    /// Build/Update the binary database from source (JSON).
+    /// This will read the input JSON (or download it if not found) and generate the optimized .bin cache.
+    Build {
+        /// Output path for the binary file (default: "geodb.bin" next to input)
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+
+        /// Force download from upstream URL even if local file exists
+        #[arg(long)]
+        download: bool,
+    },
 }

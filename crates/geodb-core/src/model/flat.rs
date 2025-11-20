@@ -71,14 +71,3 @@ pub struct City<B: GeoBackend> {
     pub population: Option<u32>,
     pub timezone: Option<B::Str>,
 }
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct DbStats {
-    pub countries: usize,
-    pub states: usize,
-    pub cities: usize,
-}
-
-// Standard backend for convenience
-#[derive(Clone, Serialize, Deserialize)]
-pub struct DefaultBackend;

@@ -54,3 +54,4 @@ geodb-py-wheels/
 #crates/geodb-wasm/
 # tmp, to be removed after refactor
 /crates/geodb-core-before-refactor/
+countries+states+cities.json

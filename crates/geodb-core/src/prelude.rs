@@ -1,12 +1,29 @@
-//! geodb-rs prelude: bring common types and traits into scope for examples.
+// crates/geodb-core/src/prelude.rs
+
+//! # The GeoDB Prelude
+//!
+//! Import this to get the core types and traits:
+//! `use geodb_core::prelude::*;`
 
 #![allow(unused_imports)]
 
-pub use crate::alias::{CityMeta, CityMetaIndex};
-pub use crate::error::{GeoDbError, GeoError, Result};
-pub use crate::model::{
-    build_geodb, City, Country, CountryTimezone, DefaultBackend, DefaultGeoDb, GeoBackend, GeoDb,
-    StandardBackend, State,
+// 1. The Core Data Structures (From the active architecture)
+pub use super::model::{City, Country, GeoDb, State};
+
+// 2. The Types & Aliases (From the crate root/common)
+pub use crate::{
+    DefaultBackend, // The Struct
+    DefaultGeoDb,   // The Alias: GeoDb<DefaultBackend>
+    SmartHit,       // The Alias: SmartHitGeneric<...>
+    SmartItem,      // The Alias: SmartItemGeneric<...>
 };
-pub use crate::phone::PhoneCodeSearch;
-pub use crate::region::*;
+
+// 3. Statistics & Metadata
+pub use crate::alias::{CityMeta, CityMetaIndex};
+pub use crate::common::DbStats;
+
+// 4. Errors
+pub use crate::error::{GeoDbError, GeoError, Result};
+
+// 5. Traits (Essential for functionality)
+pub use crate::traits::{GeoBackend, GeoSearch};

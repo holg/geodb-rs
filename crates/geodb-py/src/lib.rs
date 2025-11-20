@@ -1,9 +1,10 @@
 #![allow(clippy::useless_conversion)]
 
-use geodb_core::{
-    CityView, CountryView, DefaultGeoDb, GeoDb, PhoneCodeSearch, SmartItem, StandardBackend,
-    StateView,
-};
+// 1. Import the Prelude (Crucial for Trait methods like .find_country_by_iso2)
+use geodb_core::prelude::*;
+
+// 2. Import Views for Serialization
+use geodb_core::api::{CityView, CountryView, StateView};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -84,7 +85,7 @@ fn find_bundled_data() -> PyResult<PathBuf> {
 impl PyGeoDb {
     #[staticmethod]
     pub fn load(path: &str) -> PyResult<Self> {
-        let db = GeoDb::<StandardBackend>::load_from_path(path, None).into_py()?;
+        let db = GeoDb::<DefaultBackend>::load_from_path(path, None).into_py()?;
         Ok(Self { inner: db })
     }
 
@@ -96,12 +97,12 @@ impl PyGeoDb {
                 let path_str = path
                     .to_str()
                     .ok_or_else(|| PyRuntimeError::new_err("Invalid path encoding"))?;
-                let db = GeoDb::<StandardBackend>::load_from_path(path_str, None).into_py()?;
+                let db = GeoDb::<DefaultBackend>::load_from_path(path_str, None).into_py()?;
                 Ok(Self { inner: db })
             }
             Err(_) => {
                 // Fall back to geodb-core's default location
-                let db = GeoDb::<StandardBackend>::load().into_py()?;
+                let db = GeoDb::<DefaultBackend>::load().into_py()?;
                 Ok(Self { inner: db })
             }
         }
@@ -114,7 +115,7 @@ impl PyGeoDb {
             .map(|s| s.trim().to_string())
             .collect();
         let refs: Vec<&str> = tmp.iter().map(String::as_str).collect();
-        let db = GeoDb::<StandardBackend>::load_filtered_by_iso2(&refs).into_py()?;
+        let db = GeoDb::<DefaultBackend>::load_filtered_by_iso2(&refs).into_py()?;
         Ok(Self { inner: db })
     }
 

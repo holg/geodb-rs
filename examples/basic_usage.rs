@@ -13,7 +13,7 @@ fn main() -> Result<()> {
 
     // Load the database
     println!("Loading geographic database...");
-    let db = GeoDb::<StandardBackend>::load()?;
+    let db = GeoDb::<DefaultBackend>::load()?;
     println!("✓ Database loaded successfully\n");
 
     // Example 1: Get all countries
@@ -94,12 +94,12 @@ fn main() -> Result<()> {
     println!("--- Example 7: Cache usage ---");
     println!("First load (will cache):");
     let start = std::time::Instant::now();
-    let _db1 = GeoDb::<StandardBackend>::load()?;
+    let _db1 = GeoDb::<DefaultBackend>::load()?;
     println!("Time: {:?}", start.elapsed());
 
     println!("Second load (from cache):");
     let start = std::time::Instant::now();
-    let _db2 = GeoDb::<StandardBackend>::load()?;
+    let _db2 = GeoDb::<DefaultBackend>::load()?;
     println!("Time: {:?}", start.elapsed());
     println!();
 

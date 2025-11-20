@@ -10,10 +10,10 @@ readme = "README.md"
 [workspace]
 members = [
     "crates/geodb-cli",
-#    "crates/geodb-core-before-refactor",
+    #    "crates/geodb-core-before-refactor",
     "crates/geodb-core",
-#    "crates/geodb-py",
-#    "crates/geodb-wasm",
+    "crates/geodb-py",
+    "crates/geodb-wasm",
 ]
 
 resolver = "2"

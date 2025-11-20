@@ -1,35 +1,20 @@
 // crates/geodb-core/src/model/mod.rs
-
-//! # The Data Model Switchboard
-//!
-//! This module acts as a traffic cop. It decides which Data Architecture to use
-//! based on your `Cargo.toml` features.
-//!
-//! 1. **Flat Model (Default):** Optimized, contiguous arrays. (`flat.rs`)
-//! 2. **Nested Model (Legacy):** classic Tree of Objects. (`nested.rs`)
+//!  **Flat Model (Default):** Optimized, contiguous arrays. (`flat.rs`)
 
 // The Two Engines
 pub mod flat;
-pub mod nested;
 
 // The Logic Layer (Converters)
 pub mod convert;
+pub mod search;
 
-// --- THE SWITCH ---
+pub use common::DefaultBackend;
+pub use flat::{City, Country, DbStats, SmartHit, SmartItem, State};
 
-// Scenario A: Standard (High Performance)
-#[cfg(not(feature = "legacy_model"))]
-pub use flat::{
-    City, Country, DbStats, DefaultBackend, DefaultGeoDb, GeoDb, SmartHit, SmartItem,
-    StandardBackend, State,
-};
-
-// Scenario B: Legacy (Educational / Comparison)
-#[cfg(feature = "legacy_model")]
-pub use nested::{
-    City, Country, DbStats, DefaultBackend, DefaultGeoDb, GeoDb, SmartHit, SmartItem,
-    StandardBackend, State,
-};
+#[cfg(not(feature = "compact"))]
+pub const CACHE_SUFFIX: &str = ".flat.bin";
+#[cfg(feature = "compact")]
+pub const CACHE_SUFFIX: &str = ".comp.flat.bin";
 
 // Note: If using legacy_model, we need to ensure DbStats/SmartHit are available.
 // Ideally, we should move shared types to a `common.rs` file.

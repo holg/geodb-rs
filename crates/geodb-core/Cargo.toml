@@ -22,7 +22,6 @@ path = "src/lib.rs"
 
 [features]
 default = ["json", "builder", "compact", "legacy_model"]
-
 # -----------------------------------------------------------------------------
 # Feature Flags
 # -----------------------------------------------------------------------------
@@ -49,7 +48,7 @@ bincode = { workspace = true }
 deunicode = { workspace = true }
 # --- Optional / Feature Gated ---
 # Used by 'compact' or 'builder'
-flate2 = { workspace = true, optional=true }
+flate2 = { workspace = true, optional = true }
 once_cell = { workspace = true }
 #  HTTP Client (Blocking for CLI/Server usage)
 # Used by 'fetch'

@@ -27,4 +27,4 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-geodb-core = { version = "0.1", path = "../geodb-core" }
+geodb-core = { version = "0.1", path = "../geodb-core", features = ["builder"] }

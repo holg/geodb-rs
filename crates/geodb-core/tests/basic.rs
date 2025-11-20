@@ -1,9 +1,9 @@
-use geodb_core::{GeoDb, StandardBackend};
+use geodb_core::prelude::*;
 
 #[test]
 fn load_filtered_us_and_basic_queries_work() {
     // Load only the United States to keep tests fast and deterministic
-    let db = GeoDb::<StandardBackend>::load_filtered_by_iso2(&["US"]).expect("load filtered DB");
+    let db = GeoDb::<DefaultBackend>::load_filtered_by_iso2(&["US"]).expect("load filtered DB");
 
     // Basic stats
     let stats = db.stats();
@@ -29,7 +29,7 @@ fn load_filtered_us_and_basic_queries_work() {
 
     // iter_cities should yield cities that belong to a state and the US
     let mut saw_city = false;
-    for (city, state, country) in db.iter_cities() {
+    for (city, state, country) in db.cities() {
         assert!(!city.name().is_empty());
         assert!(!state.name().is_empty());
         assert_eq!(country.iso2(), "US");
@@ -42,12 +42,12 @@ fn load_filtered_us_and_basic_queries_work() {
 #[test]
 fn load_from_path_and_multi_filter() {
     // Build explicit path to the bundled dataset
-    let dir = GeoDb::<StandardBackend>::default_data_dir();
-    let filename = GeoDb::<StandardBackend>::default_dataset_filename();
+    let dir = GeoDb::<DefaultBackend>::default_data_dir();
+    let filename = GeoDb::<DefaultBackend>::default_dataset_filename();
     let path = dir.join(filename);
 
     // Filter to two countries and ensure counts line up with the filter length
-    let db = GeoDb::<StandardBackend>::load_from_path(&path, Some(&["DE", "FR"]))
+    let db = GeoDb::<DefaultBackend>::load_from_path(&path, Some(&["DE", "FR"]))
         .expect("load filtered DB (DE, FR)");
 
     assert_eq!(db.stats().countries, 2);

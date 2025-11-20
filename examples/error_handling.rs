@@ -9,10 +9,13 @@ fn main() -> Result<()> {
 
     // Example 1: Handling database load errors
     println!("--- Example 1: Loading database with error handling ---");
-    match GeoDb::<StandardBackend>::load() {
+    match GeoDb::<DefaultBackend>::load() {
         Ok(db) => {
+            let stats = db.stats();
             println!("✓ Database loaded successfully");
-            println!("  Countries: {}", db.countries().len());
+            println!("  Countries: {0}", stats.countries);
+            println!("  States: {0}", stats.states);
+            println!("  Cities: {0}", stats.cities);
         }
         Err(e) => {
             eprintln!("✗ Failed to load database: {e}");
@@ -21,14 +24,14 @@ fn main() -> Result<()> {
     }
     println!();
 
-    let db = GeoDb::<StandardBackend>::load()?;
+    let db = GeoDb::<DefaultBackend>::load()?;
 
     // Example 2: Handling missing countries
     println!("--- Example 2: Searching for non-existent country ---");
     let iso_codes = vec!["XX", "YY", "ZZ"];
     for code in iso_codes {
         match db.find_country_by_iso2(code) {
-            Some(country) => println!("  Found: {} ({})", country.name(), country.iso_code()),
+            Some(country) => println!("  Found: {} ({})", country.name, country.iso2),
             None => println!("  Not found: {code}"),
         }
     }
@@ -39,7 +42,7 @@ fn main() -> Result<()> {
     let invalid_codes = vec!["", "A", "ABCD", "123"];
     for code in invalid_codes {
         match db.find_country_by_iso2(code) {
-            Some(country) => println!("  Found: {} ({})", country.name(), country.iso_code()),
+            Some(country) => println!("  Found: {} ({})", country.name, country.iso2),
             None => println!("  Not found: {code}"),
         }
     }

@@ -50,8 +50,11 @@
 //! - See the `dist/` folder for a Trunk-based demo setup.
 #[cfg(target_arch = "wasm32")] // act
 use flate2::read::GzDecoder;
-use geodb_core::{CityView, CountryView, StateView};
-use geodb_core::{GeoDb, PhoneCodeSearch, SmartItem, StandardBackend};
+// 1. Import the Prelude (Crucial for Trait methods like .find_country_by_iso2)
+use geodb_core::prelude::*;
+
+// 2. Import Views for Serialization
+use geodb_core::api::{CityView, CountryView, StateView};
 use serde_json::json;
 use serde_wasm_bindgen::to_value;
 #[cfg(target_arch = "wasm32")]
@@ -64,14 +67,13 @@ use wasm_bindgen::prelude::*;
 // To ensure docs.rs builds succeed, provide a tiny stub during docs builds.
 // Normal builds (workspace/demo) still embed the real bytes.
 #[cfg(all(target_arch = "wasm32", not(docsrs)))]
-static EMBEDDED_DB: &[u8] =
-    include_bytes!("../../geodb-core/data/countries+states+cities.json.gz.ALL.bin");
+static EMBEDDED_DB: &[u8] = include_bytes!("../../geodb-core/data/geodb.comp.nested.bin");
 
 // Stub for docs.rs so documentation compiles without accessing external files.
 #[cfg(all(target_arch = "wasm32", docsrs))]
 static EMBEDDED_DB: &[u8] = b"";
 
-static DB: OnceLock<GeoDb<StandardBackend>> = OnceLock::new();
+static DB: OnceLock<GeoDb<DefaultBackend>> = OnceLock::new();
 
 /* --------------------------------------------------------------------------
    Initialization
@@ -97,7 +99,7 @@ pub fn start() {
         }
 
         // Deserialize the decompressed data
-        match bincode::deserialize::<GeoDb<StandardBackend>>(&decompressed) {
+        match bincode::deserialize::<GeoDb<DefaultBackend>>(&decompressed) {
             Ok(db) => {
                 web_sys::console::log_1(
                     &format!("✓ Loaded {} countries", db.countries().len()).into(),
