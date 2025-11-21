@@ -31,11 +31,8 @@ fn main() -> anyhow::Result<()> {
         PathBuf::from(p)
     } else {
         let bin_path = default_dir.join(bin_filename);
-        if bin_path.exists() {
-            bin_path
-        } else {
-            default_dir.join("countries+states+cities.json.gz")
-        }
+        println!("bin_path: {bin_path:?}");
+        bin_path
     };
 
     // 2. Handle "Build" Command (Write Mode)
@@ -47,22 +44,24 @@ fn main() -> anyhow::Result<()> {
     {
         println!("=== GeoDB Builder ===");
         println!("Source: {input_path:?}");
-
-        // Trigger the Smart Loader in "Force Source" mode.
-        // This parses the JSON and writes the .bin cache automatically.
         let start = std::time::Instant::now();
-        let db = GeoDb::<DefaultBackend>::load_raw_json(&input_path)?;
-        let duration = start.elapsed();
-        let bin_filename = GeoDb::<DefaultBackend>::default_dataset_filename();
-        println!("✓ Build complete in {duration:.2?}");
-        println!("  Countries: {}", db.stats().countries);
-        match db.save_as(PathBuf::from(&bin_filename)) {
-            Ok(_) => println!("✓ Binary cache saved to: {bin_filename}"),
-            Err(e) => eprintln!("✗ Failed to save binary cache: {e}"),
+        match GeoDb::<DefaultBackend>::load_or_build() {
+            Ok(db) => {
+                let duration = start.elapsed();
+                let bin_filename = GeoDb::<DefaultBackend>::default_dataset_filename();
+                println!("✓ Build complete in {duration:.2?}");
+                println!("  Countries: {}", db.stats().countries);
+                match db.save_as(PathBuf::from(&bin_filename)) {
+                    Ok(_) => println!("✓ Binary cache saved to: {bin_filename}"),
+                    Err(e) => eprintln!("✗ Failed to save binary cache: {e}"),
+                }
+            }
+            Err(e) => {
+                eprintln!("✗ Error: Failed to load database.");
+                eprintln!("  Details: {e}");
+                eprintln!("  Hint: The 'build' command requires the source JSON file. Ensure it is available at the expected path.");
+            }
         }
-
-        // (Note: 'download' arg is ignored here as core removed fetch logic,
-        // assumption is user provides the file or uses the bundled one).
         return Ok(());
     }
 

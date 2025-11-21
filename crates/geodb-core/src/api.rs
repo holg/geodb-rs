@@ -9,7 +9,7 @@
 use crate::traits::GeoBackend;
 // We import the ALIASES from the root. The compiler automatically
 // points these to the correct struct definition (Flat or Nested).
-use crate::{City, Country, State};
+use super::model_impl::{City, Country, State};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 
 // -----------------------------------------------------------------------------

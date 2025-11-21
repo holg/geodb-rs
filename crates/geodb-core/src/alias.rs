@@ -1,7 +1,5 @@
 // src/alias.rs
-use super::model::GeoDb;
 use crate::error::Result;
-use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -115,40 +113,6 @@ impl CityMetaIndex {
         Some(&self.entries[*idx])
     }
 }
-
-impl<B: GeoBackend> GeoDb<B> {
-    /// Resolve an alias (e.g. "Munich") into (country_iso2, state_name, city_name)
-    /// using the given CityMetaIndex.
-    pub fn resolve_city_alias_with_index<'a>(
-        &'a self,
-        alias: &str,
-        index: &'a CityMetaIndex,
-    ) -> Option<(&'a B::Str, &'a B::Str, &'a B::Str)> {
-        let meta = index.find_by_alias(alias, None, None)?;
-
-        for country in &self.countries {
-            if !country.iso2.as_ref().eq_ignore_ascii_case(&meta.iso2) {
-                continue;
-            }
-
-            for state in &country.states {
-                if !state.name.as_ref().eq_ignore_ascii_case(&meta.state) {
-                    continue;
-                }
-
-                for city in &state.cities {
-                    if city.name.as_ref().eq_ignore_ascii_case(&meta.city) {
-                        return Some((&country.iso2, &state.name, &city.name));
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-// near the bottom of src/alias.rs
-
 impl CityMetaIndex {
     /// Load `city_meta.json` from the crate's default `data/` directory.
     pub fn load_default() -> Result<Self> {

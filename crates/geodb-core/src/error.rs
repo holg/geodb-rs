@@ -6,9 +6,11 @@ pub enum GeoError {
     #[error("IO error while reading data: {0}")]
     Io(#[from] io::Error),
 
+    #[cfg(feature = "compact")]
     #[error("Gzip decompression error: {0}")]
     Gzip(#[from] flate2::DecompressError),
 
+    #[cfg(feature = "json")]
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
 

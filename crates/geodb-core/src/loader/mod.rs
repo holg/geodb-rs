@@ -1,10 +1,9 @@
 // crates/geodb-core/src/loader/mod.rs
-
 use crate::error::Result;
-// use crate::traits::GeoBackend;
-use super::model::{GeoDb, CACHE_SUFFIX};
+use super::model_impl::{GeoDb, CACHE_SUFFIX};
 use once_cell::sync::OnceCell;
 use std::path::{Path, PathBuf};
+
 pub mod binary_load;
 pub mod common_io; // Adds load_binary_file() to GeoDb
                    // pub use crate::traits::{DbStats, DefaultBackend};
@@ -21,17 +20,23 @@ impl GeoDb<DefaultBackend> {
         format!("geodb{CACHE_SUFFIX}")
     }
 
-    pub fn get_3rd_party_data_url() -> &'static str {
+    pub fn get_data_url() -> &'static str {
         DATA_REPO_URL
     }
+    pub fn default_raw_file() -> PathBuf {
+        PathBuf::from("countries+states+cities.json.gz")
+    }
+    pub fn default_raw_path() -> PathBuf {
+        Self::default_data_dir().join(Self::default_raw_file())
+    }
+    pub fn default_bin_path() -> PathBuf {
+        Self::default_data_dir().join(Self::default_dataset_filename())
+    }
+
     pub fn load() -> Result<Self> {
         GEO_DB_CACHE
-            .get_or_try_init(|| {
-                let dir = Self::default_data_dir();
-                let file = Self::default_dataset_filename();
-                Self::load_from_path(dir.join(file), None)
-            })
-            .cloned()
+            .get_or_try_init(|| Self::load_from_path(Self::default_bin_path(), None))
+            .map(|db| db.clone())
     }
     /// **Unified Loader:**
     /// Dispatches to the appropriate implementation based on file type and features.
@@ -52,8 +57,9 @@ impl GeoDb<DefaultBackend> {
         // 3. Fallback for Non-Builder builds (e.g. WASM)
         #[cfg(not(feature = "builder"))]
         {
+            use super::GeoError;
             // Try to find the binary cache anyway, even if we can't parse source
-            let cache_path = common::get_cache_path(path, CACHE_SUFFIX);
+            let cache_path = common_io::get_cache_path(path, CACHE_SUFFIX);
             if cache_path.exists() {
                 return Self::load_binary_file(&cache_path, filter);
             }

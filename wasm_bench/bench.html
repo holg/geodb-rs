@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GeoDB WASM Benchmark: Flat vs Nested</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; line-height: 1.5; }
+        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .controls { margin: 20px 0; display: flex; gap: 10px; }
+        button { padding: 12px 24px; font-size: 1rem; cursor: pointer; border: none; border-radius: 6px; transition: transform 0.1s; }
+        button:active { transform: scale(0.98); }
+        button.flat { background: #28a745; color: white; }
+        button.nested { background: #dc3545; color: white; }
+        
+        #log { background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border: 1px solid #ddd; min-height: 200px; font-family: monospace; white-space: pre-wrap; }
+        .entry { margin-bottom: 5px; }
+        .label { font-weight: bold; display: inline-block; width: 80px; }
+        .success { color: #28a745; }
+        .error { color: #dc3545; font-weight: bold; }
+        .info { color: #007bff; }
+    </style>
+</head>
+<body>
+    <h1>GeoDB Architecture Benchmark</h1>
+    <p>Compare the startup time and search latency of the new Flat architecture vs the Legacy Nested architecture.</p>
+
+    <div class="controls">
+        <button class="flat" onclick="runBench('./dist-flat/geodb-wasm-6d261cfe35169cfd.js', 'FLAT')">
+            🚀 Run Flat Benchmark
+        </button>
+        
+        <button class="nested" onclick="runBench('./dist-nested/geodb-wasm-65de8d2f942f48d5.js', 'NESTED')">
+            🐢 Run Nested Benchmark
+        </button>
+    </div>
+    Starting NESTED benchmark...
+
+Fetching JS module from: ./dist-nested/geodb-wasm-65de8d2f942f48d5.js
+
+Fetching WASM from: ./dist-nested/geodb-wasm-65de8d2f942f48d5_bg.wasm
+
+✅ Startup Complete: 178.00 ms
+
+Loaded 250 countries.
+
+Running 5,000 search queries...
+
+Search Time: 79481.00 ms
+
+Avg Latency: 15.8962 ms / query
+
+Total Hits: 113500
+
+
+
+Starting FLAT benchmark...
+
+Fetching JS module from: ./dist-flat/geodb-wasm-6d261cfe35169cfd.js
+
+Fetching WASM from: ./dist-flat/geodb-wasm-6d261cfe35169cfd_bg.wasm
+
+✅ Startup Complete: 199.00 ms
+
+Loaded 250 countries.
+
+Running 5,000 search queries...
+
+Search Time: 79727.00 ms
+
+Avg Latency: 15.9454 ms / query
+
+Total Hits: 113500
+
+    <div id="log">Ready. Click a button to start.</div>
+
+    <script type="module">
+        // Helper to log to UI
+        function log(msg, type = '') {
+            const el = document.getElementById('log');
+            const div = document.createElement('div');
+            div.className = `entry ${type}`;
+            div.innerHTML = msg;
+            el.appendChild(div);
+            el.scrollTop = el.scrollHeight;
+            console.log(msg.replace(/<[^>]+>/g, ''));
+        }
+
+        window.runBench = async function(jsPath, label) {
+            document.getElementById('log').innerHTML = ''; 
+            log(`Starting <b>${label}</b> benchmark...`, 'info');
+            log(`Fetching JS module from: <code>${jsPath}</code>`);
+
+            try {
+                // 1. Measure Download & Compile Time
+                const t0 = performance.now();
+                
+                // Dynamic Import of the Bindings
+                const module = await import(jsPath);
+                const init = module.default;
+                
+                // Construct the path to the .wasm file assuming it sits next to the .js file
+                // Trunk names them identical except extension: file.js -> file_bg.wasm
+                const wasmPath = jsPath.replace('.js', '_bg.wasm');
+                
+                log(`Fetching WASM from: <code>${wasmPath}</code>`);
+                
+                // Initialize WASM
+                // Note: We pass the path explicitly to avoid relative path issues
+                await init(wasmPath);
+
+                // Trigger DB Load (Deserialize)
+                if (module.start) {
+                     module.start(); 
+                } else {
+                    // Some trunk configurations might auto-start, check console
+                    log("Warning: module.start() not found, assuming auto-start...", 'error');
+                }
+
+                const t1 = performance.now();
+                
+                // 2. Verify Data
+                const count = module.get_country_count();
+                log(`✅ <b>Startup Complete:</b> ${(t1 - t0).toFixed(2)} ms`, 'success');
+                log(`Loaded <b>${count}</b> countries.`);
+
+                // 3. Warmup Search
+                module.smart_search("Berlin");
+
+                // 4. Stress Test
+                log(`Running 5,000 search queries...`);
+                const queries = ["United", "Berlin", "Tokyo", "+1", "California", "Zürich", "Munich", "CN", "100", "Asia"];
+                
+                const tSearchStart = performance.now();
+                let hits = 0;
+                for(let i=0; i<5000; i++) {
+                    const q = queries[i % queries.length];
+                    const res = module.smart_search(q);
+                    hits += res.length;
+                }
+                const tSearchEnd = performance.now();
+                
+                const duration = tSearchEnd - tSearchStart;
+                const avg = duration / 5000;
+
+                log(`<b>Search Time:</b> ${duration.toFixed(2)} ms`);
+                log(`<b>Avg Latency:</b> ${avg.toFixed(4)} ms / query`, avg < 0.1 ? 'success' : 'error');
+                log(`Total Hits: ${hits}`);
+                
+                log(`<br><i>Check Chrome DevTools Memory tab for RAM usage.</i>`);
+
+            } catch (e) {
+                log(`❌ Fatal Error: ${e.message}`, 'error');
+                console.error(e);
+            }
+        };
+    </script>
+</body>
+</html>

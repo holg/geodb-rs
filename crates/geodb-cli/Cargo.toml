@@ -11,20 +11,32 @@ categories = ["command-line-utilities", "database"]
 keywords = ["geodb", "geo", "countries", "regions", "cities"]
 publish = true
 
-# Configure docs.rs build so the crate gets a proper documentation page
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
-
-[lib]
-name = "geodb_cli"
-path = "src/lib.rs"
-
 [[bin]]
 name = "geodb-cli"
 path = "src/main.rs"
 
+# -----------------------------------------------------------------------------
+# Feature Flags (The Control Panel)
+# -----------------------------------------------------------------------------
+[features]
+# Default: Build the "New Standard" (Flat + Compact + Builder tools)
+default = ["builder", "compact", "json"]
+
+# Architecture Switch:
+# Enable this to compile the CLI against the Legacy Nested engine.
+legacy_model = ["geodb-core/legacy_model"]
+
+# Pass-through flags
+builder = ["geodb-core/builder"]
+compact = ["geodb-core/compact"]
+json = ["geodb-core/json"]
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-geodb-core = { version = "0.1", path = "../geodb-core", features = ["builder"] }
+
+# Core Dependency:
+# 1. default-features = false (We want full control)
+# 2. features = [] (We assume features are enabled via [features] block above or defaults)
+# Note: 'builder' is required for the CLI's build command logic to work.
+geodb-core = { version = "0.1", path = "../geodb-core", default-features = false }

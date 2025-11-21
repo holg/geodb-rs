@@ -3,7 +3,7 @@ use super::fold_key;
 use super::SmartHit;
 use crate::alias::CityMetaIndex;
 use crate::common::DbStats;
-use crate::model::{City, Country, State}; // These are aliased in lib.rs
+use super::model_impl::{City, Country, State}; // These are aliased in lib.rs
 use serde::{Deserialize, Serialize}; // For the standard backend
 
 /// Backend abstraction: this controls how strings and floats are stored.
@@ -182,4 +182,10 @@ pub trait GeoSearch<B: GeoBackend> {
         &self,
         index: &CityMetaIndex,
     ) -> Vec<(&City<B>, &State<B>, &Country<B>)>;
+    /// Resolves an alias using an external Meta Index.
+    fn resolve_city_alias_with_index<'a>(
+        &'a self,
+        alias: &str,
+        index: &'a CityMetaIndex,
+    ) -> Option<(&'a B::Str, &'a B::Str, &'a B::Str)>;
 }

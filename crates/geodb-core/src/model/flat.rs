@@ -1,73 +1,158 @@
-// crates/geodb-core/src/model/domain.rs
+// crates/geodb-core/src/model/flat.rs
+
 use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
-/// The master database struct.
-/// Heavily optimized for "Structure of Arrays" (SoA) access.
+// -----------------------------------------------------------------------------
+// DATA STRUCTURES (Structure of Arrays)
+// -----------------------------------------------------------------------------
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GeoDb<B: GeoBackend> {
-    /// Master list of all countries. Sorted by ID.
     pub countries: Vec<Country<B>>,
-    /// Master list of all states. Contiguous memory.
     pub states: Vec<State<B>>,
-    /// Master list of all cities. Contiguous memory.
     pub cities: Vec<City<B>>,
 }
 
-/// A Country entry.
+// Helper struct for Parity
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CountryTimezone<B: GeoBackend> {
+    pub zone_name: Option<B::Str>,
+    pub gmt_offset: Option<i32>,
+    pub gmt_offset_name: Option<B::Str>,
+    pub abbreviation: Option<B::Str>,
+    pub tz_name: Option<B::Str>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Country<B: GeoBackend> {
     pub id: u16,
+    pub name: B::Str,
+
+    
+
     pub iso2: B::Str,
     pub iso3: Option<B::Str>,
-    pub name: B::Str,
+
+    // Extended Metadata (Parity with Legacy)
     pub capital: Option<B::Str>,
     pub currency: Option<B::Str>,
-    pub phone_code: Option<B::Str>,
+    pub currency_name: Option<B::Str>,
+    pub currency_symbol: Option<B::Str>,
+    pub tld: Option<B::Str>,
+    pub native_name: Option<B::Str>,
     pub region: Option<B::Str>,
     pub subregion: Option<B::Str>,
-    pub population: Option<u32>, // assuming no country has more than 4.294.967.295 billion people
+    pub nationality: Option<B::Str>,
 
-    /// Sorted list of (Language Code, Translation)
-    /// Replaces the heavy HashMap<String, String>
+    pub phone_code: Option<B::Str>,
+    pub numeric_code: Option<B::Str>,
+
+    pub emoji: Option<B::Str>,
+
+    // Stats
+    pub population: Option<u32>,
+    pub gdp: Option<u64>,
+
+    // Coordinates
+    pub lat: Option<B::Float>,
+    pub lng: Option<B::Float>,
+
+    // Collections
+    pub timezones: Vec<CountryTimezone<B>>,
     pub translations: Vec<(String, B::Str)>,
 
-    /// States count is ~5k. Indices fit in u16?
-    /// careful: this is a RANGE into the vector. If the vector has 5071 items, u16 is fine.
+    // Navigation (The "Flat" magic)
     pub states_range: Range<u16>,
-
-    /// Range of cities in the master `cities` vector belonging to this country.
-    /// We will not add all smaller so u32 shall be plenty
     pub cities_range: Range<u32>,
 }
 
-/// A State/Region entry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State<B: GeoBackend> {
-    /// Optimized: 5537 fits in u16.
-    /// Saves 2 bytes per state vs u32.
     pub id: u16,
     pub country_id: u16,
     pub name: B::Str,
-    pub code: Option<B::Str>, // e.g. "CA" or "BY" (Bavaria)
 
-    /// Cities count is 150k. MUST be u32.
+    pub code: Option<B::Str>,      // iso2
+    pub full_code: Option<B::Str>, // iso3166_2
+    pub native_name: Option<B::Str>,
+
+    pub lat: Option<B::Float>,
+    pub lng: Option<B::Float>,
+
     pub cities_range: Range<u32>,
 }
 
-/// A City entry. Optimized for minimal size.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct City<B: GeoBackend> {
     pub country_id: u16,
     pub state_id: u16,
     pub name: B::Str,
 
-    /// Baked-in aliases from city_meta.json.
     pub aliases: Option<Vec<String>>,
+    pub regions: Option<Vec<String>>,
 
     pub lat: Option<B::Float>,
     pub lng: Option<B::Float>,
     pub population: Option<u32>,
     pub timezone: Option<B::Str>,
+}
+
+// -----------------------------------------------------------------------------
+// API IMPLEMENTATION (Hassle-Free Getters)
+// -----------------------------------------------------------------------------
+
+impl<B: GeoBackend> Country<B> {
+    pub fn name(&self) -> &str { self.name.as_ref() }
+    pub fn iso2(&self) -> &str { self.iso2.as_ref() }
+    pub fn iso_code(&self) -> &str { self.iso2.as_ref() } // Alias for compatibility
+
+    pub fn iso3(&self) -> &str { self.iso3.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn capital(&self) -> &str { self.capital.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn currency(&self) -> &str { self.currency.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn phone_code(&self) -> &str { self.phone_code.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn numeric_code(&self) -> &str { self.numeric_code.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+
+    pub fn region(&self) -> &str { self.region.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn subregion(&self) -> &str { self.subregion.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+
+    pub fn tld(&self) -> &str { self.tld.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn native_name(&self) -> &str { self.native_name.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn nationality(&self) -> &str { self.nationality.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+    pub fn emoji(&self) -> &str { self.emoji.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+
+    // Numbers -> 0/0.0 default
+    // Note: We store u32 to save space, but return u64 to match the legacy API surface.
+    pub fn population(&self) -> Option<u64> { self.population.map(|p| p as u64) }
+
+    // We don't have Area in either model currently, returning None for API compat
+    pub fn area(&self) -> Option<u64> { None }
+
+    pub fn lat(&self) -> Option<f64> { self.lat.map(B::float_to_f64) }
+    pub fn lng(&self) -> Option<f64> { self.lng.map(B::float_to_f64) }
+
+    pub fn timezones(&self) -> &[CountryTimezone<B>] { &self.timezones }
+}
+
+impl<B: GeoBackend> State<B> {
+    pub fn name(&self) -> &str { self.name.as_ref() }
+    pub fn state_code(&self) -> &str { self.code.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+
+    // Optional getters for fields that might be missing
+    pub fn full_code(&self) -> &str { self.full_code.as_ref().map(|s| s.as_ref()).unwrap_or("") }
+
+    pub fn lat(&self) -> Option<f64> { self.lat.map(B::float_to_f64) }
+    pub fn lng(&self) -> Option<f64> { self.lng.map(B::float_to_f64) }
+}
+
+impl<B: GeoBackend> City<B> {
+    pub fn name(&self) -> &str { self.name.as_ref() }
+
+    pub fn population(&self) -> Option<u64> { self.population.map(|p| p as u64) }
+
+    pub fn lat(&self) -> Option<f64> { self.lat.map(B::float_to_f64) }
+    pub fn lng(&self) -> Option<f64> { self.lng.map(B::float_to_f64) }
+
+    pub fn timezone(&self) -> Option<&str> { self.timezone.as_ref().map(|s| s.as_ref()) }
 }

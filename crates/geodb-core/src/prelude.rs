@@ -8,7 +8,7 @@
 #![allow(unused_imports)]
 
 // 1. The Core Data Structures (From the active architecture)
-pub use super::model::{City, Country, GeoDb, State};
+pub use super::model_impl::{City, Country, GeoDb, State};
 
 // 2. The Types & Aliases (From the crate root/common)
 pub use crate::{

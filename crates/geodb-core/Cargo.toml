@@ -19,7 +19,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lib]
 name = "geodb_core"
 path = "src/lib.rs"
-
+[[bin]]
+name = "profile_search"
+path = "src/bin/profile_search.rs"
 [features]
 default = ["json", "builder", "compact", "legacy_model"]
 # -----------------------------------------------------------------------------
@@ -28,7 +30,7 @@ default = ["json", "builder", "compact", "legacy_model"]
 
 # "builder" = The Tooling.
 # Needs to Download (fetch), Read Source (json), and Handle Gzip (compact).
-builder = ["json", "compact", "dep:reqwest"]
+builder = ["json", "dep:reqwest"]
 
 # "json" = Read capability for legacy/source files.
 # Enables the `loader/legacy_json.rs` module.

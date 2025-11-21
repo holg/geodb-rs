@@ -384,4 +384,32 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     ) -> Vec<(&City<B>, &State<B>, &Country<B>)> {
         todo!() // Or better not needed for the nested model?
     }
+    fn resolve_city_alias_with_index<'a>(
+        &'a self,
+        alias: &str,
+        index: &'a CityMetaIndex,
+    ) -> Option<(&'a B::Str, &'a B::Str, &'a B::Str)> {
+
+        let meta = index.find_by_alias(alias, None, None)?;
+
+        for country in &self.countries {
+            if !country.iso2.as_ref().eq_ignore_ascii_case(&meta.iso2) {
+                continue;
+            }
+
+            // Legacy: .states is a Vec
+            for state in &country.states {
+                if !state.name.as_ref().eq_ignore_ascii_case(&meta.state) {
+                    continue;
+                }
+                // Legacy: .cities is a Vec
+                for city in &state.cities {
+                    if city.name.as_ref().eq_ignore_ascii_case(&meta.city) {
+                        return Some((&country.iso2, &state.name, &city.name));
+                    }
+                }
+            }
+        }
+        None
+    }
 }
