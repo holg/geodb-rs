@@ -16,12 +16,15 @@ targets = ["wasm32-unknown-unknown"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
-
+[features]
+default = []
+# Forwarding features
+legacy_model = ["geodb-core/legacy_model"]
 [dependencies]
 bincode = { workspace = true }
 console_error_panic_hook = "0.1"
 flate2 = { workspace = true }
-geodb-core = { version = "0.1", path = "../geodb-core" }
+geodb-core = { version = "0.1", path = "../geodb-core", default-features = false, features = ["compact", "json", "legacy_model"]  }
 js-sys = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde-wasm-bindgen = { workspace = true }
@@ -31,3 +34,5 @@ web-sys = { workspace = true, features = ["console"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+[build-dependencies]
+geodb-core = { version = "0.1", path = "../geodb-core", default-features = false, features = ["compact", "json", "legacy_model"]  }

@@ -48,38 +48,34 @@
 //! - All exported functions are `wasm_bindgen` bindings and return plain types
 //!   or `JsValue` containing JSON-serializable arrays/objects.
 //! - See the `dist/` folder for a Trunk-based demo setup.
-#[cfg(target_arch = "wasm32")] // act
+#[cfg(target_arch = "wasm32")]
 use flate2::read::GzDecoder;
-// 1. Import the Prelude (Crucial for Trait methods like .find_country_by_iso2)
-use geodb_core::prelude::*;
-
-// 2. Import Views for Serialization
-use geodb_core::api::{CityView, CountryView, StateView};
-use serde_json::json;
-use serde_wasm_bindgen::to_value;
 #[cfg(target_arch = "wasm32")]
 use std::io::Read;
+
 use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 
-// IMPORTANT: On docs.rs each crate is built in isolation, so paths outside
-// the crate (like pulling bytes from `../geodb-core/…`) are unavailable.
-// To ensure docs.rs builds succeed, provide a tiny stub during docs builds.
-// Normal builds (workspace/demo) still embed the real bytes.
-#[cfg(all(target_arch = "wasm32", not(docsrs)))]
-static EMBEDDED_DB: &[u8] = include_bytes!("../../geodb-core/data/geodb.comp.nested.bin");
+// Core Imports
+use geodb_core::prelude::*; // Imports DefaultGeoDb, GeoSearch, etc.
+use geodb_core::api::{CityView, CountryView, StateView};
+use serde_json::json;
+use serde_wasm_bindgen::to_value;
 
-// Stub for docs.rs so documentation compiles without accessing external files.
+// 1. Embed the Database
+// We expect a file named 'geodb.bin' (or whatever standard name you choose) to exist.
+// The builder should have created this.
+// Use the absolute path calculated by build.rs
+#[cfg(all(target_arch = "wasm32", not(docsrs)))]
+static EMBEDDED_DB: &[u8] = include_bytes!(env!("GEO_DB_PATH"));
+
+// Docs stub
 #[cfg(all(target_arch = "wasm32", docsrs))]
 static EMBEDDED_DB: &[u8] = b"";
 
-static DB: OnceLock<GeoDb<DefaultBackend>> = OnceLock::new();
+// 2. Static Instance
+static DB: OnceLock<DefaultGeoDb> = OnceLock::new();
 
-/* --------------------------------------------------------------------------
-   Initialization
--------------------------------------------------------------------------- */
-
-/// Initializes the GeoDB WASM module on startup.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -87,30 +83,19 @@ pub fn start() {
     web_sys::console::log_1(&"Initializing GeoDB WASM module...".into());
 
     DB.get_or_init(|| {
-        web_sys::console::log_1(&"Decompressing and deserializing embedded DB...".into());
-
-        // Decompress the gzipped data
+        // ... decompression logic ...
         let mut decoder = GzDecoder::new(EMBEDDED_DB);
         let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).expect("Decompression failed");
+        web_sys::console::log_1(&DefaultGeoDb::default_dataset_filename().into());
+        // ... deserialization ...
+        let db: DefaultGeoDb = bincode::deserialize(&decompressed).expect("Deserialize failed");
 
-        if let Err(e) = decoder.read_to_end(&mut decompressed) {
-            web_sys::console::error_1(&format!("✗ Decompression failed: {e}").into());
-            panic!("Failed to decompress DB: {e}");
-        }
+        // Log stats via Trait
+        let stats = db.stats();
+        web_sys::console::log_1(&format!("✓ Loaded {} countries", stats.countries).into());
 
-        // Deserialize the decompressed data
-        match bincode::deserialize::<GeoDb<DefaultBackend>>(&decompressed) {
-            Ok(db) => {
-                web_sys::console::log_1(
-                    &format!("✓ Loaded {} countries", db.countries().len()).into(),
-                );
-                db
-            }
-            Err(e) => {
-                web_sys::console::error_1(&format!("✗ DB load failed: {e}").into());
-                panic!("Failed to load DB: {e}");
-            }
-        }
+        db
     });
 }
 
