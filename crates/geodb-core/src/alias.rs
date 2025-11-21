@@ -1,5 +1,5 @@
 // src/alias.rs
-use super::model::GeoDb;
+use super::model_impl::GeoDb;
 use crate::error::Result;
 use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};

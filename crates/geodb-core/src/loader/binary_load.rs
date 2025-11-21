@@ -1,12 +1,43 @@
 // crates/geodb-core/src/loader/binary_load.rs
 use super::common_io;
 use crate::error::{GeoError, Result};
-use crate::{DefaultBackend, GeoDb};
+use crate::legacy_model::nested::GeoDb as NestedGeoDb;
+#[cfg(any(not(feature = "legacy_model"), feature = "builder"))]
+use crate::model::flat::GeoDb as FlatGeoDb;
+use crate::DefaultBackend;
 use std::io::Read;
 use std::path::Path;
 
 // Extends GeoDb with binary loading capabilities
-impl GeoDb<DefaultBackend> {
+#[cfg(any(not(feature = "legacy_model"), feature = "builder"))]
+impl FlatGeoDb<DefaultBackend> {
+    /// **Internal:** Loads a binary file directly from disk.
+    /// Available in all configurations.
+    pub(super) fn load_binary_file(path: &Path, filter: Option<&[&str]>) -> Result<Self> {
+        let mut reader = common_io::open_stream(path)?;
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data).map_err(GeoError::Io)?;
+
+        // SCENARIO A: Flat Model (Standard)
+        #[cfg(not(feature = "legacy_model"))]
+        {
+            crate::model::load::from_bytes(&data, filter).map_err(GeoError::Bincode)
+        }
+
+        // SCENARIO B: Nested Model (Legacy)
+        #[cfg(feature = "legacy_model")]
+        {
+            let mut db: Self = bincode::deserialize(&data).map_err(GeoError::Bincode)?;
+            if let Some(f) = filter {
+                if !f.is_empty() {
+                    db.countries.retain(|c| f.contains(&c.iso2.as_ref()));
+                }
+            }
+            Ok(db)
+        }
+    }
+}
+impl NestedGeoDb<DefaultBackend> {
     /// **Internal:** Loads a binary file directly from disk.
     /// Available in all configurations.
     pub(super) fn load_binary_file(path: &Path, filter: Option<&[&str]>) -> Result<Self> {

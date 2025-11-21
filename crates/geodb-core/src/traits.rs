@@ -3,7 +3,7 @@ use super::fold_key;
 use super::SmartHit;
 use crate::alias::CityMetaIndex;
 use crate::common::DbStats;
-use crate::model::{City, Country, State}; // These are aliased in lib.rs
+use crate::model_impl::{City, Country, State}; // These are aliased in lib.rs
 use serde::{Deserialize, Serialize}; // For the standard backend
 
 /// Backend abstraction: this controls how strings and floats are stored.

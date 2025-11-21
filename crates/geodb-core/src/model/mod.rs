@@ -1,15 +1,9 @@
 // crates/geodb-core/src/model/mod.rs
-//!  **Flat Model (Default):** Optimized, contiguous arrays. (`flat.rs`)
-
-// The Two Engines
-pub mod flat;
-
-// The Logic Layer (Converters)
 pub mod convert;
+pub mod flat;
 pub mod search;
-
-pub use common::DefaultBackend;
-pub use flat::{City, Country, DbStats, SmartHit, SmartItem, State};
+pub use super::{CityView, CountryView, StateView};
+pub use crate::common::DefaultBackend;
 
 #[cfg(not(feature = "compact"))]
 pub const CACHE_SUFFIX: &str = ".flat.bin";

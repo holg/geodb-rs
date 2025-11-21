@@ -21,7 +21,7 @@ allow = [
   "Zlib",
   "Unicode-DFS-2016",
   "Unicode-3.0",
-  "CDLA-Permissive-2.0"
+  "CDLA-Permissive-2.0",
 ]
 # Some crates don't have their license in the Cargo.toml but in the repository
 # We can specify exceptions here

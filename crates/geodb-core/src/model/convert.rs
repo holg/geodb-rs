@@ -1,11 +1,9 @@
 // crates/geodb-core/src/model/convert.rs
-use super::CACHE_SUFFIX;
 use crate::alias::CityMetaIndex;
 use crate::common::raw::CountryRaw;
-use crate::model::domain::{City, Country, GeoDb, State};
+use crate::model::flat::{City, Country, GeoDb, State};
 use crate::traits::GeoBackend;
 /// The file extension to use for the binary cache of this model.
-
 /// **Standard Converter:** Raw -> Flat.
 pub fn from_raw<B: GeoBackend>(
     raw_countries: Vec<CountryRaw>,

@@ -1,6 +1,7 @@
 // crates/geodb-core/src/model/search.rs
-use super::model::flat::{City, Country, GeoDb, State};
+use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
+use crate::model::flat::{City, Country, GeoDb, State};
 use crate::text::fold_key;
 use crate::traits::{GeoBackend, GeoSearch};
 
@@ -14,8 +15,21 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
             cities: self.cities.len(),
         }
     }
-    fn cities() -> Vec<City<B>> {
+
+    fn countries(&self) -> &[Country<B>] {
+        todo!()
+    }
+
+    fn cities(&self) -> Vec<City<B>> {
         self.cities.iter().cloned().collect()
+    }
+
+    fn states_for_country<'a>(&'a self, country: &'a Country<B>) -> &'a [State<B>] {
+        todo!()
+    }
+
+    fn cities_for_state<'a>(&'a self, state: &'a State<B>) -> &'a [City<B>] {
+        todo!()
     }
 
     fn find_country_by_iso2(&self, iso2: &str) -> Option<&Country<B>> {
@@ -33,6 +47,14 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
                     .is_some_and(|s| s.as_ref().eq_ignore_ascii_case(code))
             })
         })
+    }
+
+    fn find_countries_by_phone_code(&self, prefix: &str) -> Vec<&Country<B>> {
+        todo!()
+    }
+
+    fn find_countries_by_substring(&self, substr: &str) -> Vec<&Country<B>> {
+        todo!()
     }
 
     fn find_states_by_substring(&self, substr: &str) -> Vec<(&State<B>, &Country<B>)> {
@@ -86,5 +108,12 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     fn smart_search(&self, query: &str) -> Vec<MySmartHit<'_, B>> {
         // ... smart search logic using flat loops ...
         vec![]
+    }
+
+    fn enrich_with_city_meta(
+        &self,
+        index: &CityMetaIndex,
+    ) -> Vec<(&City<B>, &State<B>, &Country<B>)> {
+        todo!()
     }
 }

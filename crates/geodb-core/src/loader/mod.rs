@@ -1,8 +1,9 @@
 // crates/geodb-core/src/loader/mod.rs
 
 use crate::error::Result;
+use crate::GeoError;
 // use crate::traits::GeoBackend;
-use super::model::{GeoDb, CACHE_SUFFIX};
+use super::model_impl::{GeoDb, CACHE_SUFFIX};
 use once_cell::sync::OnceCell;
 use std::path::{Path, PathBuf};
 pub mod binary_load;
