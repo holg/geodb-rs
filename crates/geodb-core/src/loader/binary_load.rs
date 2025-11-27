@@ -1,7 +1,7 @@
 // crates/geodb-core/src/loader/binary_load.rs
 use super::common_io;
-use crate::error::{GeoError, Result};
 use super::{DefaultBackend, GeoDb};
+use crate::error::{GeoError, Result};
 use std::io::Read;
 use std::path::Path;
 

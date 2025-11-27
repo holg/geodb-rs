@@ -1,6 +1,6 @@
 // crates/geodb-core/src/loader/mod.rs
+use super::model_impl::GeoDb;
 use crate::error::Result;
-use super::model_impl::{GeoDb, CACHE_SUFFIX};
 use once_cell::sync::OnceCell;
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ impl GeoDb<DefaultBackend> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data")
     }
     pub fn default_dataset_filename() -> String {
-        format!("geodb{CACHE_SUFFIX}")
+        format!("geodb{}", get_suffix())
     }
 
     pub fn get_data_url() -> &'static str {
@@ -36,7 +36,7 @@ impl GeoDb<DefaultBackend> {
     pub fn load() -> Result<Self> {
         GEO_DB_CACHE
             .get_or_try_init(|| Self::load_from_path(Self::default_bin_path(), None))
-            .map(|db| db.clone())
+            .cloned()
     }
     /// **Unified Loader:**
     /// Dispatches to the appropriate implementation based on file type and features.
@@ -59,14 +59,13 @@ impl GeoDb<DefaultBackend> {
         {
             use super::GeoError;
             // Try to find the binary cache anyway, even if we can't parse source
-            let cache_path = common_io::get_cache_path(path, CACHE_SUFFIX);
+            let cache_path = common_io::get_cache_path(path);
             if cache_path.exists() {
                 return Self::load_binary_file(&cache_path, filter);
             }
 
             Err(GeoError::InvalidData(format!(
-                "Cannot load source file {:?}: 'builder' feature is disabled and no binary cache found at {:?}.",
-                path, cache_path
+                "Cannot load source file {path:?}: 'builder' feature is disabled and no binary cache found at {cache_path:?}."
             )))
         }
     }
@@ -76,4 +75,24 @@ impl GeoDb<DefaultBackend> {
         let file = Self::default_dataset_filename();
         Self::load_from_path(dir.join(file), Some(iso2))
     }
+}
+
+pub fn get_suffix() -> String {
+    let mut suffix = String::new();
+    if cfg!(feature = "legacy_model") {
+        suffix += ".nested";
+    } else {
+        suffix += ".flat"
+    }
+    if cfg!(feature = "compact") {
+        suffix += ".comp";
+    }
+    if cfg!(feature = "use_smolstr") {
+        suffix += ".smol";
+    }
+    if cfg!(feature = "search_blobs") {
+        suffix += ".blobs";
+    }
+    suffix += ".bin";
+    suffix
 }

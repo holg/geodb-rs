@@ -7,8 +7,8 @@
     <!-- Correct Trunk WASM loader -->
     
 <script type="module">
-import init, * as bindings from '/geodb-wasm-f37c041505c00524.js';
-const wasm = await init({ module_or_path: '/geodb-wasm-f37c041505c00524_bg.wasm' });
+import init, * as bindings from '/geodb-wasm.js';
+const wasm = await init({ module_or_path: './geodb_wasm_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -79,7 +79,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
             border-left: 5px solid #4a6cff;
         }
     </style>
-<link rel="modulepreload" href="/geodb-wasm-f37c041505c00524.js" crossorigin="anonymous" integrity="sha384-ftB/tI6LFb39Vvi8DfZjq9S72wE77gw86bSKdPsSaJBKQT1MXE8beCAO80erqGGX"><link rel="preload" href="/geodb-wasm-f37c041505c00524_bg.wasm" crossorigin="anonymous" integrity="sha384-oIobS+7GtY0PXpVN1NNqca0795vQj7S4bNMNOw4KqDO6Aqn5ajhTXvIVD5Z7TYur" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/geodb-wasm.js" crossorigin="anonymous" integrity="sha384-pwm3KRfQP9b4NlLYDAJiT0E6g20dIgxesDOtwRBGzlCYP9otO+Ln+aVqSL65/tJv"><link rel="preload" href="/geodb-wasm_bg.wasm" crossorigin="anonymous" integrity="sha384-DdstYVZ2/riHq2dskenEfEdgVtuzkbQDIp6/T0XNPHyZKv/h/Go069xKtl3EPXMn" as="fetch" type="application/wasm"></head>
 
 
 <body>
@@ -238,6 +238,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
     window.wasmBindings = bindings;
 
     console.log("✓ WASM loaded and bindings ready");
+    console.log("✓ WASM build info:", wasmBindings.get_build_info());
 </script>
 </body>
 </html>

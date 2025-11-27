@@ -8,8 +8,7 @@ fn main() {
     let path = GeoDb::<DefaultBackend>::default_bin_path();
     eprintln!("Using DB: {}", path.display());
 
-    let db = GeoDb::<DefaultBackend>::load()
-        .expect("failed to load DB");
+    let db = GeoDb::<DefaultBackend>::load().expect("failed to load DB");
 
     let query = "Berlin, Germany";
     let _ = black_box(db.smart_search(query)); // warmup

@@ -1,33 +1,40 @@
 // crates/geodb-core/src/lib.rs
 pub mod alias;
 pub mod api;
-pub mod error;
-pub mod loader;
 pub mod common;
+pub mod error;
 #[cfg(feature = "legacy_model")]
 pub mod legacy_model; // The old legacy model folder
+pub mod loader;
 #[cfg(not(feature = "legacy_model"))]
 pub mod model; // The NEW model folder
 pub mod prelude;
 pub mod text;
 pub mod traits;
+pub mod spatial;
+
 pub use crate::error::{GeoDbError, GeoError, Result};
+
+#[cfg(feature = "use_smolstr")]
+pub type Text = smol_str::SmolStr;
+
+#[cfg(not(feature = "use_smolstr"))]
+pub type Text = String;
 
 // -----------------------------------------------------------------------------
 // ARCHITECTURE SWITCH
 // -----------------------------------------------------------------------------
 
-#[cfg(not(feature = "legacy_model"))]
-pub use model as model_impl;
+pub use common::{DbStats, DefaultBackend};
 #[cfg(feature = "legacy_model")]
 pub use legacy_model as model_impl;
-pub use common::{DbStats, DefaultBackend};
+#[cfg(not(feature = "legacy_model"))]
+pub use model as model_impl;
 
 // Export Traits
 pub use api::{CityView, CountryView, StateView};
-pub use traits::{GeoBackend, GeoSearch}; // <--- UNCOMMENT THIS!
-                                         // Export Text Utils
 pub use text::{equals_folded, fold_ascii_lower, fold_key};
+pub use traits::{GeoBackend, GeoSearch};
 
 /// Convenient alias for the default backend.
 pub type DefaultGeoDb = model_impl::GeoDb<DefaultBackend>;

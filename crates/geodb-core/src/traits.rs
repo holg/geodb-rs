@@ -1,9 +1,9 @@
 // crates/geodb-core/src/traits.rs
 use super::fold_key;
+use super::model_impl::{City, Country, State}; // These are aliased in lib.rs
 use super::SmartHit;
 use crate::alias::CityMetaIndex;
 use crate::common::DbStats;
-use super::model_impl::{City, Country, State}; // These are aliased in lib.rs
 use serde::{Deserialize, Serialize}; // For the standard backend
 
 /// Backend abstraction: this controls how strings and floats are stored.
@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize}; // For the standard backend
 /// Implementors must be `Clone + Send + Sync + 'static` and ensure the
 /// associated types can be serialized/deserialized so databases can be cached
 /// via bincode.
-// 1. Backend Trait (Storage)
 pub trait GeoBackend: Clone + Send + Sync + 'static {
     type Str: Clone
         + Send
@@ -36,6 +35,56 @@ pub trait GeoBackend: Clone + Send + Sync + 'static {
         v.as_ref().to_string()
     }
     fn float_to_f64(v: Self::Float) -> f64;
+}
+// 1. Backend Trait (Storage)
+// --- SmolStr backend (enabled via `features = ["use_smolstr"]`) ---
+
+// ----- SmolStr backend (feature = "use_smolstr") -----
+/// Default backend type used by GeoDb.
+#[derive(Clone, Debug)]
+pub struct DefaultBackend;
+#[cfg(feature = "use_smolstr")]
+impl GeoBackend for DefaultBackend {
+    type Str = smol_str::SmolStr;
+    type Float = f64;
+
+    #[inline]
+    fn str_from(s: &str) -> Self::Str {
+        smol_str::SmolStr::new(s)
+    }
+
+    #[inline]
+    fn float_from(f: f64) -> Self::Float {
+        f
+    }
+
+    #[inline]
+    fn float_to_f64(v: Self::Float) -> f64 {
+        v
+    }
+}
+
+// ----- Default String backend (no smolstr feature) -----
+
+#[cfg(not(feature = "use_smolstr"))]
+impl GeoBackend for DefaultBackend {
+    type Str = String;
+    type Float = f64;
+
+    #[inline]
+    fn str_from(s: &str) -> Self::Str {
+        s.to_owned()
+    }
+
+    #[inline]
+    fn float_from(f: f64) -> Self::Float {
+        f
+    }
+
+    #[inline]
+    fn float_to_f64(v: Self::Float) -> f64 {
+        v
+    }
 }
 
 /// Name-based matching helpers for types that expose a canonical display name.
@@ -87,105 +136,46 @@ pub type CityContext<'a, B> = (&'a City<B>, &'a State<B>, &'a Country<B>);
 /// Box<dyn ...> allows us to return different iterator types (Flat map vs Range map)
 /// behind a single interface.
 pub type CitiesIter<'a, B> = Box<dyn Iterator<Item = CityContext<'a, B>> + 'a>;
+// Search Trait
 pub trait GeoSearch<B: GeoBackend> {
+    // --- Basic Stats ---
     fn stats(&self) -> DbStats;
 
-    /// Returns a slice of all countries in the database.
-    ///
-    /// This provides direct access to the top-level geographic entities.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
-    ///
-    /// let db = GeoDb::<DefaultBackend>::load().unwrap();
-    ///
-    /// let countries = db.countries();
-    /// println!("Found {} countries.", countries.len());
-    ///
-    /// // Print the first 5 countries
-    /// for country in countries.iter().take(5) {
-    ///     println!("- {} ({})", country.name(), country.iso2());
-    /// }
-    /// ```
+    // --- Data Accessors (Hierarchy) ---
     fn countries(&self) -> &[Country<B>];
-
-    /// Returns an iterator over all cities in the database.
-    ///
-    /// Each item yielded by the iterator is a `CityContext`, which is a tuple
-    /// containing the city, its parent state, and its parent country:
-    /// `(&City<B>, &State<B>, &Country<B>)`.
-    ///
-    /// This is useful for iterating through every city without needing to
-    /// traverse the country/state hierarchy manually.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
-    ///
-    /// let db = GeoDb::<DefaultBackend>::load().unwrap();
-    ///
-    /// // The iterator provides the city, state, and country context.
-    /// for (city, state, country) in db.cities().take(5) {
-    ///     println!(
-    ///         "- {}, {} ({})",
-    ///         city.name(),
-    ///         state.name(),
-    ///         country.name()
-    ///     );
-    /// }
-    /// ```
-    fn cities<'a>(&'a self) -> CitiesIter<'a, B>;
-
-    /// Retrieves a slice of all states/regions belonging to a specific country.
-    ///
-    /// This method abstracts away the underlying storage model (whether states
-    /// are stored in a `Vec<State>` or accessed via an index range), providing
-    /// a consistent way to access state data.
-    ///
-    /// # Arguments
-    ///
-    /// * `country` - A reference to the `Country` for which to retrieve states.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
-    ///
-    /// let db = GeoDb::<DefaultBackend>::load().unwrap();
-    ///
-    /// if let Some(country) = db.find_country_by_iso2("US") {
-    ///     let states = db.states_for_country(country);
-    ///     println!("Found {} states in {}.", states.len(), country.name());
-    ///
-    ///     // Print the first 5 states
-    ///     for state in states.iter().take(5) {
-    ///         println!("- {} ({})", state.name(), state.state_code());
-    ///     }
-    /// }
-    /// ```
     fn states_for_country<'a>(&'a self, country: &'a Country<B>) -> &'a [State<B>];
-
     fn cities_for_state<'a>(&'a self, state: &'a State<B>) -> &'a [City<B>];
 
+    // --- Iterator ---
+    fn cities<'a>(&'a self) -> CitiesIter<'a, B>;
+
+    // --- Exact Lookups ---
     fn find_country_by_iso2(&self, iso2: &str) -> Option<&Country<B>>;
     fn find_country_by_code(&self, code: &str) -> Option<&Country<B>>;
-    /// Find countries matching a phone prefix (e.g. "+1", "49").
+
+    // --- Fuzzy/Partial Search ---
     fn find_countries_by_phone_code(&self, prefix: &str) -> Vec<&Country<B>>;
     fn find_countries_by_substring(&self, substr: &str) -> Vec<&Country<B>>;
     fn find_states_by_substring(&self, substr: &str) -> Vec<(&State<B>, &Country<B>)>;
-    fn find_cities_by_substring(&self, substr: &str) -> Vec<(&City<B>, &State<B>, &Country<B>)>;
+    fn find_cities_by_substring(&self, substr: &str) -> Vec<CityContext<'_, B>>;
+
+    // --- Smart Search (The Main Logic) ---
     fn smart_search(&self, query: &str) -> Vec<SmartHit<'_, B>>;
-    fn enrich_with_city_meta(
-        &self,
-        index: &CityMetaIndex,
-    ) -> Vec<(&City<B>, &State<B>, &Country<B>)>;
-    /// Resolves an alias using an external Meta Index.
+
+    // --- Metadata Resolution (The fix for aliases) ---
     fn resolve_city_alias_with_index<'a>(
         &'a self,
         alias: &str,
         index: &'a CityMetaIndex,
     ) -> Option<(&'a B::Str, &'a B::Str, &'a B::Str)>;
+    /// Find the N closest cities to a given coordinate.
+    fn find_nearest(&self, lat: f64, lng: f64, count: usize) -> Vec<CityContext<'_, B>>;
+
+    /// Find all cities within `radius_km` of a specific GeoID.
+    ///
+    /// 1. Decodes the GeoID to find the center.
+    /// 2. Scans for cities within the radius.
+    fn find_cities_in_radius_by_geoid(&self, geoid: u64, radius_km: f64) -> Vec<CityContext<'_, B>>;
 }
+
+pub trait CountryTimezone<B: GeoBackend> {}

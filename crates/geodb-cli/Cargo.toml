@@ -20,16 +20,18 @@ path = "src/main.rs"
 # -----------------------------------------------------------------------------
 [features]
 # Default: Build the "New Standard" (Flat + Compact + Builder tools)
-default = ["builder", "compact", "json"]
+default = ["builder", "compact", "json", "search_blobs"]
 
 # Architecture Switch:
 # Enable this to compile the CLI against the Legacy Nested engine.
 legacy_model = ["geodb-core/legacy_model"]
+use_smolstr = ["geodb-core/use_smolstr"]
 
 # Pass-through flags
 builder = ["geodb-core/builder"]
 compact = ["geodb-core/compact"]
 json = ["geodb-core/json"]
+search_blobs = ["geodb-core/search_blobs"]
 
 [dependencies]
 anyhow = "1.0"

@@ -1,29 +1,60 @@
 {
+  "state_overrides": [
+    {
+      "iso2": "DE",
+      "raw": "North Rhine-Westphalia",
+      "correct": "Nordrhein-Westfalen"
+    },
+    {
+      "iso2": "DE",
+      "raw": "Bavaria",
+      "correct": "Bayern"
+    },
+    {
+      "iso2": "DE",
+      "raw": "Rhineland-Palatinate",
+      "correct": "Rheinland-Pfalz"
+    },
+    {
+      "iso2": "DE",
+      "raw": "Lower Saxony",
+      "correct": "Niedersachsen"
+    }
+
+  ],
+  
   "cities": [
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Coesfeld",
       "aliases": ["Koesfeld"],
       "regions": ["Münsterland"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
+      "city": "Lüdinghausen",
+      "aliases": ["Lunghusen", "Drei Burgen Stadt", "Lünkhusen", "Lünksel", "Tüllinghoff", "Ludinchusen", "Seppenrade", "Trahe"],
+      "regions": ["Münsterland"]
+    },
+    {
+      "iso2": "DE",
+      "state": "North Rhine-Westphalia",
       "city": "Münster",
       "aliases": ["Munster"],
       "regions": ["Münsterland"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Dülmen",
       "aliases": ["Duelmen"],
       "regions": ["Münsterland"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Warendorf",
       "aliases": [],
       "regions": ["Münsterland"]
@@ -31,28 +62,28 @@
 
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Dortmund",
       "aliases": [],
       "regions": ["Ruhrgebiet"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Essen",
       "aliases": [],
       "regions": ["Ruhrgebiet"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Bochum",
       "aliases": [],
       "regions": ["Ruhrgebiet"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Duisburg",
       "aliases": [],
       "regions": ["Ruhrgebiet"]
@@ -60,21 +91,21 @@
 
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Köln",
       "aliases": ["Cologne", "Koeln"],
       "regions": ["Rheinland"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Bonn",
       "aliases": [],
       "regions": ["Rheinland"]
     },
     {
       "iso2": "DE",
-      "state": "Nordrhein-Westfalen",
+      "state": "North Rhine-Westphalia",
       "city": "Düsseldorf",
       "aliases": ["Duesseldorf"],
       "regions": ["Rheinland"]
@@ -90,14 +121,14 @@
 
     {
       "iso2": "DE",
-      "state": "Bayern",
-      "city": "München",
-      "aliases": ["Munich", "Muenchen"],
+      "state": "Bavaria",
+      "city": "Munich",
+      "aliases": ["Münger"],
       "regions": ["Oberbayern"]
     },
     {
       "iso2": "DE",
-      "state": "Bayern",
+      "state": "Bavaria",
       "city": "Nürnberg",
       "aliases": ["Nuernberg", "Nuremberg"],
       "regions": ["Mittelfranken"]
@@ -144,8 +175,8 @@
 
     {
       "iso2": "CH",
-      "state": "Genève",
-      "city": "Genève",
+      "state": "Geneva",
+      "city": "Geneva",
       "aliases": ["Geneva", "Genf"],
       "regions": ["Lac Léman / Lake Geneva"]
     },

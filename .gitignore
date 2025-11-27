@@ -55,3 +55,14 @@ geodb-py-wheels/
 # tmp, to be removed after refactor
 /crates/geodb-core-before-refactor/
 countries+states+cities.json
+crates/geodb-ffi/debug
+crates/geodb-ffi/generated
+crates/geodb-ffi/GeodbFfi.xcframework
+crates/geodb-ffi/.rustc_info.json
+crates/geodb-ffi/apple_bindings.sh
+crates/geodb-ffi/build.bak
+crates/geodb-ffi/ffi_to_ios.sh
+crates/geodb-ffi/geodb.podspec
+crates/geodb-ffi/geodb_rs_data
+crates/geodb-ffi/Podfile
+crates/geodb-ffi/uniffi-bindgen.rs

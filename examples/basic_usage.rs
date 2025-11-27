@@ -33,14 +33,18 @@ fn main() -> Result<()> {
         println!("ISO3: {}", country.iso3());
         println!("Phone code: {}", country.phone_code());
         println!("Currency: {}", country.currency());
-        println!("Number of states: {}", country.states().len());
+
+        // FIX: Ask DB for states, don't ask the country directly
+        let states = db.states_for_country(country);
+        println!("Number of states: {}", states.len());
     }
     println!();
 
     // Example 3: Get states/regions for a country
     println!("--- Example 3: List states for a country ---");
     if let Some(country) = db.find_country_by_iso2("US") {
-        let states = country.states();
+        // FIX: Use Trait Method
+        let states = db.states_for_country(country);
         println!("States in {}: {}", country.name(), states.len());
         for (i, state) in states.iter().take(5).enumerate() {
             println!("{}. {} ({})", i + 1, state.name(), state.state_code());
@@ -49,11 +53,17 @@ fn main() -> Result<()> {
     }
     println!();
 
-    // Example 4: Get cities for a state
+    // Example 4: Get cities for a specific state
     println!("--- Example 4: List cities for a state ---");
     if let Some(country) = db.find_country_by_iso2("US") {
-        if let Some(state) = country.states().iter().find(|s| s.state_code() == "CA") {
-            let cities = state.cities();
+        // FIX: Use Trait Method to get states first
+        let states = db.states_for_country(country);
+
+        // Find California
+        if let Some(state) = states.iter().find(|s| s.state_code() == "CA") {
+            // FIX: Use Trait Method to get cities
+            let cities = db.cities_for_state(state);
+
             println!("Cities in {}: {}", state.name(), cities.len());
             for (i, city) in cities.iter().take(5).enumerate() {
                 println!("{}. {}", i + 1, city.name());
@@ -66,6 +76,7 @@ fn main() -> Result<()> {
     // Example 5: Search by phone code
     println!("--- Example 5: Find countries by phone code ---");
     let phone_code = "+1";
+    // find_countries_by_phone_code returns Vec<&Country> (List)
     let countries_with_code = db.find_countries_by_phone_code(phone_code);
     println!(
         "Countries with phone code {}: {}",

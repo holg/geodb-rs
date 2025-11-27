@@ -18,7 +18,7 @@ fn get_db() -> &'static GeoDb<DefaultBackend> {
         let filename = GeoDb::<DefaultBackend>::default_dataset_filename();
         let path = dir.join(filename);
 
-        println!("Benchmarking against: {:?}", path);
+        println!("Benchmarking against: {path:?}");
 
         if !path.exists() {
             panic!("Binary cache not found! Run 'cargo run -p geodb-cli -- build' first.");

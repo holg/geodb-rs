@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 // Shared Raw Input (Used by builders/loaders of BOTH engines)
 #[doc(hidden)]
 pub mod raw;
+pub mod raw_normalize;
 
 /// Shared Raw Input (Used by builders/loaders of BOTH engines)
 #[doc(hidden)]

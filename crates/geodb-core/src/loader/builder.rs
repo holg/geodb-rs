@@ -6,12 +6,8 @@ use super::common_io;
 use super::{DefaultBackend, GeoDb};
 use crate::alias::CityMetaIndex;
 use crate::common::raw::CountryRaw;
+use crate::common::raw_normalize::apply_all_metadata;
 use crate::error::{GeoError, Result};
-
-// We use the CACHE_SUFFIX from the active model implementation
-// (This ensures .flat.bin or .nested.bin is chosen correctly)
-use crate::model_impl::CACHE_SUFFIX;
-
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::Path;
@@ -24,7 +20,7 @@ impl GeoDb<DefaultBackend> {
     /// **Smart Builder Logic:**
     /// Checks cache -> Loads Binary OR Builds Source -> Writes Cache.
     pub(super) fn load_via_builder(path: &Path, filter: Option<&[&str]>) -> Result<Self> {
-        let cache_path = common_io::get_cache_path(path, CACHE_SUFFIX);
+        let cache_path = common_io::get_cache_path(path);
 
         // 1. Check Cache (Fast)
         if Self::is_cache_fresh(path, &cache_path) {
@@ -62,8 +58,8 @@ impl GeoDb<DefaultBackend> {
         );
         if check {
             Self::load()
-        }else {
-            Self::build_from_source(Self::default_raw_path().as_path())
+        } else {
+            Self::build_and_cache()
         }
     }
     /// **Public API:** Exposed only when 'builder' is active.
@@ -80,37 +76,43 @@ impl GeoDb<DefaultBackend> {
     // --- Internal Builders ---
 
     fn build_from_source(path: &Path) -> Result<Self> {
+        // 1. Read raw JSON
         let reader = common_io::open_stream(path)?;
-        let raw: Vec<CountryRaw> = serde_json::from_reader(reader).map_err(GeoError::Json)?;
+        let mut raw: Vec<CountryRaw> = serde_json::from_reader(reader).map_err(GeoError::Json)?;
 
-        let meta_index = if let Some(parent) = path.parent() {
-            let meta_path = parent.join("city_meta.json");
-            CityMetaIndex::load_from_path(meta_path).ok()
-        } else {
-            None
-        };
+        // 2. Try to load city_meta.json next to the source JSON
+        let meta_index: Option<CityMetaIndex> = path
+            .parent()
+            .map(|parent| parent.join("city_meta.json"))
+            .and_then(|meta_path| CityMetaIndex::load_from_path(meta_path).ok());
 
-        // ⚠️ FIX: Switch logic based on Active Architecture
+        // 3. Apply all metadata / overrides into the raw model in-place
+        //    - if meta_index is None, apply_all_metadata is a no-op
+        apply_all_metadata(&mut raw, meta_index.as_ref());
+
+        // 4. Dispatch to the active architecture
 
         // Scenario A: Flat Model (Standard)
         #[cfg(not(feature = "legacy_model"))]
         {
-            // Uses crates/geodb-core/src/model/convert.rs
             Ok(crate::model::convert::from_raw(raw, meta_index.as_ref()))
         }
 
         // Scenario B: Nested Model (Legacy)
         #[cfg(feature = "legacy_model")]
         {
-            // Uses crates/geodb-core/src/legacy_model/convert.rs
-            // Note: We standardized the function name to 'from_raw' in previous steps,
-            // but if you kept 'raw_to_nested', use that here.
-            // I am using 'from_raw' to match the standardization plan.
             Ok(crate::legacy_model::convert::raw_to_nested(
                 raw,
                 meta_index.as_ref(),
             ))
         }
+    }
+
+    /// Builds the database from the default raw source and saves it to the default binary path.
+    pub fn build_and_cache() -> Result<Self> {
+        let db = Self::build_from_source(Self::default_raw_path().as_path())?;
+        Self::write_cache(Self::default_bin_path().as_path(), &db)?;
+        Ok(db)
     }
 
     fn is_cache_fresh(json_path: &Path, cache_path: &Path) -> bool {

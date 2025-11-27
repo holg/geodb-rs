@@ -1,0 +1,30 @@
+[package]
+name = "geodb-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+name = "geodb_ffi"
+[[bin]]
+# Name of the binary you’ll call
+name = "uniffi-bindgen"
+# This file will live next to Cargo.toml
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+# UniFFI for cross-language bindings
+uniffi = { version = "0.30", features = ["cli"] }
+
+# Core Engine (Force "Turbo" mode: Flat + Gzip + Blobs)
+geodb-core = { path = "../geodb-core" }
+
+# Utilities for manual loading
+once_cell = {workspace = true}
+bincode = {workspace = true}
+flate2 = {workspace = true}
+serde = {workspace = true}
+
+[build-dependencies]
+#uniffi_build = { version = "0.30", features = [ "build" ] }
+uniffi = { version = "0.30", features = ["build"] }

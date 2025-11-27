@@ -56,4 +56,28 @@ pub enum Commands {
         #[arg(long)]
         download: bool,
     },
+    Smart {
+        /// Smart search for cities/alias/regions/states based on various criteria
+        query: String,
+    },
+    /// Find the N closest cities to a coordinate
+    Nearest {
+        #[arg(long)]
+        lat: f64,
+        #[arg(long)]
+        lng: f64,
+        #[arg(short = 'n', default_value = "5")]
+        count: usize,
+    },
+
+    /// Find all cities within a radius (km) of a coordinate
+    /// (Tests the GeoID generation + Radius Search)
+    Radius {
+        #[arg(long)]
+        lat: f64,
+        #[arg(long)]
+        lng: f64,
+        #[arg(short = 'r', long = "radius", default_value = "50.0")]
+        km: f64,
+    },
 }

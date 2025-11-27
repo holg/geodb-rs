@@ -1,0 +1,63 @@
+// 1. Error type
+[Error]
+enum FfiError {
+    "Init"
+};
+
+// 2. DTOs
+
+dictionary CityResult {
+    string name;
+    string state;
+    string country;
+    string iso2;
+    f64 lat;
+    f64 lng;
+    u64 population;
+    f64? distance_km;
+};
+
+dictionary DbStatsDto {
+    u64 countries;
+    u64 states;
+    u64 cities;
+};
+
+// 3. Public interface that matches GeoDbEngine in lib.rs
+
+interface GeoDbEngine {
+// Rust: pub fn new() -> Result<Arc<Self>, FfiError>
+    [Throws=FfiError]
+    constructor();
+
+// Rust: pub fn stats(&self) -> DbStatsDto
+DbStatsDto stats();
+
+// Rust: pub fn country_count(&self) -> u64
+u64 country_count();
+
+// Rust: pub fn find_country_by_code(&self, code: String) -> Option<CityResult>
+CityResult? find_country_by_code(string code);
+
+// Rust: pub fn find_countries_by_substring(&self, substr: String) -> Vec<CityResult>
+sequence<CityResult> find_countries_by_substring(string substr);
+
+// Rust: pub fn find_states_by_substring(&self, substr: String) -> Vec<CityResult>
+sequence<CityResult> find_states_by_substring(string substr);
+
+// Rust: pub fn find_cities_by_substring(&self, substr: String) -> Vec<CityResult>
+sequence<CityResult> find_cities_by_substring(string substr);
+
+// Rust: pub fn find_nearest(&self, lat: f64, lng: f64, count: u32) -> Vec<CityResult>
+sequence<CityResult> find_nearest(f64 lat, f64 lng, u32 count);
+
+// Rust: pub fn find_in_radius(&self, lat: f64, lng: f64, radius_km: f64) -> Vec<CityResult>
+sequence<CityResult> find_in_radius(f64 lat, f64 lng, f64 radius_km);
+
+// Rust: pub fn smart_search(&self, query: String) -> Vec<CityResult>
+sequence<CityResult> smart_search(string query);
+};
+
+// 4. Optional namespace, as you already had
+namespace geodb_ffi {
+};

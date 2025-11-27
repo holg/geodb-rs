@@ -25,6 +25,6 @@ bindings = "pyo3"
 module-name = "geodb_rs"
 # Include data files that are within the package structure
 include = [
-  { path = "geodb_rs_data/countries+states+cities.json.gz", format = "sdist" },
-  { path = "geodb_rs_data/countries+states+cities.json.gz", format = "wheel" },
+  { path = "geodb_rs_data/geodb.flat.comp.blobs.bin", format = "sdist" },
+  { path = "geodb_rs_data/geodb.flat.comp.blobs.bin", format = "wheel" },
 ]

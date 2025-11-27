@@ -63,7 +63,3 @@ pub use crate::common::DbStats;
 pub use crate::error::{GeoDbError, GeoError, Result};
 pub use crate::text::{equals_folded, fold_ascii_lower, fold_key};
 pub use nested::{City, Country, CountryTimezone, GeoDb, State};
-#[cfg(not(feature = "compact"))]
-pub const CACHE_SUFFIX: &str = ".nested.bin";
-#[cfg(feature = "compact")]
-pub const CACHE_SUFFIX: &str = ".comp.nested.bin";

@@ -23,7 +23,7 @@ path = "src/lib.rs"
 name = "profile_search"
 path = "src/bin/profile_search.rs"
 [features]
-default = ["json", "builder", "compact", "legacy_model"]
+default = ["json", "builder", "compact", "search_blobs"]
 # -----------------------------------------------------------------------------
 # Feature Flags
 # -----------------------------------------------------------------------------
@@ -45,6 +45,10 @@ compact = ["dep:flate2"]
 # If disabled (Default): Uses the new "Flat" array structure.
 legacy_model = []
 
+western_opt = []
+use_smolstr = ["smol_str"]
+search_blobs = []
+
 [dependencies]
 bincode = { workspace = true }
 deunicode = { workspace = true }
@@ -58,6 +62,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { workspace = true }
 # Used by 'json' or 'builder'
 serde_json = { workspace = true, optional = true }
+smol_str = { version = "0.3", features = ["serde"], optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

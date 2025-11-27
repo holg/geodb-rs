@@ -1,13 +1,14 @@
 // crates/geodb-core/src/legacy_model/search.rs
 
+use crate::traits::CityContext;
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::legacy_model::nested::{City, Country, GeoDb, State};
-// use crate::SmartHit;
+use crate::spatial::{decode_geoid, haversine_distance, distance_squared};
+#[allow(unused_imports)]
 use crate::text::{fold_key, match_score};
 use crate::traits::{GeoBackend, GeoSearch};
 use std::collections::HashSet;
-
 type MySmartHit<'a, B> = SmartHitGeneric<'a, Country<B>, State<B>, City<B>>;
 
 impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
@@ -49,7 +50,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     /// # Example
     ///
     /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
+    /// use geodb_core::prelude::{GeoDb, GeoSearch, DefaultBackend};
     ///
     /// let db = GeoDb::<DefaultBackend>::load().unwrap();
     ///
@@ -94,7 +95,8 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     /// # Example
     ///
     /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
+    /// use geodb_core::{GeoSearch, DefaultBackend};
+    /// use geodb_core::prelude::GeoDb;
     ///
     /// let db = GeoDb::<DefaultBackend>::load().unwrap();
     ///
@@ -127,7 +129,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     /// # Example
     ///
     /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
+    /// use geodb_core::prelude::{GeoDb, GeoSearch, DefaultBackend};
     ///
     /// let db = GeoDb::<DefaultBackend>::load().unwrap();
     ///
@@ -165,7 +167,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     /// # Example
     ///
     /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
+    /// use geodb_core::prelude::{GeoDb, GeoSearch, DefaultBackend};
     ///
     /// let db = GeoDb::<DefaultBackend>::load().unwrap();
     ///
@@ -212,7 +214,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     /// # Example
     ///
     /// ```no_run
-    /// use geodb_core::{GeoDb, GeoSearch, DefaultBackend};
+    /// use geodb_core::prelude::{GeoDb, GeoSearch, DefaultBackend};
     ///
     /// let db = GeoDb::<DefaultBackend>::load().unwrap();
     ///
@@ -283,17 +285,33 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         for c in &self.countries {
             for s in &c.states {
                 for city in &s.cities {
-                    // Check Name
-                    let mut matched = fold_key(city.name.as_ref()).contains(&q);
-                    // Check Aliases
-                    if !matched {
-                        for alias in &city.aliases {
-                            if fold_key(alias).contains(&q) {
-                                matched = true;
-                                break;
+                    // OPTIMIZATION: Blob Check
+                    #[cfg(feature = "search_blobs")]
+                    if !city.search_blob().contains(&q) {
+                        continue;
+                    }
+
+                    // Standard Match Check (Fallback or Confirm)
+                    #[allow(unused_assignments)]
+                    let mut matched = false;
+                    #[cfg(not(feature = "search_blobs"))]
+                    {
+                        matched = fold_key(city.name.as_ref()).contains(&q);
+                        if !matched {
+                            for a in &city.aliases {
+                                if fold_key(a).contains(&q) {
+                                    matched = true;
+                                    break;
+                                }
                             }
                         }
                     }
+                    #[cfg(feature = "search_blobs")]
+                    {
+                        // If we are here, the blob matched.
+                        matched = true;
+                    }
+
                     if matched {
                         out.push((city, s, c));
                     }
@@ -312,43 +330,121 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         let q = fold_key(q_raw);
         let phone = q_raw.trim_start_matches('+');
 
-        let mut out: Vec<MySmartHit<'_, B>> = Vec::new();
-        let mut seen_city_keys: HashSet<(String, String, String)> = HashSet::new();
+        let mut out = Vec::new();
+        let mut seen_city_keys = HashSet::new();
 
-        // ---------------------------------------------------------
-        // 1) Tree Traversal Loop
-        // ---------------------------------------------------------
+        // 1. Walk the country → state → city tree
         for country in &self.countries {
-            // Check Country Name/ISO
+            // -------- Country matching --------
+            // ISO2 exact match → strongest score
             if country.iso2.as_ref().eq_ignore_ascii_case(q_raw) {
                 out.push(MySmartHit::country(100, country));
             }
-            if let Some(score) = match_score(country.name.as_ref(), &q, (90, 80, 70)) {
-                out.push(MySmartHit::country(score, country));
+
+            // Name / aliases matching
+            #[cfg(feature = "search_blobs")]
+            {
+                if country.search_blob().contains(&q) {
+                    // Use name-prefix to distinguish “very good” from “ok” matches.
+                    let name_folded = fold_key(country.name.as_ref());
+                    let score = if name_folded.starts_with(&q) { 90 } else { 80 };
+                    out.push(MySmartHit::country(score, country));
+                }
             }
 
+            #[cfg(not(feature = "search_blobs"))]
+            {
+                let name_folded = fold_key(country.name.as_ref());
+                if name_folded == q {
+                    out.push(MySmartHit::country(90, country));
+                } else if name_folded.starts_with(&q) {
+                    out.push(MySmartHit::country(85, country));
+                } else if name_folded.contains(&q) {
+                    out.push(MySmartHit::country(80, country));
+                }
+            }
+
+            // -------- State matching --------
             for state in &country.states {
-                // Check State Name
-                if let Some(score) = match_score(state.name.as_ref(), &q, (60, 50, 0)) {
-                    out.push(MySmartHit::state(score, country, state));
+                #[cfg(feature = "search_blobs")]
+                {
+                    if state.search_blob().contains(&q) {
+                        let name_folded = fold_key(state.name.as_ref());
+                        let score = if name_folded.starts_with(&q) { 60 } else { 50 };
+                        out.push(MySmartHit::state(score, country, state));
+                    }
                 }
 
+                #[cfg(not(feature = "search_blobs"))]
+                {
+                    let name_folded = fold_key(state.name.as_ref());
+                    if name_folded == q {
+                        out.push(MySmartHit::state(60, country, state));
+                    } else if name_folded.starts_with(&q) {
+                        out.push(MySmartHit::state(55, country, state));
+                    } else if name_folded.contains(&q) {
+                        out.push(MySmartHit::state(50, country, state));
+                    }
+                }
+
+                // -------- City matching (hot loop) --------
                 for city in &state.cities {
-                    // Check City Name & Aliases
+                    // Fast reject when blobs are enabled
+                    #[cfg(feature = "search_blobs")]
+                    if !city.search_blob().contains(&q) {
+                        continue;
+                    }
+
+                    // Decide whether this city matches, and with which score
+                    #[allow(unused_assignments)]
                     let mut city_score = 0;
 
-                    if let Some(s) = match_score(city.name.as_ref(), &q, (45, 40, 30)) {
-                        city_score = s;
-                    } else {
-                        for alias in &city.aliases {
-                            if let Some(s) = match_score(alias, &q, (45, 40, 0)) {
-                                city_score = s;
-                                break;
+                    // Common: always look at folded city name once
+                    let cname = fold_key(city.name.as_ref());
+
+                    #[cfg(feature = "search_blobs")]
+                    {
+                        // We already know the blob matched.
+                        // Use name relation to refine the score:
+                        if cname == q {
+                            city_score = 45;
+                        } else if cname.starts_with(&q) {
+                            city_score = 40;
+                        } else {
+                            // Blob matched, so this is likely via alias/substring.
+                            city_score = 30;
+                        }
+                    }
+
+                    #[cfg(not(feature = "search_blobs"))]
+                    {
+                        // Without blobs we just use folded name + aliases.
+                        if cname == q {
+                            city_score = 45;
+                        } else if cname.starts_with(&q) {
+                            city_score = 40;
+                        } else if cname.contains(&q) {
+                            city_score = 30;
+                        } else {
+                            // Try aliases
+                            for alias in &city.aliases {
+                                let a_fold = fold_key(alias);
+                                if a_fold == q {
+                                    city_score = 42;
+                                    break;
+                                } else if a_fold.starts_with(&q) {
+                                    city_score = 38;
+                                    break;
+                                } else if a_fold.contains(&q) {
+                                    city_score = 28;
+                                    break;
+                                }
                             }
                         }
                     }
 
                     if city_score > 0 {
+                        // Deduplicate by (country,state,city) triple
                         let key = (
                             country.iso2.as_ref().to_ascii_lowercase(),
                             state.name.as_ref().to_ascii_lowercase(),
@@ -362,49 +458,36 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
             }
         }
 
-        // ---------------------------------------------------------
-        // 2) Phone Code Loop
-        // ---------------------------------------------------------
+        // 2. Phone-prefix based country matches
         for c in self.find_countries_by_phone_code(phone) {
             out.push(MySmartHit::country(20, c));
         }
 
-        // ---------------------------------------------------------
-        // 3) Sort and Return
-        // ---------------------------------------------------------
+        // 3. Sort by score descending
         out.sort_by(|a, b| b.score.cmp(&a.score));
-
-        out // <--- CRITICAL: No semicolon here! This returns the vector.
-    }
-
-    #[allow(unused_variables)]
-    fn enrich_with_city_meta(
-        &self,
-        index: &CityMetaIndex,
-    ) -> Vec<(&City<B>, &State<B>, &Country<B>)> {
-        todo!() // Or better not needed for the nested model?
+        out
     }
     fn resolve_city_alias_with_index<'a>(
         &'a self,
         alias: &str,
         index: &'a CityMetaIndex,
     ) -> Option<(&'a B::Str, &'a B::Str, &'a B::Str)> {
-
         let meta = index.find_by_alias(alias, None, None)?;
 
+        // Legacy: Tree Traversal
         for country in &self.countries {
             if !country.iso2.as_ref().eq_ignore_ascii_case(&meta.iso2) {
                 continue;
             }
 
-            // Legacy: .states is a Vec
             for state in &country.states {
-                if !state.name.as_ref().eq_ignore_ascii_case(&meta.state) {
+                // Loose match for state name (handling accents)
+                if fold_key(state.name.as_ref()) != fold_key(&meta.state) {
                     continue;
                 }
-                // Legacy: .cities is a Vec
+
                 for city in &state.cities {
-                    if city.name.as_ref().eq_ignore_ascii_case(&meta.city) {
+                    if fold_key(city.name.as_ref()) == fold_key(&meta.city) {
                         return Some((&country.iso2, &state.name, &city.name));
                     }
                 }
@@ -412,4 +495,73 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         }
         None
     }
+    fn find_nearest(&self, lat: f64, lng: f64, count: usize) -> Vec<&City<B>> {
+        // Legacy: We don't have a spatial_index, so we must scan the whole world.
+        // This is slower (O(N)), but correct.
+
+        let mut candidates = Vec::with_capacity(self.countries.len() * 10); // Heuristic reserve
+
+        for country in &self.countries {
+            for state in &country.states {
+                for city in &state.cities {
+                    let c_lat = city.lat().unwrap_or(0.0);
+                    let c_lng = city.lng().unwrap_or(0.0);
+
+                    // Squared Euclidean for fast sorting
+                    let dist = distance_squared(lat, lng, c_lat, c_lng);
+                    candidates.push((dist, city));
+                }
+            }
+        }
+
+        // Sort by distance
+        candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        // Take top N
+        candidates.into_iter().take(count).map(|(_, c)| c).collect()
+    }
+
+    // crates/geodb-core/src/model/search.rs
+
+    // crates/geodb-core/src/legacy_model/search.rs
+
+    fn find_cities_in_radius_by_geoid(&self, geoid: u64, radius_km: f64) -> Vec<CityContext<'_, B>> {
+        let (center_lat, center_lng) = decode_geoid(geoid);
+
+        // BBox calc (Same as above)
+        let lat_delta = radius_km / 111.0;
+        let lng_scale = (center_lat.to_radians().cos()).abs().max(0.01);
+        let lng_delta = radius_km / (111.0 * lng_scale);
+
+        let min_lat = center_lat - lat_delta;
+        let max_lat = center_lat + lat_delta;
+        let min_lng = center_lng - lng_delta;
+        let max_lng = center_lng + lng_delta;
+
+        let mut candidates = Vec::new();
+
+        for country in &self.countries {
+            for state in &country.states {
+                for city in &state.cities {
+                    let lat = city.lat().unwrap_or(0.0);
+                    let lng = city.lng().unwrap_or(0.0);
+
+                    if lat >= min_lat && lat <= max_lat && lng >= min_lng && lng <= max_lng {
+                        let dist = haversine_distance(center_lat, center_lng, lat, lng);
+                        if dist <= radius_km {
+                            candidates.push((dist, city, state, country));
+                        }
+                    }
+                }
+            }
+        }
+
+        candidates.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.into_iter().map(|(_, city, state, country)| (city, state, country)).collect()
+    }
+
+    // ... (Ensure enrich_with_city_meta is present as a no-op or todo) ...
+    // fn enrich_with_city_meta(&self, _index: &CityMetaIndex) -> Vec<(&City<B>, &State<B>, &Country<B>)> {
+    //     Vec::new()
+    // }
 }

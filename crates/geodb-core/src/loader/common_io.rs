@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use crate::loader::get_suffix;
 #[cfg(feature = "compact")]
 use flate2::read::GzDecoder;
 
@@ -25,7 +26,8 @@ pub fn open_stream(path: &Path) -> Result<Box<dyn Read>> {
     }
 }
 
-pub fn get_cache_path(json_path: &Path, suffix: &str) -> PathBuf {
+pub fn get_cache_path(json_path: &Path) -> PathBuf {
+    let suffix = get_suffix();
     let filename = json_path.file_name().unwrap().to_string_lossy();
     let bin_path = json_path.with_file_name(format!("{filename}.{suffix}"));
     bin_path

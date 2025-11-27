@@ -19,6 +19,8 @@ pub enum GeoError {
 
     #[error("Dataset not found at path: {0}")]
     NotFound(String),
+    #[error("Initialization error: {0}")]
+    Init(String),
 
     #[error("Invalid data: {0}")]
     InvalidData(String),

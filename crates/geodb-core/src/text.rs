@@ -6,6 +6,11 @@
 //! This is the "Brain" of the search engine.
 
 /// Convert a string into a folded key (lowercase + ascii).
+#[cfg(feature = "western_opt")]
+pub fn fold_key(s: &str) -> String {
+    fold_ascii_lower(s)
+}
+#[cfg(not(feature = "western_opt"))]
 pub fn fold_key(s: &str) -> String {
     deunicode::deunicode(s).to_lowercase()
 }

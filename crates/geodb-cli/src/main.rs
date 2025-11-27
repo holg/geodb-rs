@@ -16,6 +16,7 @@ use crate::args::{CliArgs, Commands};
 use clap::Parser;
 use geodb_core::prelude::*;
 use std::path::PathBuf;
+use geodb_core::spatial;
 
 fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
@@ -126,7 +127,7 @@ fn main() -> anyhow::Result<()> {
                 println!("States in {}:", c.name());
                 // FIX: Use trait method for relationship
                 for s in db.states_for_country(c) {
-                    println!("- {}", s.name());
+                    println!("- {}/{}", s.name(), s.native().unwrap_or(""));
                 }
             }
             None => eprintln!("Country {iso2} not found"),
@@ -141,7 +142,122 @@ fn main() -> anyhow::Result<()> {
             } else {
                 for (city, state, country) in matches {
                     println!("{} — {}, {}", city.name(), state.name(), country.name());
+                    #[cfg(feature = "search_blobs")]
+                    println!("blob: {}", city.search_blob);
                 }
+            }
+        }
+        Commands::Smart { query } => {
+            let matches = db.smart_search(&query);
+
+            if matches.is_empty() {
+                println!("Nothing found matching: {query}");
+            } else {
+                println!("Found {} results:", matches.len());
+
+                for hit in matches {
+                    let score = hit.score;
+
+                    // ⚠️ FIX: Match on the enum instead of forcing a tuple conversion
+                    match hit.item {
+                        // Case 1: It's a City (Has City + State + Country)
+                        SmartItem::City {
+                            city,
+                            state,
+                            country,
+                        } => {
+                            println!(
+                                "🏙️  City:    {} — {}, {} (Score: {})",
+                                city.name(),
+                                state.name(),
+                                country.name(),
+                                score
+                            );
+                        }
+                        // Case 2: It's a State (Has State + Country)
+                        SmartItem::State { state, country } => {
+                            println!(
+                                "🏛️  State:   {}, {} (Score: {})",
+                                state.name(),
+                                country.name(),
+                                score
+                            );
+                        }
+                        // Case 3: It's a Country (Just Country)
+                        SmartItem::Country(country) => {
+                            println!(
+                                "🌍 Country: {} ({}) (Score: {})",
+                                country.name(),
+                                country.iso2(),
+                                score
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Commands::Nearest { lat, lng, count } => {
+            println!("Finding {count} cities nearest to {lat}, {lng}...");
+            let start = std::time::Instant::now();
+
+            // Returns Vec<(&City, &State, &Country)>
+            let results = db.find_nearest(lat, lng, count);
+
+            println!("Found {} cities in {:.2?}:", results.len(), start.elapsed());
+
+            // Destructure the tuple here!
+            for (i, (city, state, country)) in results.iter().enumerate() {
+                // Calculate distance for display
+                let dist = geodb_core::spatial::haversine_distance(
+                    lat, lng,
+                    city.lat().unwrap_or(0.0),
+                    city.lng().unwrap_or(0.0)
+                );
+
+                println!(
+                    "{}. {} ({:.2} km) [{}, {}] - {}, {}",
+                    i + 1,
+                    city.name(),
+                    dist,
+                    city.lat().unwrap_or(0.0),
+                    city.lng().unwrap_or(0.0),
+                    state.name(),   // Now we can access state!
+                    country.iso2()  // And country!
+                );
+            }
+        }
+
+        Commands::Radius { lat, lng, km } => {
+            println!("Finding cities within {km} km of {lat}, {lng}...");
+            let geoid = geodb_core::spatial::generate_geoid(lat, lng);
+            let start = std::time::Instant::now();
+
+            // Returns Vec<(&City, &State, &Country)>
+            let results = db.find_cities_in_radius_by_geoid(geoid, km);
+
+            println!("Found {} cities in {:.2?}:", results.len(), start.elapsed());
+
+            // Destructure here too
+            for (city, state, country) in results.iter().take(10) {
+                let dist = spatial::haversine_distance(
+                    lat, lng,
+                    city.lat().unwrap_or(0.0),
+                    city.lng().unwrap_or(0.0)
+                );
+
+                println!(
+                    "- {} ({:.2} km) [{}, {}] - {}, {}",
+                    city.name(),
+                    dist,
+                    state.name(),
+                    country.iso2(),
+                    city.lat().unwrap_or(0.0),
+                    city.lng().unwrap_or(0.0)
+                );
+            }
+            if results.len() > 10 {
+                println!("... and {} more", results.len() - 10);
             }
         }
     }

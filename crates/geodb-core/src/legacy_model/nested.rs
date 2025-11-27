@@ -2,7 +2,6 @@
 use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 // Standard backend for convenience
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GeoDb<B: GeoBackend> {
@@ -12,6 +11,11 @@ pub struct GeoDb<B: GeoBackend> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Country<B: GeoBackend> {
     pub name: B::Str,
+    /// **Optimization:** Pre-folded search terms (Name + Aliases).
+    /// Format: "name|alias1|alias2" (all lowercase).
+    /// This allows zero-allocation searching.
+    #[cfg(feature = "search_blobs")]
+    pub search_blob: B::Str,
     pub iso2: B::Str,
     pub iso3: Option<B::Str>,
     pub capital: Option<B::Str>,
@@ -58,6 +62,11 @@ pub struct CountryTimezone<B: GeoBackend> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State<B: GeoBackend> {
     pub name: B::Str,
+    /// **Optimization:** Pre-folded search terms (Name + Aliases).
+    /// Format: "name|alias1|alias2" (all lowercase).
+    /// This allows zero-allocation searching.
+    #[cfg(feature = "search_blobs")]
+    pub search_blob: B::Str,
     pub code: Option<B::Str>,
     pub full_code: Option<B::Str>,
     pub native_name: Option<B::Str>,
@@ -71,7 +80,11 @@ pub struct State<B: GeoBackend> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct City<B: GeoBackend> {
     pub name: B::Str,
-
+    /// **Optimization:** Pre-folded search terms (Name + Aliases).
+    /// Format: "name|alias1|alias2" (all lowercase).
+    /// This allows zero-allocation searching.
+    #[cfg(feature = "search_blobs")]
+    pub search_blob: B::Str,
     #[serde(default)]
     pub aliases: Vec<String>,
     #[serde(default)]
@@ -87,6 +100,10 @@ pub struct City<B: GeoBackend> {
 impl<B: GeoBackend> Country<B> {
     pub fn name(&self) -> &str {
         self.name.as_ref()
+    }
+    #[cfg(feature = "search_blobs")]
+    pub fn search_blob(&self) -> &str {
+        self.search_blob.as_ref()
     }
     pub fn iso2(&self) -> &str {
         self.iso2.as_ref()
@@ -138,6 +155,13 @@ impl<B: GeoBackend> State<B> {
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
+    pub fn native(&self) -> Option<&str> {
+        self.native_name.as_ref().map(|s| s.as_ref())
+    }
+    #[cfg(feature = "search_blobs")]
+    pub fn search_blob(&self) -> &str {
+        self.search_blob.as_ref()
+    }
     pub fn state_code(&self) -> &str {
         self.code.as_ref().map(|s| s.as_ref()).unwrap_or("")
     }
@@ -149,6 +173,10 @@ impl<B: GeoBackend> State<B> {
 impl<B: GeoBackend> City<B> {
     pub fn name(&self) -> &str {
         self.name.as_ref()
+    }
+    #[cfg(feature = "search_blobs")]
+    pub fn search_blob(&self) -> &str {
+        self.search_blob.as_ref()
     }
     pub fn population(&self) -> Option<u32> {
         self.population

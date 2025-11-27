@@ -11,9 +11,10 @@ readme = "README.md"
 members = [
     "crates/geodb-cli",
     #    "crates/geodb-core-before-refactor",
-    "crates/geodb-core",
+    "crates/geodb-core", "crates/geodb-ffi",
     "crates/geodb-py",
     "crates/geodb-wasm",
+    "crates/geodb-ffi"
 ]
 
 resolver = "2"
