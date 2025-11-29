@@ -101,7 +101,7 @@ fi
 # Check cargo-deny
 if command -v cargo-deny &> /dev/null; then
     echo "Running cargo-deny check..."
-    if cargo-deny check --hide-inclusion-graph --show-stats; then
+    if cargo-deny check bans licenses sources --hide-inclusion-graph --show-stats; then
         echo -e "${GREEN}✓ cargo-deny passed${NC}"
     else
         echo -e "${RED}✗ cargo-deny failed${NC}"

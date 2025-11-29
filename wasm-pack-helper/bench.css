@@ -1,0 +1,16 @@
+body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; line-height: 1.5; }
+h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+.controls { margin: 20px 0; display: flex; gap: 10px; }
+button { padding: 12px 24px; font-size: 1rem; cursor: pointer; border: none; border-radius: 6px; transition: transform 0.1s; }
+button:active { transform: scale(0.98); }
+button.flat { background: #28a745; color: white; }
+button.nested { background: #dc3545; color: white; }
+button.nested-blobs { background: #fd7e14; color: white; }
+button.flat-blobs { background: #17a2b8; color: white; }
+
+#log { background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border: 1px solid #ddd; min-height: 200px; font-family: monospace; white-space: pre-wrap; }
+.entry { margin-bottom: 5px; }
+.label { font-weight: bold; display: inline-block; width: 80px; }
+.success { color: #28a745; }
+.error { color: #dc3545; font-weight: bold; }
+.info { color: #007bff; }

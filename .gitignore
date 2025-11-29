@@ -66,3 +66,6 @@ crates/geodb-ffi/geodb.podspec
 crates/geodb-ffi/geodb_rs_data
 crates/geodb-ffi/Podfile
 crates/geodb-ffi/uniffi-bindgen.rs
+crates/geodb-ffi/.swiftpm
+crates/SPM-GeoDB-ffi/.build
+crates/SPM-GeoDB-ffi/.swiftpm

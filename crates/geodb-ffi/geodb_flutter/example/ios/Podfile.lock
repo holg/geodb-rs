@@ -1,0 +1,28 @@
+PODS:
+  - Flutter (1.0.0)
+  - geodb_flutter (0.0.1):
+    - Flutter
+  - integration_test (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - geodb_flutter (from `.symlinks/plugins/geodb_flutter/ios`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  geodb_flutter:
+    :path: ".symlinks/plugins/geodb_flutter/ios"
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+
+SPEC CHECKSUMS:
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  geodb_flutter: 4e81b0699282cf8077c28532dde0cf31b4af1cad
+  integration_test: 252f60fa39af5e17c3aa9899d35d908a0721b573
+
+PODFILE CHECKSUM: d2243213672c3c48aae53c36642ba411a6be7309
+
+COCOAPODS: 1.16.2

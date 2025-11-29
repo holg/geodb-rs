@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GeoDB WASM Benchmark: Flat vs Nested Vs Blobs</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; line-height: 1.5; }
+        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .controls { margin: 20px 0; display: flex; gap: 10px; }
+        button { padding: 12px 24px; font-size: 1rem; cursor: pointer; border: none; border-radius: 6px; transition: transform 0.1s; }
+        button:active { transform: scale(0.98); }
+        button.flat { background: #28a745; color: white; }
+        button.nested { background: #dc3545; color: white; }
+        button.nested-blobs { background: #fd7e14; color: white; }
+        button.flat-blobs { background: #17a2b8; color: white; }
+
+        #log { background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border: 1px solid #ddd; min-height: 200px; font-family: monospace; white-space: pre-wrap; }
+        .entry { margin-bottom: 5px; }
+        .label { font-weight: bold; display: inline-block; width: 80px; }
+        .success { color: #28a745; }
+        .error { color: #dc3545; font-weight: bold; }
+        .info { color: #007bff; }
+    </style>
+</head>
+<body>
+    <h1>GeoDB Architecture Benchmark</h1>
+    <p>Compare the startup time and search latency of the new Flat architecture vs the Legacy Nested architecture.</p>
+
+    <div class="controls">
+        <button class="nested" onclick="runBench('./dist-nested/geodb-wasm.js', 'NESTED')">
+            🐢 Run Nested Benchmark
+        </button>
+
+        <button class="flat" onclick="runBench('./dist-flat/geodb-wasm.js', 'FLAT')">
+            🚀 Run Flat Benchmark
+        </button>
+
+        <button class="nested-blobs" onclick="runBench('./dist-nested-blobs/geodb-wasm.js', 'NESTED_BLOBS')">
+            📦 Run Nested+Blobs Benchmark
+        </button>
+
+        <button class="flat-blobs" onclick="runBench('./dist-flat-blobs/geodb-wasm.js', 'FLAT_BLOBS')">
+            📦🚀 Run Flat+Blobs Benchmark
+        </button>
+    </div>
+
+    <div id="log">Ready. Click a button to start.</div>
+
+    <script type="module">
+        // Store per-benchmark stats so we can compare runs
+        const benchmarkStats = {}; // label -> { avgLatency, searchTime, startupTime }
+        const NUM_QUERIES = 2000;  // change to 5000 if you really want max stress
+        let isRunning = false;
+
+        // Helper to log to UI
+        function log(msg, type = "") {
+            const el = document.getElementById("log");
+            const div = document.createElement("div");
+            div.className = `entry ${type}`;
+            div.innerHTML = msg;
+            el.appendChild(div);
+            el.scrollTop = el.scrollHeight;
+            console.log(msg.replace(/<[^>]+>/g, ""));
+        }
+
+        function logSeparator(label) {
+            log("<hr>", "info");
+            log(`<b>▶ ${label}</b> — new run`, "info");
+        }
+
+        function recordAndCompare(label, avgLatency, searchTime, startupTime) {
+            benchmarkStats[label] = { avgLatency, searchTime, startupTime };
+
+            const entries = Object.entries(benchmarkStats);
+            if (entries.length === 0) {
+                return;
+            }
+
+            // Find fastest by avgLatency
+            const [fastestLabel, fastest] = entries.reduce((best, current) =>
+                current[1].avgLatency < best[1].avgLatency ? current : best
+            );
+
+            if (label === fastestLabel && entries.length > 1) {
+                log(
+                    `🏅 <b>${label}</b> is currently the fastest variant with <b>${avgLatency.toFixed(
+                        4
+                    )} ms</b> per query.`,
+                    "success"
+                );
+            } else if (label !== fastestLabel) {
+                const factor = avgLatency / fastest.avgLatency;
+                log(
+                    `⚖️ Compared to fastest (<b>${fastestLabel}</b> at <b>${fastest.avgLatency.toFixed(
+                        4
+                    )} ms</b>), <b>${label}</b> is <b>${factor.toFixed(
+                        2
+                    )}x</b> slower.`,
+                    factor <= 1.1 ? "success" : "error"
+                );
+            }
+        }
+
+        window.runBench = async function (jsPath, label) {
+            if (isRunning) {
+                log(
+                    `⏳ A benchmark is already running. Please wait for it to finish before starting <b>${label}</b>.`,
+                    "info"
+                );
+                return;
+            }
+            isRunning = true;
+
+            logSeparator(label);
+            log(`Starting <b>${label}</b> benchmark...`, "info");
+            log(`Fetching JS module from: <code>${jsPath}</code>`);
+
+            try {
+                const t0 = performance.now();
+
+                // Dynamic Import of the Bindings
+                const module = await import(jsPath);
+                const init = module.default;
+
+                // Construct the path to the .wasm file (Trunk naming: file.js -> file_bg.wasm)
+                const wasmPath = jsPath.replace(".js", "_bg.wasm");
+                log(`Fetching WASM from: <code>${wasmPath}</code>`);
+
+                // Initialize WASM
+                await init(wasmPath);
+
+                // Trigger DB Load (Deserialize)
+                if (module.start) {
+                    module.start();
+                } else {
+                    log(
+                        "Warning: module.start() not found, assuming auto-start...",
+                        "error"
+                    );
+                }
+
+                const t1 = performance.now();
+                const startupTime = t1 - t0;
+
+                // Verify Data
+                const count = module.get_country_count();
+                log(
+                    `✅ <b>Startup Complete:</b> ${startupTime.toFixed(2)} ms`,
+                    "success"
+                );
+                log(`Loaded <b>${count}</b> countries.`);
+
+                // Warmup Search
+                module.smart_search("Berlin");
+
+                // Stress Test
+                log(`Running ${NUM_QUERIES.toLocaleString()} search queries...`);
+                const queries = [
+                    "United",
+                    "Berlin",
+                    "Tokyo",
+                    "+1",
+                    "California",
+                    "Zürich",
+                    "Munich",
+                    "CN",
+                    "100",
+                    "Asia"
+                ];
+
+                const tSearchStart = performance.now();
+                let hits = 0;
+                for (let i = 0; i < NUM_QUERIES; i++) {
+                    const q = queries[i % queries.length];
+                    const res = module.smart_search(q);
+                    hits += res.length;
+                }
+                const tSearchEnd = performance.now();
+
+                const searchTime = tSearchEnd - tSearchStart;
+                const avg = searchTime / NUM_QUERIES;
+
+                log(`<b>Search Time:</b> ${searchTime.toFixed(2)} ms`);
+                log(
+                    `<b>Avg Latency:</b> ${avg.toFixed(4)} ms / query`,
+                    avg < 0.1 ? "success" : "error"
+                );
+                log(`Total Hits: ${hits}`);
+                log(
+                    `<br><i>Check Chrome DevTools Memory tab for RAM usage.</i>`,
+                    "info"
+                );
+
+                // Store stats and show relative “x slower/faster” info
+                recordAndCompare(label, avg, searchTime, startupTime);
+            } catch (e) {
+                log(`❌ Fatal Error: ${e.message}`, "error");
+                console.error(e);
+            } finally {
+                isRunning = false;
+            }
+        };
+    </script>
+
+</body>
+</html>

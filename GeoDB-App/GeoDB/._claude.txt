@@ -1,0 +1,45 @@
+
+╭─── Claude Code v2.0.55 ──────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                Welcome back Holger!                │ started                 │
+│                                                    │ Run /init to create a … │
+│                      ▗ ▗   ▖ ▖                     │ Run /install-github-ap… │
+│                                                    │ ─────────────────────── │
+│                        ▘▘ ▝▝                       │ Recent activity         │
+│                                                    │ No recent activity      │
+│               Opus 4.5 · Claude Max                │                         │
+│ ~/Documents/develeop/rust/geodb-rs/GeoDB-App/GeoDB │                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+  ⎿  Read GeoDb Watch App/Assets.xcassets/AppIcon.appiconset/Contents.json (101 
+     lines)
+  ⎿  Read GeoDB/Assets.xcassets/AppIcon.appiconset/Contents.json (141 lines)
+  ⎿ Read GeoDb Watch App/Assets.xcassets/AppIcon.appiconset/icon-108@2x.png
+    (23.2KB)
+  ⎿ Read GeoDb Watch App/Assets.xcassets/AppIcon.appiconset/icon-98@2x.png
+    (20.6KB)
+  ⎿ API Error: 400 {"type":"error","error":{"type":"invalid_request_error","mess
+    age":"messages.0.content.7.image.source.base64.data: Image does not match 
+    the provided media type 
+    image/png"},"request_id":"req_011CVb2VXYUmJFMXJv5ZYvsE"}
+
+> go on, shall be no problem to convert .jpg to .png 
+  ⎿ API Error: 400 {"type":"error","error":{"type":"invalid_request_error","mess
+    age":"messages.0.content.5.image.source.base64.data: Image does not match 
+    the provided media type 
+    image/png"},"request_id":"req_011CVb2ZAjSjyoB8mgezGHy2"}
+
+> what is wrong? 
+  ⎿ API Error: 400 {"type":"error","error":{"type":"invalid_request_error","mess
+    age":"messages.0.content.7.image.source.base64.data: Image does not match 
+    the provided media type 
+    image/png"},"request_id":"req_011CVb2baVkU4xEGHgx5ut77"}
+
+> try again and use geodb.png 
+  ⎿ API Error: 400 {"type":"error","error":{"type":"invalid_request_error","mess
+    age":"messages.0.content.7.image.source.base64.data: Image does not match 
+    the provided media type 
+    image/png"},"request_id":"req_011CVb2ov4KKwZb6dbD3zK5W"}
+
+
+

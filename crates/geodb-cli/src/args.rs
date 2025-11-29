@@ -80,4 +80,7 @@ pub enum Commands {
         #[arg(short = 'r', long = "radius", default_value = "50.0")]
         km: f64,
     },
+    CityBy {
+        query: String,
+    }
 }

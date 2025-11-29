@@ -11,12 +11,11 @@
 //! - Build cache: `geodb build` (Reads JSON, writes Binary)
 
 mod args;
-
 use crate::args::{CliArgs, Commands};
 use clap::Parser;
 use geodb_core::prelude::*;
-use std::path::PathBuf;
 use geodb_core::spatial;
+use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
@@ -210,9 +209,10 @@ fn main() -> anyhow::Result<()> {
             for (i, (city, state, country)) in results.iter().enumerate() {
                 // Calculate distance for display
                 let dist = geodb_core::spatial::haversine_distance(
-                    lat, lng,
+                    lat,
+                    lng,
                     city.lat().unwrap_or(0.0),
-                    city.lng().unwrap_or(0.0)
+                    city.lng().unwrap_or(0.0),
                 );
 
                 println!(
@@ -241,9 +241,10 @@ fn main() -> anyhow::Result<()> {
             // Destructure here too
             for (city, state, country) in results.iter().take(10) {
                 let dist = spatial::haversine_distance(
-                    lat, lng,
+                    lat,
+                    lng,
                     city.lat().unwrap_or(0.0),
-                    city.lng().unwrap_or(0.0)
+                    city.lng().unwrap_or(0.0),
                 );
 
                 println!(
@@ -258,6 +259,11 @@ fn main() -> anyhow::Result<()> {
             }
             if results.len() > 10 {
                 println!("... and {} more", results.len() - 10);
+            }
+        }
+        Commands::CityBy {query} => {
+            for item in  db.find_cities_by_substring(&query){
+                println!("Finding cities by query: {item:?}")
             }
         }
     }

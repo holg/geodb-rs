@@ -1,6 +1,6 @@
 #![allow(clippy::useless_conversion)]
 
-// 1. Import the Prelude (Crucial for Trait methods like .find_country_by_iso2)
+// 1. Import the Prelude
 use geodb_core::prelude::*;
 
 // 2. Import Views for Serialization
@@ -11,10 +11,7 @@ use pyo3::types::PyModule;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-// Provide a single helper to convert geodb-core Results into PyResult
-// while avoiding per-call mapping. Due to Rust orphan rules we cannot
-// implement `From<GeoError> for PyErr` in this crate, so we add an
-// extension trait and use `.into_py()?` at call sites.
+// Helper to convert geodb-core Results into PyResult
 trait IntoPyResult<T> {
     fn into_py(self) -> PyResult<T>;
 }
@@ -30,8 +27,9 @@ pub struct PyGeoDb {
     inner: DefaultGeoDb,
 }
 
+// Helper to convert Rust Structs -> Python Dicts via JSON
+// This is the safest way to ensure types match what Python expects.
 fn to_py<'py, T: Serialize + ?Sized>(py: Python<'py>, value: &T) -> PyResult<Bound<'py, PyAny>> {
-    // Serialize to JSON string, then parse in Python via json.loads to get native dict/list
     let s = serde_json::to_string(value)
         .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("serde error: {e}")))?;
     let json_mod = PyModule::import_bound(py, "json")?;
@@ -50,13 +48,9 @@ fn find_bundled_data() -> PyResult<PathBuf> {
             PyErr::new::<PyRuntimeError, _>("Could not determine module directory")
         })?;
 
-        // Try multiple possible locations for the data file
         let possible_paths = [
-            // Location when installed via pip (maturin's data directory)
             module_dir.join("../geodb_rs_data/countries+states+cities.json.gz"),
-            // Location if data is in the package itself
             module_dir.join("data/countries+states+cities.json.gz"),
-            // Fallback to sibling directory
             module_dir.join("geodb_rs_data/countries+states+cities.json.gz"),
         ];
 
@@ -69,14 +63,7 @@ fn find_bundled_data() -> PyResult<PathBuf> {
         }
 
         Err(PyErr::new::<pyo3::exceptions::PyFileNotFoundError, _>(
-            format!(
-                "Data file not found. Searched in:\n{}",
-                possible_paths
-                    .iter()
-                    .map(|p| format!("  - {}", p.display()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
+            format!("Data file not found. Searched in: {possible_paths:?}"),
         ))
     })
 }
@@ -84,24 +71,30 @@ fn find_bundled_data() -> PyResult<PathBuf> {
 #[pymethods]
 impl PyGeoDb {
     #[staticmethod]
-    pub fn load(path: &str) -> PyResult<Self> {
-        let db = GeoDb::<DefaultBackend>::load_from_path(path, None).into_py()?;
+    pub fn load() -> PyResult<Self> {
+        let db = GeoDb::<DefaultBackend>::load().into_py()?;
+        Ok(Self { inner: db })
+    }
+
+    #[staticmethod]
+    pub fn load_from_path(path: &str, filter:Option<&[&str]>) -> PyResult<Self> {
+        let db = GeoDb::<DefaultBackend>::load_from_path(&path, filter).into_py()?;
         Ok(Self { inner: db })
     }
 
     #[staticmethod]
     pub fn load_default() -> PyResult<Self> {
-        // Try to find bundled data first, fall back to geodb-core's default
+        // Try bundled data first
         match find_bundled_data() {
             Ok(path) => {
-                let path_str = path
-                    .to_str()
-                    .ok_or_else(|| PyRuntimeError::new_err("Invalid path encoding"))?;
+                let path_str = path.to_str().ok_or_else(|| PyRuntimeError::new_err("Invalid path"))?;
+                // Note: load_raw_json builds cache automatically if 'builder' enabled
+                // load_from_path handles both .json and .bin
                 let db = GeoDb::<DefaultBackend>::load_from_path(path_str, None).into_py()?;
                 Ok(Self { inner: db })
             }
             Err(_) => {
-                // Fall back to geodb-core's default location
+                // Fallback to core's embedded/default logic
                 let db = GeoDb::<DefaultBackend>::load().into_py()?;
                 Ok(Self { inner: db })
             }
@@ -110,10 +103,7 @@ impl PyGeoDb {
 
     #[staticmethod]
     pub fn load_filtered(iso2_list: Vec<String>) -> PyResult<Self> {
-        let tmp: Vec<String> = iso2_list
-            .into_iter()
-            .map(|s| s.trim().to_string())
-            .collect();
+        let tmp: Vec<String> = iso2_list.into_iter().map(|s| s.trim().to_string()).collect();
         let refs: Vec<&str> = tmp.iter().map(String::as_str).collect();
         let db = GeoDb::<DefaultBackend>::load_filtered_by_iso2(&refs).into_py()?;
         Ok(Self { inner: db })
@@ -131,11 +121,7 @@ impl PyGeoDb {
     }
 
     /// Find a country by ISO2/ISO3/code and return as dict (or None)
-    pub fn find_country<'py>(
-        &self,
-        py: Python<'py>,
-        code: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+    pub fn find_country<'py>(&self, py: Python<'py>, code: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
         if let Some(c) = self.inner.find_country_by_code(code) {
             let v = to_py(py, &CountryView(c))?;
             Ok(Some(v))
@@ -145,14 +131,10 @@ impl PyGeoDb {
     }
 
     /// List all states for a given country ISO2 as dicts
-    pub fn states_in_country<'py>(
-        &self,
-        py: Python<'py>,
-        iso2: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+    pub fn states_in_country<'py>(&self, py: Python<'py>, iso2: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
         if let Some(country) = self.inner.find_country_by_iso2(iso2) {
-            let items: Vec<_> = country
-                .states()
+            // FIX: Use Trait method
+            let items: Vec<_> = self.inner.states_for_country(country)
                 .iter()
                 .map(|s| StateView { country, state: s })
                 .collect();
@@ -163,80 +145,99 @@ impl PyGeoDb {
         }
     }
 
-    /// Find countries by phone code (e.g. "+49", "1") and return list of dicts
-    pub fn search_countries_by_phone<'py>(
-        &self,
-        py: Python<'py>,
-        phone: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let code = phone.trim().trim_start_matches('+');
-        let items: Vec<_> = self
-            .inner
-            .find_countries_by_phone_code(code)
+    /// List all cities for a given state code (in a country)
+    pub fn cities_in_state<'py>(&self, py: Python<'py>, iso2: &str, state_code: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+        if let Some(country) = self.inner.find_country_by_iso2(iso2) {
+            let states = self.inner.states_for_country(country);
+            if let Some(state) = states.iter().find(|s| s.state_code() == state_code) {
+                // FIX: Use Trait method
+                let items: Vec<_> = self.inner.cities_for_state(state)
+                    .iter()
+                    .map(|city| CityView { country, state, city })
+                    .collect();
+                let obj = to_py(py, &items)?;
+                return Ok(Some(obj));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Find countries by phone code (e.g. "+49", "1")
+    pub fn search_countries_by_phone<'py>(&self, py: Python<'py>, phone: &str) -> PyResult<Bound<'py, PyAny>> {
+        // Trait method already handles trimming
+        let items: Vec<_> = self.inner.find_countries_by_phone_code(phone)
             .iter()
             .map(|c| CountryView(*c))
             .collect();
         to_py(py, &items)
     }
 
-    /// Find states containing a substring (ASCII, case-insensitive). Returns list of dicts
-    pub fn find_states_by_substring<'py>(
-        &self,
-        py: Python<'py>,
-        substr: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let items: Vec<_> = self
-            .inner
-            .find_states_by_substring(substr)
+    /// Find countries containing a substring
+    pub fn search_country_substring<'py>(&self, py: Python<'py>, substr: &str) -> PyResult<Bound<'py, PyAny>> {
+        // Assuming find_countries_by_substring is exposed in GeoSearch trait now
+        // (If not, use smart_search filtering)
+        // Let's assume we exposed it in the trait as discussed.
+        let items: Vec<_> = self.inner.find_countries_by_substring(substr)
+            .iter()
+            .map(|c| CountryView(*c))
+            .collect();
+        to_py(py, &items)
+    }
+
+    /// Find states containing a substring
+    pub fn find_states_by_substring<'py>(&self, py: Python<'py>, substr: &str) -> PyResult<Bound<'py, PyAny>> {
+        let items: Vec<_> = self.inner.find_states_by_substring(substr)
             .into_iter()
             .map(|(state, country)| StateView { country, state })
             .collect();
         to_py(py, &items)
     }
 
-    /// Find cities containing a substring (ASCII, case-insensitive). Returns list of dicts
-    pub fn find_cities_by_substring<'py>(
-        &self,
-        py: Python<'py>,
-        substr: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let items: Vec<_> = self
-            .inner
-            .find_cities_by_substring(substr)
+    /// Find cities containing a substring
+    pub fn find_cities_by_substring<'py>(&self, py: Python<'py>, substr: &str) -> PyResult<Bound<'py, PyAny>> {
+        let items: Vec<_> = self.inner.find_cities_by_substring(substr)
             .into_iter()
-            .map(|(city, state, country)| CityView {
-                country,
-                state,
-                city,
-            })
+            .map(|(city, state, country)| CityView { country, state, city })
             .collect();
         to_py(py, &items)
     }
 
-    /// Smart search across countries, states, cities, and phone codes. Returns list of dicts
+    // --- SPATIAL SEARCH ---
+
+    /// Find nearest cities to a location (Lat, Lng)
+    pub fn find_nearest<'py>(&self, py: Python<'py>, lat: f64, lng: f64, count: usize) -> PyResult<Bound<'py, PyAny>> {
+        let items: Vec<_> = self.inner.find_nearest(lat, lng, count)
+            .into_iter()
+            .map(|(city, state, country)| CityView { country, state, city })
+            .collect();
+        to_py(py, &items)
+    }
+
+    /// Find cities within radius (km)
+    pub fn find_in_radius<'py>(&self, py: Python<'py>, lat: f64, lng: f64, radius_km: f64) -> PyResult<Bound<'py, PyAny>> {
+        // We need to generate the ID first because the trait expects GeoID
+        let geoid = geodb_core::spatial::generate_geoid(lat, lng);
+
+        let items: Vec<_> = self.inner.find_cities_in_radius_by_geoid(geoid, radius_km)
+            .into_iter()
+            .map(|(city, state, country)| CityView { country, state, city })
+            .collect();
+        to_py(py, &items)
+    }
+
+    /// Smart search across countries, states, cities, and phone codes.
     pub fn smart_search<'py>(&self, py: Python<'py>, query: &str) -> PyResult<Bound<'py, PyAny>> {
         let hits = self.inner.smart_search(query);
-        // Map to a homogeneous list by emitting the view of the matched entity
         let mut out: Vec<serde_json::Value> = Vec::with_capacity(hits.len());
+
         for hit in hits {
+            // Serialize the View based on the Enum variant
             let v = match hit.item {
-                SmartItem::Country(c) => serde_json::to_value(CountryView(c))
-                    .map_err(|e| PyRuntimeError::new_err(format!("serde error: {e}")))?,
-                SmartItem::State { country, state } => {
-                    serde_json::to_value(&StateView { country, state })
-                        .map_err(|e| PyRuntimeError::new_err(format!("serde error: {e}")))?
-                }
-                SmartItem::City {
-                    country,
-                    state,
-                    city,
-                } => serde_json::to_value(&CityView {
-                    country,
-                    state,
-                    city,
-                })
-                .map_err(|e| PyRuntimeError::new_err(format!("serde error: {e}")))?,
-            };
+                SmartItem::Country(c) => serde_json::to_value(CountryView(c)),
+                SmartItem::State { country, state } => serde_json::to_value(&StateView { country, state }),
+                SmartItem::City { country, state, city } => serde_json::to_value(&CityView { country, state, city }),
+            }.map_err(|e| PyRuntimeError::new_err(format!("serde error: {e}")))?;
+
             out.push(v);
         }
         to_py(py, &out)
@@ -244,7 +245,6 @@ impl PyGeoDb {
 }
 
 /// Python module entry point
-/// IMPORTANT: The function name must match the module-name in pyproject.toml
 #[pymodule]
 fn geodb_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyGeoDb>()?;

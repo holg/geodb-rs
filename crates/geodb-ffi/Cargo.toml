@@ -17,7 +17,8 @@ path = "uniffi-bindgen.rs"
 uniffi = { version = "0.30", features = ["cli"] }
 
 # Core Engine (Force "Turbo" mode: Flat + Gzip + Blobs)
-geodb-core = { path = "../geodb-core" }
+# Note: builder feature disabled for watchOS compatibility (ring crate doesn't support arm64_32)
+geodb-core = { path = "../geodb-core", default-features = false, features = ["json", "compact", "search_blobs"] }
 
 # Utilities for manual loading
 once_cell = {workspace = true}
