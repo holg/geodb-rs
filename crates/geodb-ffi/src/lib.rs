@@ -64,7 +64,7 @@ fn ensure_db_loaded() -> std::result::Result<(), FfiError> {
     match result {
         Ok(_) => Ok(()),
         Err(_) => Err(FfiError::Init {
-            message: "Panic during GeoDB initialization".into(),
+            msg: "Panic during GeoDB initialization".into(),
         }),
     }
 }

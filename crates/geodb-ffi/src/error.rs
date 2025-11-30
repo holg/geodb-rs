@@ -2,19 +2,21 @@
 use std::fmt;
 use std::io;
 
+// Note: field is named `msg` instead of `message` to avoid conflict
+// with Kotlin's Exception.message property (UniFFI bug workaround)
 #[derive(Debug, uniffi::Error)]
 pub enum FfiError {
-    Init { message: String },
-    Io { message: String },
-    Bincode { message: String },
+    Init { msg: String },
+    Io { msg: String },
+    Bincode { msg: String },
 }
 
 impl fmt::Display for FfiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Init { message } => write!(f, "Failed to initialize GeoDB: {message}"),
-            Self::Io { message } => write!(f, "IO Error: {message}"),
-            Self::Bincode { message } => write!(f, "Bincode Error: {message}"),
+            Self::Init { msg } => write!(f, "Failed to initialize GeoDB: {msg}"),
+            Self::Io { msg } => write!(f, "IO Error: {msg}"),
+            Self::Bincode { msg } => write!(f, "Bincode Error: {msg}"),
         }
     }
 }
@@ -22,7 +24,7 @@ impl fmt::Display for FfiError {
 impl From<io::Error> for FfiError {
     fn from(err: io::Error) -> Self {
         Self::Io {
-            message: err.to_string(),
+            msg: err.to_string(),
         }
     }
 }
@@ -30,7 +32,7 @@ impl From<io::Error> for FfiError {
 impl From<Box<bincode::ErrorKind>> for FfiError {
     fn from(err: Box<bincode::ErrorKind>) -> Self {
         Self::Bincode {
-            message: err.to_string(),
+            msg: err.to_string(),
         }
     }
 }

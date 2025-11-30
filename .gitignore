@@ -1,10 +1,8 @@
 # Rust build artifacts
 /target/
+**/target/
 **/*.rs.bk
 *.pdb
-
-# Cargo lock for libraries (keep for binaries)
-# Cargo.lock
 
 # IDE
 .vscode/
@@ -20,20 +18,12 @@ Thumbs.db
 # Testing
 *.profraw
 *.profdata
-# GeoDB cache binaries – ignore all generated caches…
+
+# GeoDB cache binaries – ignore all generated caches
 crates/geodb-core/data/countries+states+cities.json.gz.*.bin
-# …but keep the canonical ALL cache in git (needed for WASM build)
+# Keep the canonical ALL cache (needed for WASM build)
 !crates/geodb-core/data/countries+states+cities.json.gz.ALL.bin
 !crates/geodb-core/data/countries+states+cities.json.gz
-!crates/geodb-wasm/dist/*.js
-!crates/geodb-wasm/dist/*.wasm
-!crates/geodb-wasm/dist/*.html
-
-# Local blog content (not tracked)
-blog/
-
-# Local helper scripts (not tracked)
-scripts/
 
 # Python cache / bytecode
 __pycache__/
@@ -41,31 +31,57 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Local venvs
+# Python venvs
 .venv/
 venv/
-.env_py312/
-target/
+.env_py*/
+
 # Python / maturin artifacts
 dist/*.tar.gz
 geodb-py-wheels/
 
-# WASM demo output (runtime build, not the committed one under crates/geodb-wasm/dist if you decide to keep that checked in)
-#crates/geodb-wasm/
-# tmp, to be removed after refactor
-/crates/geodb-core-before-refactor/
-countries+states+cities.json
-crates/geodb-ffi/debug
-crates/geodb-ffi/generated
-crates/geodb-ffi/GeodbFfi.xcframework
+# Rust FFI build artifacts
+crates/geodb-ffi/target/
+crates/geodb-ffi/debug/
+crates/geodb-ffi/generated/
+crates/geodb-ffi/generated-kotlin/
 crates/geodb-ffi/.rustc_info.json
-crates/geodb-ffi/apple_bindings.sh
-crates/geodb-ffi/build.bak
-crates/geodb-ffi/ffi_to_ios.sh
-crates/geodb-ffi/geodb.podspec
-crates/geodb-ffi/geodb_rs_data
-crates/geodb-ffi/Podfile
-crates/geodb-ffi/uniffi-bindgen.rs
-crates/geodb-ffi/.swiftpm
-crates/SPM-GeoDB-ffi/.build
-crates/SPM-GeoDB-ffi/.swiftpm
+crates/geodb-ffi/.swiftpm/
+
+# Flutter plugin (not included in this release)
+geodb_flutter/
+
+# GeoDB-App build artifacts
+GeoDB-App/android-app/.gradle/
+GeoDB-App/android-app/app/build/
+GeoDB-App/android-app/build/
+GeoDB-App/android-app/local.properties
+GeoDB-App/spm/.build/
+GeoDB-App/spm/.swiftpm/
+GeoDB-App/GeoDB/DerivedData/
+
+# Xcode
+*.xcuserdatad
+*.xcuserdatad/
+xcuserdata/
+*.xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Android
+*.apk
+*.aab
+*.jks
+!releases/android/*.apk
+
+# Keep release binaries
+!releases/**
+
+# Temporary files
+*.tmp
+*.temp
+*.log

@@ -1,5 +1,0 @@
-framework module GeodbFfi {
-    umbrella header "geodb_ffiFFI.h"
-    export *
-    module * { export * }
-}
