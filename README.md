@@ -1,14 +1,28 @@
 # geodb-rs
 
+**Author:** [Holger Trahe](https://github.com/holg) | **License:** MIT (Code) / CC-BY-4.0 (Data)
+
 ![CI](https://github.com/holg/geodb-rs/actions/workflows/ci.yml/badge.svg)
 [![Build WASM Demo](https://github.com/holg/geodb-rs/actions/workflows/wasm-build.yml/badge.svg)](https://github.com/holg/geodb-rs/actions/workflows/wasm-build.yml)
-
-[![Crates.io](https://img.shields.io/crates/v/geodb-core.svg)](https://crates.io/crates/geodb-core)
-[![Documentation](https://docs.rs/geodb-core/badge.svg)](https://docs.rs/geodb-core)
-
-[![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
 [![Publish geodb_rs to PyPI](https://github.com/holg/geodb-rs/actions/workflows/pypi.yml/badge.svg)](https://github.com/holg/geodb-rs/actions/workflows/pypi.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Data: CC-BY-4.0](https://img.shields.io/badge/Data-CC--BY--4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
+
+### Crates.io
+[![geodb-core](https://img.shields.io/crates/v/geodb-core.svg?label=geodb-core)](https://crates.io/crates/geodb-core)
+[![geodb-cli](https://img.shields.io/crates/v/geodb-cli.svg?label=geodb-cli)](https://crates.io/crates/geodb-cli)
+[![geodb-wasm](https://img.shields.io/crates/v/geodb-wasm.svg?label=geodb-wasm)](https://crates.io/crates/geodb-wasm)
+[![docs.rs](https://docs.rs/geodb-core/badge.svg)](https://docs.rs/geodb-core)
+[![Crates.io Downloads](https://img.shields.io/crates/d/geodb-core.svg?label=downloads)](https://crates.io/crates/geodb-core)
+
+### PyPI
+[![PyPI](https://img.shields.io/pypi/v/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/geodb-rs.svg?label=downloads)](https://pypi.org/project/geodb-rs/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
+
+### App Store
+[![iOS](https://img.shields.io/badge/iOS-App%20Store-blue?logo=apple)](https://apps.apple.com/app/geodb-rs/id6755972245)
+[![TestFlight](https://img.shields.io/badge/TestFlight-Beta-orange?logo=apple)](https://testflight.apple.com/join/TuFejJEq)
 
 A high-performance, pure-Rust geographic database with countries, states/regions, cities, aliases, phone codes, currencies, timezones, and multi-platform support including WebAssembly, iOS, macOS, watchOS, and Android.
 
@@ -285,8 +299,9 @@ cargo install trunk
 trunk serve
 ```
 
-Live demo:
-**https://trahe.eu/geodb-rs.html**
+Live demos:
+- **Search Demo**: https://trahe.eu/geodb-rs.html
+- **Performance Benchmark**: https://trahe.eu/geodb-bench.html
 
 ---
 
@@ -354,11 +369,22 @@ print(db.stats())  # (countries, states, cities)
 
 The repository includes native apps for Apple and Android platforms:
 
-### iOS / macOS / watchOS (Swift)
+### App Store & Downloads
+
+| Platform | Status | Link |
+|----------|--------|------|
+| **iOS** | Available | [App Store](https://apps.apple.com/app/geodb-rs/id6755972245) |
+| **macOS** | In Review | Coming soon |
+| **tvOS** | In Review | Coming soon |
+| **watchOS** | Available | Included with iOS app |
+| **TestFlight** | Available | [Join Beta](https://testflight.apple.com/join/TuFejJEq) |
+
+### iOS / macOS / watchOS / tvOS (Swift)
 
 Located in `GeoDB-App/GeoDB/` - a universal Xcode project supporting:
-- **macOS** app
-- **iOS** app
+- **iOS** app - [Available on App Store](https://apps.apple.com/app/geodb-rs/id6755972245)
+- **macOS** app - In Apple Review
+- **tvOS** app - In Apple Review
 - **watchOS** app (including Apple Watch Ultra support with arm64_32)
 
 Uses the `GeodbKit` Swift package via SPM.
@@ -476,13 +502,25 @@ Attribution is required if you redistribute or use the dataset.
 
 # Links
 
-- Repo: https://github.com/holg/geodb-rs
+### Source & Documentation
+- GitHub: https://github.com/holg/geodb-rs
 - Rust docs:
   - geodb-core: https://docs.rs/geodb-core
   - geodb-cli: https://docs.rs/geodb-cli
   - geodb-wasm: https://docs.rs/geodb-wasm
-- Crates.io: https://crates.io/crates/geodb-core
+
+### Package Registries
+- Crates.io: https://crates.io/search?q=geodb
 - PyPI (Python bindings): https://pypi.org/project/geodb-rs/
+
+### Live Demos
+- WebAssembly Demo: https://trahe.eu/geodb-rs.html
+- Performance Benchmark: https://trahe.eu/geodb-bench.html
+
+### App Downloads
+- iOS App Store: https://apps.apple.com/app/geodb-rs/id6755972245
+- TestFlight Beta: https://testflight.apple.com/join/TuFejJEq
+- Android APKs: See `releases/android/` folder
 
 ---
 

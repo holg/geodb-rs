@@ -59,6 +59,10 @@ GeoDB-App/android-app/local.properties
 GeoDB-App/spm/.build/
 GeoDB-App/spm/.swiftpm/
 GeoDB-App/GeoDB/DerivedData/
+GeoDB-App/GeoDB-App/.build/
+GeoDB-App/GeoDB-App/.swiftpm/
+GeoDB-App/SPM\ GeoDBKit/.build/
+GeoDB-App/SPM\ GeoDBKit/.swiftpm/
 
 # Xcode
 *.xcuserdatad
