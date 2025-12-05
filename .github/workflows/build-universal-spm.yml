@@ -44,7 +44,7 @@ jobs:
           cargo install uniffi-bindgen || echo "uniffi-bindgen already installed"
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -161,7 +161,7 @@ jobs:
             releases/checksums.txt
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: spm-package-${{ steps.version.outputs.VERSION }}
           path: |
