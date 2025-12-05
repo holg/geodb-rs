@@ -1,0 +1,54 @@
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "GeodbKit",
+    platforms: [
+        .iOS(.v13),
+        .macOS(.v13),
+        .tvOS(.v13),
+        .watchOS(.v6),
+        .visionOS(.v1),
+    ],
+    products: [
+        .library(
+            name: "GeodbKit",
+            targets: ["GeodbKit"]
+        ),
+    ],
+    targets: [
+        // Binary FFI target - the framework module name is GeodbFfi
+        //
+        // For LOCAL DEVELOPMENT (building from source):
+        // Use this version with path:
+        /*
+        .binaryTarget(
+            name: "GeodbFfi",
+            path: "GeodbFfi.xcframework"
+        ),
+        */
+
+        // For GITHUB RELEASE (using pre-built binaries):
+        // Use this version with url and checksum:
+        // Replace VERSION, REPO_URL, and CHECKSUM with actual values
+        .binaryTarget(
+            name: "GeodbFfi",
+            url: "https://github.com/YOUR_ORG/geodb-rs/releases/download/vVERSION/GeodbKit-vVERSION-universal.zip",
+            checksum: "CHECKSUM_FROM_RELEASE"
+        ),
+
+        // Swift bindings target
+        .target(
+            name: "GeodbKit",
+            dependencies: ["GeodbFfi"],
+            path: "Sources/GeodbKit"
+        ),
+
+        // Tests
+        .testTarget(
+            name: "GeodbFfiTests",
+            dependencies: ["GeodbKit"],
+            path: "Tests/GeodbFfiTests"
+        ),
+    ]
+)

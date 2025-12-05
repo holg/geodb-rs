@@ -1,0 +1,31 @@
+# Swift Package Manager Build Artifacts
+# We want to keep: Sources, Tests, Package.swift
+# We want to ignore: XCFrameworks (too large, only in GitHub Releases), build directories
+
+# XCFrameworks - Only distributed via GitHub Releases
+# These are too large (>1GB) for git repository
+# Users get them automatically from GitHub releases via Package.swift
+*.xcframework/
+
+# Swift build directory
+.build/
+
+# Swift Package Manager
+.swiftpm/
+
+# Xcode project artifacts (if SPM generates them)
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Backup files from our scripts
+*.backup
+
+# macOS
+.DS_Store
+
+# Generated documentation
+.docs/
+
+# Swift test results
+.test-results/

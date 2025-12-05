@@ -1,0 +1,1130 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		21DB893D2EE35A2C009FB3C1 /* GeodbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 21DB893C2EE35A2C009FB3C1 /* GeodbKit */; };
+		21FFACC82EE357AF001B4E94 /* GeodbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 21FFACC72EE357AF001B4E94 /* GeodbKit */; };
+		21FFACCA2EE358C6001B4E94 /* GeodbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 21FFACC92EE358C6001B4E94 /* GeodbKit */; };
+		21WATCH012EDFABC100000001 /* GeoDb Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2119A0D62EDA2200009A4814 /* GeoDb Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2119A0E62EDA2201009A4814 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 21F5D4D72ED9FAE50070BF4C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2119A0D52EDA2200009A4814;
+			remoteInfo = "GeoDb Watch App";
+		};
+		2119A0F02EDA2201009A4814 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 21F5D4D72ED9FAE50070BF4C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2119A0D52EDA2200009A4814;
+			remoteInfo = "GeoDb Watch App";
+		};
+		21F5D4F22ED9FAE70070BF4C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 21F5D4D72ED9FAE50070BF4C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 21F5D4DE2ED9FAE50070BF4C;
+			remoteInfo = GeoDB;
+		};
+		21F5D4FC2ED9FAE70070BF4C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 21F5D4D72ED9FAE50070BF4C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 21F5D4DE2ED9FAE50070BF4C;
+			remoteInfo = GeoDB;
+		};
+		21WATCH022EDFABC100000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 21F5D4D72ED9FAE50070BF4C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2119A0D52EDA2200009A4814;
+			remoteInfo = "GeoDb Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		21WATCH042EDFABC100000004 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				21WATCH012EDFABC100000001 /* GeoDb Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		2119A0D62EDA2200009A4814 /* GeoDb Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "GeoDb Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		2119A0E52EDA2201009A4814 /* GeoDb Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GeoDb Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		2119A0EF2EDA2201009A4814 /* GeoDb Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GeoDb Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		2189BCDB2EE33FE000E3AE2A /* GeoDB.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = GeoDB.xcodeproj; sourceTree = "<group>"; };
+		2189BD732EE3419400E3AE2A /* GeoDB.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = GeoDB.xcodeproj; sourceTree = "<group>"; };
+		21F5D4DF2ED9FAE50070BF4C /* GeoDB.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GeoDB.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		21F5D4F12ED9FAE70070BF4C /* GeoDBTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GeoDBTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		21F5D4FB2ED9FAE70070BF4C /* GeoDBUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GeoDBUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		2119A0DA2EDA2200009A4814 /* GeoDb Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "GeoDb Watch App";
+			sourceTree = "<group>";
+		};
+		2119A0E82EDA2201009A4814 /* GeoDb Watch AppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "GeoDb Watch AppTests";
+			sourceTree = "<group>";
+		};
+		2119A0F22EDA2201009A4814 /* GeoDb Watch AppUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "GeoDb Watch AppUITests";
+			sourceTree = "<group>";
+		};
+		21F5D4F42ED9FAE70070BF4C /* GeoDBTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = GeoDBTests;
+			sourceTree = "<group>";
+		};
+		21F5D4FE2ED9FAE70070BF4C /* GeoDBUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = GeoDBUITests;
+			sourceTree = "<group>";
+		};
+		21TVOS0012EE0000000000001 /* GeoDBtvOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = GeoDBtvOS;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2119A0D32EDA2200009A4814 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				21DB893D2EE35A2C009FB3C1 /* GeodbKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2119A0E22EDA2201009A4814 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2119A0EC2EDA2201009A4814 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4DC2ED9FAE50070BF4C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				21FFACC82EE357AF001B4E94 /* GeodbKit in Frameworks */,
+				21FFACCA2EE358C6001B4E94 /* GeodbKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4EE2ED9FAE70070BF4C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4F82ED9FAE70070BF4C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2119A1252EDA2AB1009A4814 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		2189BCE02EE33FE000E3AE2A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		2189BD782EE3419400E3AE2A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		21F5D4D62ED9FAE50070BF4C = {
+			isa = PBXGroup;
+			children = (
+				21TVOS0012EE0000000000001 /* GeoDBtvOS */,
+				21F5D4F42ED9FAE70070BF4C /* GeoDBTests */,
+				21F5D4FE2ED9FAE70070BF4C /* GeoDBUITests */,
+				2119A0DA2EDA2200009A4814 /* GeoDb Watch App */,
+				2119A0E82EDA2201009A4814 /* GeoDb Watch AppTests */,
+				2119A0F22EDA2201009A4814 /* GeoDb Watch AppUITests */,
+				2119A1252EDA2AB1009A4814 /* Frameworks */,
+				21F5D4E02ED9FAE50070BF4C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		21F5D4E02ED9FAE50070BF4C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				21F5D4DF2ED9FAE50070BF4C /* GeoDB.app */,
+				21F5D4F12ED9FAE70070BF4C /* GeoDBTests.xctest */,
+				21F5D4FB2ED9FAE70070BF4C /* GeoDBUITests.xctest */,
+				2119A0D62EDA2200009A4814 /* GeoDb Watch App.app */,
+				2119A0E52EDA2201009A4814 /* GeoDb Watch AppTests.xctest */,
+				2119A0EF2EDA2201009A4814 /* GeoDb Watch AppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2119A0D52EDA2200009A4814 /* GeoDb Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2119A1002EDA2201009A4814 /* Build configuration list for PBXNativeTarget "GeoDb Watch App" */;
+			buildPhases = (
+				2119A0D22EDA2200009A4814 /* Sources */,
+				2119A0D32EDA2200009A4814 /* Frameworks */,
+				2119A0D42EDA2200009A4814 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				2119A0DA2EDA2200009A4814 /* GeoDb Watch App */,
+			);
+			name = "GeoDb Watch App";
+			packageProductDependencies = (
+				21DB893C2EE35A2C009FB3C1 /* GeodbKit */,
+			);
+			productName = "GeoDb Watch App";
+			productReference = 2119A0D62EDA2200009A4814 /* GeoDb Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2119A0E42EDA2201009A4814 /* GeoDb Watch AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2119A1022EDA2201009A4814 /* Build configuration list for PBXNativeTarget "GeoDb Watch AppTests" */;
+			buildPhases = (
+				2119A0E12EDA2201009A4814 /* Sources */,
+				2119A0E22EDA2201009A4814 /* Frameworks */,
+				2119A0E32EDA2201009A4814 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2119A0E72EDA2201009A4814 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				2119A0E82EDA2201009A4814 /* GeoDb Watch AppTests */,
+			);
+			name = "GeoDb Watch AppTests";
+			packageProductDependencies = (
+			);
+			productName = "GeoDb Watch AppTests";
+			productReference = 2119A0E52EDA2201009A4814 /* GeoDb Watch AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		2119A0EE2EDA2201009A4814 /* GeoDb Watch AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2119A1032EDA2201009A4814 /* Build configuration list for PBXNativeTarget "GeoDb Watch AppUITests" */;
+			buildPhases = (
+				2119A0EB2EDA2201009A4814 /* Sources */,
+				2119A0EC2EDA2201009A4814 /* Frameworks */,
+				2119A0ED2EDA2201009A4814 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2119A0F12EDA2201009A4814 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				2119A0F22EDA2201009A4814 /* GeoDb Watch AppUITests */,
+			);
+			name = "GeoDb Watch AppUITests";
+			packageProductDependencies = (
+			);
+			productName = "GeoDb Watch AppUITests";
+			productReference = 2119A0EF2EDA2201009A4814 /* GeoDb Watch AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		21F5D4DE2ED9FAE50070BF4C /* GeoDB */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 21F5D5052ED9FAE70070BF4C /* Build configuration list for PBXNativeTarget "GeoDB" */;
+			buildPhases = (
+				21F5D4DB2ED9FAE50070BF4C /* Sources */,
+				21F5D4DC2ED9FAE50070BF4C /* Frameworks */,
+				21F5D4DD2ED9FAE50070BF4C /* Resources */,
+				21WATCH042EDFABC100000004 /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				21WATCH032EDFABC100000003 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				21TVOS0012EE0000000000001 /* GeoDBtvOS */,
+			);
+			name = GeoDB;
+			packageProductDependencies = (
+				21FFACC72EE357AF001B4E94 /* GeodbKit */,
+				21FFACC92EE358C6001B4E94 /* GeodbKit */,
+			);
+			productName = GeoDB;
+			productReference = 21F5D4DF2ED9FAE50070BF4C /* GeoDB.app */;
+			productType = "com.apple.product-type.application";
+		};
+		21F5D4F02ED9FAE70070BF4C /* GeoDBTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 21F5D5082ED9FAE70070BF4C /* Build configuration list for PBXNativeTarget "GeoDBTests" */;
+			buildPhases = (
+				21F5D4ED2ED9FAE70070BF4C /* Sources */,
+				21F5D4EE2ED9FAE70070BF4C /* Frameworks */,
+				21F5D4EF2ED9FAE70070BF4C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				21F5D4F32ED9FAE70070BF4C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				21F5D4F42ED9FAE70070BF4C /* GeoDBTests */,
+			);
+			name = GeoDBTests;
+			packageProductDependencies = (
+			);
+			productName = GeoDBTests;
+			productReference = 21F5D4F12ED9FAE70070BF4C /* GeoDBTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		21F5D4FA2ED9FAE70070BF4C /* GeoDBUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 21F5D50B2ED9FAE70070BF4C /* Build configuration list for PBXNativeTarget "GeoDBUITests" */;
+			buildPhases = (
+				21F5D4F72ED9FAE70070BF4C /* Sources */,
+				21F5D4F82ED9FAE70070BF4C /* Frameworks */,
+				21F5D4F92ED9FAE70070BF4C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				21F5D4FD2ED9FAE70070BF4C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				21F5D4FE2ED9FAE70070BF4C /* GeoDBUITests */,
+			);
+			name = GeoDBUITests;
+			packageProductDependencies = (
+			);
+			productName = GeoDBUITests;
+			productReference = 21F5D4FB2ED9FAE70070BF4C /* GeoDBUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		21F5D4D72ED9FAE50070BF4C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2610;
+				LastUpgradeCheck = 2610;
+				TargetAttributes = {
+					2119A0D52EDA2200009A4814 = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
+					2119A0E42EDA2201009A4814 = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = 2119A0D52EDA2200009A4814;
+					};
+					2119A0EE2EDA2201009A4814 = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = 2119A0D52EDA2200009A4814;
+					};
+					21F5D4DE2ED9FAE50070BF4C = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
+					21F5D4F02ED9FAE70070BF4C = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = 21F5D4DE2ED9FAE50070BF4C;
+					};
+					21F5D4FA2ED9FAE70070BF4C = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = 21F5D4DE2ED9FAE50070BF4C;
+					};
+				};
+			};
+			buildConfigurationList = 21F5D4DA2ED9FAE50070BF4C /* Build configuration list for PBXProject "GeoDB" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 21F5D4D62ED9FAE50070BF4C;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				21FFACC62EE357AF001B4E94 /* XCLocalSwiftPackageReference "../SPM-GeoDBKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 21F5D4E02ED9FAE50070BF4C /* Products */;
+			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = 2189BCE02EE33FE000E3AE2A /* Products */;
+					ProjectRef = 2189BCDB2EE33FE000E3AE2A /* GeoDB.xcodeproj */;
+				},
+				{
+					ProductGroup = 2189BD782EE3419400E3AE2A /* Products */;
+					ProjectRef = 2189BD732EE3419400E3AE2A /* GeoDB.xcodeproj */;
+				},
+			);
+			projectRoot = "";
+			targets = (
+				21F5D4DE2ED9FAE50070BF4C /* GeoDB */,
+				21F5D4F02ED9FAE70070BF4C /* GeoDBTests */,
+				21F5D4FA2ED9FAE70070BF4C /* GeoDBUITests */,
+				2119A0D52EDA2200009A4814 /* GeoDb Watch App */,
+				2119A0E42EDA2201009A4814 /* GeoDb Watch AppTests */,
+				2119A0EE2EDA2201009A4814 /* GeoDb Watch AppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		2119A0D42EDA2200009A4814 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2119A0E32EDA2201009A4814 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2119A0ED2EDA2201009A4814 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4DD2ED9FAE50070BF4C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4EF2ED9FAE70070BF4C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4F92ED9FAE70070BF4C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2119A0D22EDA2200009A4814 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2119A0E12EDA2201009A4814 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2119A0EB2EDA2201009A4814 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4DB2ED9FAE50070BF4C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4ED2ED9FAE70070BF4C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		21F5D4F72ED9FAE70070BF4C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		2119A0E72EDA2201009A4814 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2119A0D52EDA2200009A4814 /* GeoDb Watch App */;
+			targetProxy = 2119A0E62EDA2201009A4814 /* PBXContainerItemProxy */;
+		};
+		2119A0F12EDA2201009A4814 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2119A0D52EDA2200009A4814 /* GeoDb Watch App */;
+			targetProxy = 2119A0F02EDA2201009A4814 /* PBXContainerItemProxy */;
+		};
+		21F5D4F32ED9FAE70070BF4C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 21F5D4DE2ED9FAE50070BF4C /* GeoDB */;
+			targetProxy = 21F5D4F22ED9FAE70070BF4C /* PBXContainerItemProxy */;
+		};
+		21F5D4FD2ED9FAE70070BF4C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 21F5D4DE2ED9FAE50070BF4C /* GeoDB */;
+			targetProxy = 21F5D4FC2ED9FAE70070BF4C /* PBXContainerItemProxy */;
+		};
+		21WATCH032EDFABC100000003 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 2119A0D52EDA2200009A4814 /* GeoDb Watch App */;
+			targetProxy = 21WATCH022EDFABC100000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2119A0FA2EDA2201009A4814 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = GeoDb;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = eu.trahe.geodb;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 9.0;
+			};
+			name = Debug;
+		};
+		2119A0FB2EDA2201009A4814 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = GeoDb;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = eu.trahe.geodb;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 9.0;
+			};
+			name = Release;
+		};
+		2119A0FC2EDA2201009A4814 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GeoDb Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/GeoDb Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 9.0;
+			};
+			name = Debug;
+		};
+		2119A0FD2EDA2201009A4814 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GeoDb Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/GeoDb Watch App";
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 9.0;
+			};
+			name = Release;
+		};
+		2119A0FE2EDA2201009A4814 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "GeoDb Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 9.0;
+			};
+			name = Debug;
+		};
+		2119A0FF2EDA2201009A4814 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "GeoDb Watch App";
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 9.0;
+			};
+			name = Release;
+		};
+		21F5D5032ED9FAE70070BF4C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		21F5D5042ED9FAE70070BF4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		21F5D5062ED9FAE70070BF4C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=appletvos*]" = "App Icon & Top Shelf Image";
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=appletvsimulator*]" = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 15;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,3,7";
+				TVOS_DEPLOYMENT_TARGET = 16.0;
+				XROS_DEPLOYMENT_TARGET = 1.3;
+			};
+			name = Debug;
+		};
+		21F5D5072ED9FAE70070BF4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=appletvos*]" = "App Icon & Top Shelf Image";
+				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=appletvsimulator*]" = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 15;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,3,7";
+				TVOS_DEPLOYMENT_TARGET = 16.0;
+				XROS_DEPLOYMENT_TARGET = 1.3;
+			};
+			name = Release;
+		};
+		21F5D5092ED9FAE70070BF4C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GeoDB.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/GeoDB";
+				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Debug;
+		};
+		21F5D50A2ED9FAE70070BF4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GeoDB.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/GeoDB";
+				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Release;
+		};
+		21F5D50C2ED9FAE70070BF4C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = GeoDB;
+				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Debug;
+		};
+		21F5D50D2ED9FAE70070BF4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 13;
+				DEVELOPMENT_TEAM = U4GT5CZ7J7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = GeoDB;
+				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2119A1002EDA2201009A4814 /* Build configuration list for PBXNativeTarget "GeoDb Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2119A0FA2EDA2201009A4814 /* Debug */,
+				2119A0FB2EDA2201009A4814 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2119A1022EDA2201009A4814 /* Build configuration list for PBXNativeTarget "GeoDb Watch AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2119A0FC2EDA2201009A4814 /* Debug */,
+				2119A0FD2EDA2201009A4814 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2119A1032EDA2201009A4814 /* Build configuration list for PBXNativeTarget "GeoDb Watch AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2119A0FE2EDA2201009A4814 /* Debug */,
+				2119A0FF2EDA2201009A4814 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		21F5D4DA2ED9FAE50070BF4C /* Build configuration list for PBXProject "GeoDB" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				21F5D5032ED9FAE70070BF4C /* Debug */,
+				21F5D5042ED9FAE70070BF4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		21F5D5052ED9FAE70070BF4C /* Build configuration list for PBXNativeTarget "GeoDB" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				21F5D5062ED9FAE70070BF4C /* Debug */,
+				21F5D5072ED9FAE70070BF4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		21F5D5082ED9FAE70070BF4C /* Build configuration list for PBXNativeTarget "GeoDBTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				21F5D5092ED9FAE70070BF4C /* Debug */,
+				21F5D50A2ED9FAE70070BF4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		21F5D50B2ED9FAE70070BF4C /* Build configuration list for PBXNativeTarget "GeoDBUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				21F5D50C2ED9FAE70070BF4C /* Debug */,
+				21F5D50D2ED9FAE70070BF4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		21FFACC62EE357AF001B4E94 /* XCLocalSwiftPackageReference "../SPM-GeoDBKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../SPM-GeoDBKit";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		21DB893C2EE35A2C009FB3C1 /* GeodbKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GeodbKit;
+		};
+		21FFACC72EE357AF001B4E94 /* GeodbKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GeodbKit;
+		};
+		21FFACC92EE358C6001B4E94 /* GeodbKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GeodbKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 21F5D4D72ED9FAE50070BF4C /* Project object */;
+}

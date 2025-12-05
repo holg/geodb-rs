@@ -2,8 +2,10 @@
 /target/
 **/target/
 **/*.rs.bk
+**/.build
+**/.swiftpm
 *.pdb
-
+**/.xcframework
 # IDE
 .vscode/
 .idea/
@@ -64,17 +66,45 @@ GeoDB-App/GeoDB-App/.swiftpm/
 GeoDB-App/SPM\ GeoDBKit/.build/
 GeoDB-App/SPM\ GeoDBKit/.swiftpm/
 
-# Xcode
+# Xcode - User settings and build artifacts
 *.xcuserdatad
 *.xcuserdatad/
 xcuserdata/
 *.xcuserdata/
 *.xcworkspace/xcuserdata/
+*.xcuserstate
 DerivedData/
 *.hmap
 *.ipa
 *.dSYM.zip
 *.dSYM
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.xcarchive
+build/
+
+# Xcode - Sensitive files (GeoDB-App specific)
+GeoDB-App/.env
+GeoDB-App/.env.local
+GeoDB-App/.env.*.local
+GeoDB-App/Configuration/Development.xcconfig
+GeoDB-App/**/*.mobileprovision
+GeoDB-App/**/*.provisionprofile
+GeoDB-App/**/*.p12
+GeoDB-App/**/*.cer
+GeoDB-App/**/*.certSigningRequest
+GeoDB-App/GoogleService-Info.plist
+GeoDB-App/google-services.json
+GeoDB-App/.firebase/
 
 # Android
 *.apk
@@ -89,3 +119,4 @@ DerivedData/
 *.tmp
 *.temp
 *.log
+GeoDB-Apps/SPM-GeoDBKit/.build
