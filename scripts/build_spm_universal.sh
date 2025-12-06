@@ -66,6 +66,32 @@ fi
 rm -rf "$TEMP_BUILD"
 mkdir -p "$TEMP_BUILD"
 
+# Step 0: Download fresh data (optional but recommended)
+step "Checking embedded data..."
+DATA_FILE="$FFI_CRATE/geodb_rs_data/geodb.flat.comp.blobs.bin"
+if [ -f "$DATA_FILE" ]; then
+    DATA_AGE=$(( ($(date +%s) - $(stat -f %m "$DATA_FILE")) / 86400 ))
+    echo "Current data is $DATA_AGE days old"
+    if [ $DATA_AGE -gt 30 ]; then
+        echo -e "${YELLOW}Warning: Data is over 30 days old${NC}"
+        echo "Consider updating data before release:"
+        echo "  cd crates/geodb-core && cargo run --example download_and_build"
+        echo ""
+        read -p "Continue with old data? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Aborted. Please update data first."
+            exit 0
+        fi
+    else
+        echo -e "${GREEN}✓ Data is recent${NC}"
+    fi
+else
+    echo -e "${RED}Error: Embedded data not found at $DATA_FILE${NC}"
+    echo "Run: cd crates/geodb-core && cargo run --example download_and_build"
+    exit 1
+fi
+
 # Step 1: Build Rust for ALL targets in BOTH profiles
 step "Building Rust libraries (debug + release)..."
 
@@ -96,14 +122,14 @@ build_target "x86_64-apple-darwin" "stable" "macOS Intel"
 build_target "aarch64-apple-ios" "stable" "iOS device"
 build_target "aarch64-apple-ios-sim" "stable" "iOS simulator"
 
-# tvOS (requires nightly)
-build_target "aarch64-apple-tvos" "nightly" "tvOS device"
-build_target "aarch64-apple-tvos-sim" "nightly" "tvOS simulator"
+# tvOS (requires nightly) - DISABLED: components unavailable since 2025-11-14
+# build_target "aarch64-apple-tvos" "nightly" "tvOS device"
+# build_target "aarch64-apple-tvos-sim" "nightly" "tvOS simulator"
 
-# watchOS (requires nightly)
-build_target "aarch64-apple-watchos" "nightly" "watchOS arm64"
-build_target "arm64_32-apple-watchos" "nightly" "watchOS arm64_32"
-build_target "aarch64-apple-watchos-sim" "nightly" "watchOS simulator"
+# watchOS (requires nightly) - DISABLED: components unavailable since 2025-11-14
+# build_target "aarch64-apple-watchos" "nightly" "watchOS arm64"
+# build_target "arm64_32-apple-watchos" "nightly" "watchOS arm64_32"
+# build_target "aarch64-apple-watchos-sim" "nightly" "watchOS simulator"
 
 # visionOS (if targets are installed - optional)
 if rustup target list --installed | grep -q "aarch64-apple-visionos"; then
@@ -304,39 +330,39 @@ for profile in debug release; do
         "$TEMP_BUILD/$profile/macos-arm64_x86_64" \
         "13.0"
 
-    # tvOS
-    create_framework "$profile" "tvos-device" \
-        "$TARGET_DIR/aarch64-apple-tvos/$PROFILE_DIR/libgeodb_ffi.a" \
-        "$FFI_CRATE/generated" \
-        "$TEMP_BUILD/$profile/tvos-arm64" \
-        "13.0"
+    # tvOS - DISABLED: components unavailable
+    # create_framework "$profile" "tvos-device" \
+    #     "$TARGET_DIR/aarch64-apple-tvos/$PROFILE_DIR/libgeodb_ffi.a" \
+    #     "$FFI_CRATE/generated" \
+    #     "$TEMP_BUILD/$profile/tvos-arm64" \
+    #     "13.0"
 
-    create_framework "$profile" "tvos-simulator" \
-        "$TARGET_DIR/aarch64-apple-tvos-sim/$PROFILE_DIR/libgeodb_ffi.a" \
-        "$FFI_CRATE/generated" \
-        "$TEMP_BUILD/$profile/tvos-arm64-simulator" \
-        "13.0"
+    # create_framework "$profile" "tvos-simulator" \
+    #     "$TARGET_DIR/aarch64-apple-tvos-sim/$PROFILE_DIR/libgeodb_ffi.a" \
+    #     "$FFI_CRATE/generated" \
+    #     "$TEMP_BUILD/$profile/tvos-arm64-simulator" \
+    #     "13.0"
 
-    # watchOS (fat binary with arm64 + arm64_32)
-    info "Creating watchOS fat binary ($profile)..."
-    WATCHOS_FAT_DIR="$TARGET_DIR/watchos-fat-$profile"
-    mkdir -p "$WATCHOS_FAT_DIR"
-    lipo -create \
-        "$TARGET_DIR/aarch64-apple-watchos/$PROFILE_DIR/libgeodb_ffi.a" \
-        "$TARGET_DIR/arm64_32-apple-watchos/$PROFILE_DIR/libgeodb_ffi.a" \
-        -output "$WATCHOS_FAT_DIR/libgeodb_ffi.a"
+    # watchOS - DISABLED: components unavailable
+    # info "Creating watchOS fat binary ($profile)..."
+    # WATCHOS_FAT_DIR="$TARGET_DIR/watchos-fat-$profile"
+    # mkdir -p "$WATCHOS_FAT_DIR"
+    # lipo -create \
+    #     "$TARGET_DIR/aarch64-apple-watchos/$PROFILE_DIR/libgeodb_ffi.a" \
+    #     "$TARGET_DIR/arm64_32-apple-watchos/$PROFILE_DIR/libgeodb_ffi.a" \
+    #     -output "$WATCHOS_FAT_DIR/libgeodb_ffi.a"
 
-    create_framework "$profile" "watchos-device" \
-        "$WATCHOS_FAT_DIR/libgeodb_ffi.a" \
-        "$FFI_CRATE/generated" \
-        "$TEMP_BUILD/$profile/watchos-arm64_arm64_32" \
-        "6.0"
+    # create_framework "$profile" "watchos-device" \
+    #     "$WATCHOS_FAT_DIR/libgeodb_ffi.a" \
+    #     "$FFI_CRATE/generated" \
+    #     "$TEMP_BUILD/$profile/watchos-arm64_arm64_32" \
+    #     "6.0"
 
-    create_framework "$profile" "watchos-simulator" \
-        "$TARGET_DIR/aarch64-apple-watchos-sim/$PROFILE_DIR/libgeodb_ffi.a" \
-        "$FFI_CRATE/generated" \
-        "$TEMP_BUILD/$profile/watchos-arm64-simulator" \
-        "6.0"
+    # create_framework "$profile" "watchos-simulator" \
+    #     "$TARGET_DIR/aarch64-apple-watchos-sim/$PROFILE_DIR/libgeodb_ffi.a" \
+    #     "$FFI_CRATE/generated" \
+    #     "$TEMP_BUILD/$profile/watchos-arm64-simulator" \
+    #     "6.0"
 
     # visionOS (if available)
     if [ "$HAS_VISIONOS" = true ]; then

@@ -1,4 +1,4 @@
-package com.example.geodb
+package eu.trahe.geodb
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -16,7 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import com.example.geodb.ui.theme.GeoDBAppTheme
+import eu.trahe.geodb.ui.theme.GeoDBAppTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,7 +55,7 @@ fun GeoDBScreen() {
     var latInput by remember { mutableStateOf("") }
     var lngInput by remember { mutableStateOf("") }
     var radiusInput by remember { mutableStateOf("10") }
-    var searchMode by remember { mutableStateOf(SearchMode.TEXT) }
+    var searchMode by remember { mutableStateOf(SearchMode.SMART) }
 
     // Detail dialog
     var selectedCity: CityResult? by remember { mutableStateOf(null) }
@@ -112,29 +112,28 @@ fun GeoDBScreen() {
         Spacer(modifier = Modifier.height(12.dp))
 
         // Search mode tabs
-        TabRow(selectedTabIndex = searchMode.ordinal) {
-            Tab(
-                selected = searchMode == SearchMode.TEXT,
-                onClick = { searchMode = SearchMode.TEXT },
-                text = { Text("Text Search") }
-            )
-            Tab(
-                selected = searchMode == SearchMode.NEAREST,
-                onClick = { searchMode = SearchMode.NEAREST },
-                text = { Text("Nearest") }
-            )
-            Tab(
-                selected = searchMode == SearchMode.RADIUS,
-                onClick = { searchMode = SearchMode.RADIUS },
-                text = { Text("In Radius") }
-            )
+        ScrollableTabRow(selectedTabIndex = searchMode.ordinal) {
+            SearchMode.values().forEach { mode ->
+                Tab(
+                    selected = searchMode == mode,
+                    onClick = { searchMode = mode },
+                    text = { Text("${mode.icon} ${mode.displayName}") }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
         when (searchMode) {
-            SearchMode.TEXT -> {
+            SearchMode.SMART, SearchMode.CITIES, SearchMode.STATES, SearchMode.COUNTRIES -> {
                 // Text search field
+                val searchLabel = when (searchMode) {
+                    SearchMode.CITIES -> "Search cities..."
+                    SearchMode.STATES -> "Search states/regions..."
+                    SearchMode.COUNTRIES -> "Search countries..."
+                    else -> "Search cities, states, countries..."
+                }
+
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { newQuery ->
@@ -144,7 +143,13 @@ fun GeoDBScreen() {
                                 isLoading = true
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        searchResults = engine!!.smartSearch(newQuery).take(30)
+                                        searchResults = when (searchMode) {
+                                            SearchMode.SMART -> engine!!.smartSearch(newQuery).take(30)
+                                            SearchMode.CITIES -> engine!!.findCitiesBySubstring(newQuery).take(30)
+                                            SearchMode.STATES -> engine!!.findStatesBySubstring(newQuery).take(30)
+                                            SearchMode.COUNTRIES -> engine!!.findCountriesBySubstring(newQuery).take(30)
+                                            else -> emptyList()
+                                        }
                                         errorMessage = null
                                     } catch (e: Exception) {
                                         errorMessage = "Search error: ${e.message}"
@@ -157,7 +162,7 @@ fun GeoDBScreen() {
                             searchResults = emptyList()
                         }
                     },
-                    label = { Text("Search cities, states, countries...") },
+                    label = { Text(searchLabel) },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = isInitialized,
                     singleLine = true
@@ -303,8 +308,13 @@ fun GeoDBScreen() {
     }
 }
 
-enum class SearchMode {
-    TEXT, NEAREST, RADIUS
+enum class SearchMode(val displayName: String, val icon: String) {
+    SMART("Smart Search", "🔍"),
+    CITIES("Cities Only", "🏙️"),
+    STATES("States/Regions", "🗺️"),
+    COUNTRIES("Countries", "🌍"),
+    NEAREST("Nearest", "📍"),
+    RADIUS("In Radius", "⭕")
 }
 
 @Composable

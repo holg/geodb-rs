@@ -77,8 +77,10 @@ impl PyGeoDb {
     }
 
     #[staticmethod]
-    pub fn load_from_path(path: &str, filter:Option<&[&str]>) -> PyResult<Self> {
-        let db = GeoDb::<DefaultBackend>::load_from_path(&path, filter).into_py()?;
+    pub fn load_from_path(path: &str, filter: Option<Vec<String>>) -> PyResult<Self> {
+        let filter_refs: Option<Vec<&str>> = filter.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+        let filter_slice: Option<&[&str]> = filter_refs.as_ref().map(|v| v.as_slice());
+        let db = GeoDb::<DefaultBackend>::load_from_path(&path, filter_slice).into_py()?;
         Ok(Self { inner: db })
     }
 

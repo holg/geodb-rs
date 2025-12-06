@@ -24,10 +24,12 @@ step() {
     echo -e "\n${BLUE}==>${NC} ${GREEN}$1${NC}"
 }
 
-# Ensure nightly is installed
+# Ensure nightly is installed (use known-good version with all targets)
 step "Installing nightly toolchain..."
-rustup install nightly
-echo -e "${GREEN}✓ Nightly installed${NC}"
+NIGHTLY_VERSION="nightly-2024-08-01"
+echo "  Using $NIGHTLY_VERSION (known to have all Apple targets)"
+rustup install $NIGHTLY_VERSION
+echo -e "${GREEN}✓ Nightly $NIGHTLY_VERSION installed${NC}"
 
 # Stable targets
 step "Installing stable targets..."
@@ -46,17 +48,17 @@ echo -e "${GREEN}✓ Stable targets installed${NC}"
 step "Installing nightly targets..."
 
 echo "  • tvOS targets..."
-rustup +nightly target add aarch64-apple-tvos       # Apple TV device
-rustup +nightly target add aarch64-apple-tvos-sim   # tvOS Simulator
+rustup target add --toolchain $NIGHTLY_VERSION aarch64-apple-tvos       # Apple TV device
+rustup target add --toolchain $NIGHTLY_VERSION aarch64-apple-tvos-sim   # tvOS Simulator
 
 echo "  • watchOS targets..."
-rustup +nightly target add aarch64-apple-watchos      # Apple Watch (64-bit)
-rustup +nightly target add arm64_32-apple-watchos     # Apple Watch (32-bit)
-rustup +nightly target add aarch64-apple-watchos-sim  # watchOS Simulator
+rustup target add --toolchain $NIGHTLY_VERSION aarch64-apple-watchos      # Apple Watch (64-bit)
+rustup target add --toolchain $NIGHTLY_VERSION arm64_32-apple-watchos     # Apple Watch (32-bit)
+rustup target add --toolchain $NIGHTLY_VERSION aarch64-apple-watchos-sim  # watchOS Simulator
 
 echo "  • visionOS targets (optional)..."
-rustup +nightly target add aarch64-apple-visionos || echo -e "${YELLOW}  visionOS device target not available yet${NC}"
-rustup +nightly target add aarch64-apple-visionos-sim || echo -e "${YELLOW}  visionOS simulator target not available yet${NC}"
+rustup target add --toolchain $NIGHTLY_VERSION aarch64-apple-visionos || echo -e "${YELLOW}  visionOS device target not available yet${NC}"
+rustup target add --toolchain $NIGHTLY_VERSION aarch64-apple-visionos-sim || echo -e "${YELLOW}  visionOS simulator target not available yet${NC}"
 
 echo -e "${GREEN}✓ Nightly targets installed${NC}"
 
@@ -69,10 +71,10 @@ rustup target list --installed | grep apple-darwin
 rustup target list --installed | grep apple-ios
 
 echo ""
-echo "Nightly targets:"
-rustup +nightly target list --installed | grep apple-tvos
-rustup +nightly target list --installed | grep apple-watchos
-rustup +nightly target list --installed | grep apple-visionos || echo "(visionOS not available)"
+echo "Nightly targets ($NIGHTLY_VERSION):"
+rustup target list --toolchain $NIGHTLY_VERSION --installed | grep apple-tvos
+rustup target list --toolchain $NIGHTLY_VERSION --installed | grep apple-watchos
+rustup target list --toolchain $NIGHTLY_VERSION --installed | grep apple-visionos || echo "(visionOS not available)"
 
 echo ""
 echo "======================================================================"

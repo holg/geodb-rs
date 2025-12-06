@@ -1,4 +1,4 @@
-package com.example.geodb.ui.theme
+package eu.trahe.geodb.ui.theme
 
 import android.app.Activity
 import android.os.Build

@@ -1,28 +1,45 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
-android {
-    namespace = "com.example.geodb"
-    compileSdk = 34
+// Load .env file
+val envFile = rootProject.file(".env")
+val envProperties = Properties()
+if (envFile.exists()) {
+    FileInputStream(envFile).use { envProperties.load(it) }
+}
 
-    // To sign release builds, create a keystore and configure:
-    // signingConfigs {
-    //     create("release") {
-    //         storeFile = file("path/to/your/keystore.jks")
-    //         storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
-    //         keyAlias = "your-key-alias"
-    //         keyPassword = System.getenv("KEY_PASSWORD") ?: ""
-    //     }
-    // }
+fun getEnvProperty(key: String, default: String = ""): String {
+    return envProperties.getProperty(key) ?: System.getenv(key) ?: default
+}
+
+android {
+    namespace = "eu.trahe.geodb"
+    compileSdk = 35
+
+    // Signing configuration from .env
+    signingConfigs {
+        create("release") {
+            val keystoreFile = getEnvProperty("KEYSTORE_FILE")
+            if (keystoreFile.isNotEmpty()) {
+                storeFile = file(keystoreFile)
+                storePassword = getEnvProperty("KEYSTORE_PASSWORD")
+                keyAlias = getEnvProperty("KEY_ALIAS", "geodb")
+                keyPassword = getEnvProperty("KEY_PASSWORD")
+            }
+        }
+    }
 
     defaultConfig {
-        applicationId = "com.example.geodb"
+        applicationId = "eu.trahe.geodb"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 35
+        versionCode = 5
+        versionName = "0.1.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -38,8 +55,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Uncomment after configuring signingConfigs above:
-            // signingConfig = signingConfigs.getByName("release")
+            // Use signing config if keystore is configured
+            if (envFile.exists() && getEnvProperty("KEYSTORE_FILE").isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

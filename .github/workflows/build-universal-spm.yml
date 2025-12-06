@@ -33,11 +33,10 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
 
-      - name: Setup Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly
-          targets: aarch64-apple-tvos,aarch64-apple-tvos-sim,aarch64-apple-watchos,arm64_32-apple-watchos,aarch64-apple-watchos-sim
+      # NOTE: tvOS and watchOS targets temporarily disabled
+      # Rust nightly has not had these components available since 2025-11-14
+      # See: https://rust-lang.github.io/rustup-components-history
+      # Will re-enable when components become available again
 
       - name: Install additional tools
         run: |
