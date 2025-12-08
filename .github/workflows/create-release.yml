@@ -1,0 +1,112 @@
+name: Create GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Read changelog for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          # Try to extract changelog section for this version
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG=$(awk "/## \[$VERSION\]/ {flag=1; next} /## \[/ {flag=0} flag" CHANGELOG.md || echo "")
+          else
+            CHANGELOG=""
+          fi
+
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release $VERSION
+
+          See [commits](https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.TAG }}) for changes."
+          fi
+
+          # Save to file to preserve formatting
+          echo "$CHANGELOG" > changelog.txt
+
+      - name: Create Release Notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # GeoDB v${{ steps.version.outputs.VERSION }}
+
+          Multi-platform geographic database with offline support.
+
+          ## 📦 Downloads
+
+          ### CLI Tools
+          Download pre-built command-line binaries:
+          - **Linux**: `geodb-cli-x86_64-unknown-linux-gnu.tar.gz`
+          - **macOS Intel**: `geodb-cli-x86_64-apple-darwin.tar.gz`
+          - **macOS Apple Silicon**: `geodb-cli-aarch64-apple-darwin.tar.gz`
+          - **Windows**: `geodb-cli-x86_64-pc-windows-msvc.zip`
+
+          ### Python Wheels
+          ```bash
+          pip install geodb-rs==${{ steps.version.outputs.VERSION }}
+          ```
+          Or download platform-specific wheels from the Python category below.
+
+          ### Android App
+          - **Play Store**: Search "GeoDB" or visit the [Play Store page](https://play.google.com/store/apps/details?id=eu.trahe.geodb)
+          - **Direct APK**: Download `geodb-android-release.apk` for sideloading
+
+          ### Rust Crates
+          ```toml
+          [dependencies]
+          geodb-core = "${{ steps.version.outputs.VERSION }}"
+          ```
+
+          ## 📚 Categories
+
+          All release artifacts are organized by platform/language:
+          - **CLI** - Command-line binaries for all platforms
+          - **Python** - PyPI wheels (also available via `pip install geodb-rs`)
+          - **Android** - APK and AAB files
+          - **Crates** - Published to [crates.io](https://crates.io/crates/geodb-core)
+
+          ## 🔗 Links
+
+          - **Documentation**: https://docs.rs/geodb-core
+          - **PyPI Package**: https://pypi.org/project/geodb-rs
+          - **Repository**: https://github.com/${{ github.repository }}
+          - **Issues**: https://github.com/${{ github.repository }}/issues
+
+          ---
+
+          $(cat changelog.txt)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.TAG }}
+          name: GeoDB v${{ steps.version.outputs.VERSION }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          make_latest: true

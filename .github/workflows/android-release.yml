@@ -199,18 +199,68 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: geodb-android-aab
-          path: release-artifacts
+          path: android-raw/aab
 
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
         with:
           name: geodb-android-apks
-          path: release-artifacts
+          path: android-raw/apk
 
-      - name: Upload to GitHub Release
+      - name: Organize Android artifacts
+        run: |
+          mkdir -p release-assets/android
+
+          # Move AAB
+          if [ -f android-raw/aab/*.aab ]; then
+            mv android-raw/aab/*.aab release-assets/android/
+          fi
+
+          # Move APKs and rename clearly
+          if [ -f android-raw/apk/app-release.apk ]; then
+            mv android-raw/apk/app-release.apk release-assets/android/geodb-android-release.apk
+          fi
+
+      - name: Create Android README
+        run: |
+          cat > release-assets/android/README.md << 'EOF'
+          # GeoDB Android App
+
+          ## Files
+
+          - `*.aab` - Android App Bundle for Google Play Store
+          - `geodb-android-release.apk` - Signed APK for direct installation
+
+          ## Installation
+
+          ### From Google Play Store (Recommended)
+          Search for "GeoDB" on Google Play Store or visit:
+          https://play.google.com/store/apps/details?id=eu.trahe.geodb
+
+          ### From APK (Sideload)
+          1. Download `geodb-android-release.apk`
+          2. Enable "Install from Unknown Sources" in Android Settings
+          3. Open the APK file to install
+
+          ## Requirements
+          - Android 7.0 (API 24) or higher
+          - ~50 MB storage space
+
+          ## Features
+          - Offline geographic database
+          - Search countries, states, and cities
+          - Multi-language support (Chinese, English, German, Spanish, French, Italian, Portuguese)
+          - Kid-friendly interface
+
+          ## Support
+          - Issues: https://github.com/holg/geodb-rs/issues
+          - License: MIT
+          EOF
+
+      - name: Upload Android artifacts to GitHub Release
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          files: release-artifacts/**
+          files: release-assets/android/*

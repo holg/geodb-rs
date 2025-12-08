@@ -119,14 +119,70 @@ jobs:
       - name: Download all wheel artifacts
         uses: actions/download-artifact@v4
         with:
-          path: wheels
+          path: wheels-raw
           pattern: geodb-py-wheel-*
           merge-multiple: true
 
-      - name: Upload wheels to GitHub Release
+      - name: Organize Python wheels
+        run: |
+          mkdir -p release-assets/python
+          mv wheels-raw/*.whl release-assets/python/ || true
+
+      - name: Create Python README
+        run: |
+          cat > release-assets/python/README.md << 'EOF'
+          # GeoDB Python Wheels
+
+          Pre-built Python wheels for `geodb-rs` package.
+
+          ## Installation from PyPI (Recommended)
+
+          ```bash
+          pip install geodb-rs
+          ```
+
+          ## Platform Wheels
+
+          If you need to install from these wheels directly:
+
+          ### Linux
+          - `geodb_rs-*-manylinux_*_x86_64.whl` - Linux x86_64 (manylinux)
+
+          ### macOS
+          - `geodb_rs-*-macosx_*_x86_64.whl` - macOS Intel (x86_64)
+          - `geodb_rs-*-macosx_*_arm64.whl` - macOS Apple Silicon (ARM64)
+
+          ### Windows
+          - `geodb_rs-*-win_amd64.whl` - Windows x64
+
+          ## Install from wheel
+
+          ```bash
+          pip install geodb_rs-*.whl
+          ```
+
+          ## Usage
+
+          ```python
+          from geodb_rs import GeoDb
+
+          # Load database
+          db = GeoDb.load_from_path("path/to/data.json.gz")
+
+          # Search
+          results = db.smart_search("Berlin")
+          ```
+
+          ## Documentation
+
+          - PyPI: https://pypi.org/project/geodb-rs/
+          - GitHub: https://github.com/holg/geodb-rs
+          EOF
+
+      - name: Upload Python wheels to GitHub Release
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          files: wheels/*.whl
+          files: release-assets/python/*
