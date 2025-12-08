@@ -7,8 +7,8 @@
     <!-- Correct Trunk WASM loader -->
     
 <script type="module">
-import init, * as bindings from '/geodb-wasm-ed0be726b9b2fb57.js';
-const wasm = await init({ module_or_path: '/geodb-wasm-ed0be726b9b2fb57_bg.wasm' });
+import init, * as bindings from '/geodb-wasm-b2e5eb29648d1a23.js';
+const wasm = await init({ module_or_path: '/geodb-wasm-b2e5eb29648d1a23_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -79,7 +79,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
             border-left: 5px solid #4a6cff;
         }
     </style>
-<link rel="modulepreload" href="/geodb-wasm-ed0be726b9b2fb57.js" crossorigin="anonymous" integrity="sha384-YpwPDcTOI5P1hiaRHqDxKKPxISrmMD/CozOtMj5ZsaDzzGP/9L2tR2NYBgJ4+JdN"><link rel="preload" href="/geodb-wasm-ed0be726b9b2fb57_bg.wasm" crossorigin="anonymous" integrity="sha384-IZ7pHpHqsiGsTagvczcyWBAGVOxOhi+MecqAKA3L3/ub+bc59kc20OHKLn35u03+" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/geodb-wasm-b2e5eb29648d1a23.js" crossorigin="anonymous" integrity="sha384-YpwPDcTOI5P1hiaRHqDxKKPxISrmMD/CozOtMj5ZsaDzzGP/9L2tR2NYBgJ4+JdN"><link rel="preload" href="/geodb-wasm-b2e5eb29648d1a23_bg.wasm" crossorigin="anonymous" integrity="sha384-dPvM7fkGQrbKRquqBp/EJd+xHxH5947+x3noUZNDw07rXGfS7hD+SvTRq+war/lq" as="fetch" type="application/wasm"></head>
 
 
 <body>

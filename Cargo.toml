@@ -1,3 +1,13 @@
+
+[package]
+name = "geodb-rs"
+version.workspace = true
+edition.workspace = true
+publish = false
+license.workspace = true
+description = "Workspace crate for geodb-core and geodb-wasm; hosts examples and dev tooling."
+repository.workspace = true
+readme = "README.md"
 [workspace]
 members = [
     "crates/geodb-cli",
@@ -16,16 +26,6 @@ license = "MIT"
 repository = "https://github.com/holg/geodb-rs"
 authors = ["Holger Trahe"]
 
-[package]
-name = "geodb-rs"
-version.workspace = true
-edition.workspace = true
-publish = false
-license.workspace = true
-description = "Workspace crate for geodb-core and geodb-wasm; hosts examples and dev tooling."
-repository.workspace = true
-readme = "README.md"
-
 [workspace.dependencies]
 bincode = "1"
 deunicode = "1.6"
@@ -36,7 +36,7 @@ serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 serde_json = { version = "1" }
 thiserror = "1"
-wasm-bindgen = "0.2"
+wasm-bindgen = "=0.2.105"  # Pinned to match trunk 0.21.14's bundled wasm-bindgen-cli
 web-sys = { version = "0.3", features = ["console"] }
 
 [dependencies]
