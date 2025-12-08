@@ -261,8 +261,8 @@ fn main() -> anyhow::Result<()> {
                 println!("... and {} more", results.len() - 10);
             }
         }
-        Commands::CityBy {query} => {
-            for item in  db.find_cities_by_substring(&query){
+        Commands::CityBy { query } => {
+            for item in db.find_cities_by_substring(&query) {
                 println!("Finding cities by query: {item:?}")
             }
         }

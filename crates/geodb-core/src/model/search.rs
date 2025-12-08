@@ -1,12 +1,12 @@
 // crates/geodb-core/src/model/search.rs
-use crate::traits::CityContext;
-use crate::spatial::{generate_geoid, decode_geoid, haversine_distance};
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::model::flat::{City, Country, GeoDb, State};
+use crate::spatial::{decode_geoid, generate_geoid, haversine_distance};
 use crate::text::fold_key;
 #[cfg(not(feature = "search_blobs"))]
 use crate::text::match_score;
+use crate::traits::CityContext;
 use crate::traits::{CitiesIter, GeoBackend, GeoSearch};
 
 type MySmartHit<'a, B> = SmartHitGeneric<'a, Country<B>, State<B>, City<B>>;
@@ -26,10 +26,10 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
 
     fn cities<'a>(&'a self) -> CitiesIter<'a, B> {
         // Reconstruct hierarchy on the fly using IDs
-        let iter = self.cities.iter().map(move |city| {
-            let state = &self.states[city.state_id as usize];
-            let country = &self.countries[city.country_id as usize];
-            (city, state, country)
+        let iter = self.cities.iter().filter_map(move |city| {
+            let state = self.states.get(city.state_id as usize)?;
+            let country = self.countries.get(city.country_id as usize)?;
+            Some((city, state, country))
         });
         Box::new(iter)
     }
@@ -57,7 +57,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         }
     }
 
-     fn find_country_by_iso2(&self, iso2: &str) -> Option<&Country<B>> {
+    fn find_country_by_iso2(&self, iso2: &str) -> Option<&Country<B>> {
         self.countries
             .iter()
             .find(|c| c.iso2.as_ref().eq_ignore_ascii_case(iso2))
@@ -371,7 +371,8 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
                 (dist_metric, city)
             })
             .collect();
-        candidates.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates
+            .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         // candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         candidates
             .into_iter()
@@ -385,7 +386,11 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     }
     // crates/geodb-core/src/model/search.rs
 
-    fn find_cities_in_radius_by_geoid(&self, geoid: u64, radius_km: f64) -> Vec<CityContext<'_, B>> {
+    fn find_cities_in_radius_by_geoid(
+        &self,
+        geoid: u64,
+        radius_km: f64,
+    ) -> Vec<CityContext<'_, B>> {
         // 1. Decode Center
         let (center_lat, center_lng) = decode_geoid(geoid);
 
@@ -411,7 +416,6 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
 
             // BBox Filter (Fast float comparisons)
             if lat >= min_lat && lat <= max_lat && lng >= min_lng && lng <= max_lng {
-
                 // Precise Distance (Expensive Trig)
                 let dist = haversine_distance(center_lat, center_lng, lat, lng);
 
@@ -425,9 +429,13 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         }
 
         // 4. Sort by Distance
-        candidates.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates
+            .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
         // 5. Strip distance and return context
-        candidates.into_iter().map(|(_, city, s, c)| (city, s, c)).collect()
+        candidates
+            .into_iter()
+            .map(|(_, city, s, c)| (city, s, c))
+            .collect()
     }
 }

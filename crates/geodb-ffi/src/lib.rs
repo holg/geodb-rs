@@ -184,7 +184,9 @@ impl GeoDbEngine {
         let db = DB.get().unwrap();
         let country = db.find_country_by_code(&iso2)?;
 
-        country.translations.iter()
+        country
+            .translations
+            .iter()
             .find(|(lang, _)| lang == &lang_code)
             .map(|(_, name)| name.to_string())
     }
@@ -193,7 +195,9 @@ impl GeoDbEngine {
 // Private implementation, hidden from UniFFI
 impl GeoDbEngine {
     fn map_country(&self, c: &Country<DefaultBackend>) -> CityResult {
-        let translations = c.translations.iter()
+        let translations = c
+            .translations
+            .iter()
             .map(|(lang, name)| (lang.clone(), name.to_string()))
             .collect();
 
@@ -211,7 +215,9 @@ impl GeoDbEngine {
     }
 
     fn map_state(&self, s: &State<DefaultBackend>, c: &Country<DefaultBackend>) -> CityResult {
-        let translations = c.translations.iter()
+        let translations = c
+            .translations
+            .iter()
             .map(|(lang, name)| (lang.clone(), name.to_string()))
             .collect();
 
@@ -235,7 +241,9 @@ impl GeoDbEngine {
         country: &Country<DefaultBackend>,
         dist: Option<f64>,
     ) -> CityResult {
-        let translations = country.translations.iter()
+        let translations = country
+            .translations
+            .iter()
             .map(|(lang, name)| (lang.clone(), name.to_string()))
             .collect();
 

@@ -1,7 +1,7 @@
 // crates/geodb-core/src/model/convert.rs
-use crate::spatial::generate_geoid;
 use crate::alias::CityMetaIndex;
 use crate::common::raw::CountryRaw;
+use crate::spatial::generate_geoid;
 // Import CountryTimezone so we can construct it
 use crate::model::flat::{City, Country, CountryTimezone, GeoDb, State};
 use crate::traits::GeoBackend;
@@ -20,7 +20,7 @@ pub fn from_raw<B: GeoBackend>(
         countries: Vec::new(),
         states: Vec::new(),
         cities: Vec::new(),
-        spatial_index: Vec::new()
+        spatial_index: Vec::new(),
     };
 
     for c_raw in raw_countries {
@@ -138,8 +138,16 @@ pub fn from_raw<B: GeoBackend>(
                 // ---------------------------------------------------------
                 // SPATIAL INDEX LOGIC
                 // ---------------------------------------------------------
-                let lat = city_raw.latitude.as_deref().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                let lng = city_raw.longitude.as_deref().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let lat = city_raw
+                    .latitude
+                    .as_deref()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                let lng = city_raw
+                    .longitude
+                    .as_deref()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
 
                 // Only index valid coordinates (0.0 is technically valid but "Null Island", acceptable)
                 let geoid = generate_geoid(lat, lng);
@@ -156,11 +164,19 @@ pub fn from_raw<B: GeoBackend>(
                     search_blob: city_search_blob,
                     aliases,
                     regions,
-                    lat: if lat != 0.0 { Some(B::float_from(lat)) } else { None },
-                    lng: if lng != 0.0 { Some(B::float_from(lng)) } else { None },
+                    lat: if lat != 0.0 {
+                        Some(B::float_from(lat))
+                    } else {
+                        None
+                    },
+                    lng: if lng != 0.0 {
+                        Some(B::float_from(lng))
+                    } else {
+                        None
+                    },
                     population: city_raw.id.map(|p| p as u32),
                     timezone: city_raw.timezone.map(|s| B::str_from(&s)),
-                    geoid
+                    geoid,
                 });
             }
 

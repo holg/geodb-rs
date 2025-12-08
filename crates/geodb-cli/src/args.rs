@@ -82,5 +82,5 @@ pub enum Commands {
     },
     CityBy {
         query: String,
-    }
+    },
 }

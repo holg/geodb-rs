@@ -34,9 +34,8 @@ pub fn haversine_distance(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
     let lat1_rad = lat1.to_radians();
     let lat2_rad = lat2.to_radians();
 
-    let a = (d_lat / 2.0).sin().powi(2) +
-        lat1_rad.cos() * lat2_rad.cos() *
-            (d_lng / 2.0).sin().powi(2);
+    let a =
+        (d_lat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (d_lng / 2.0).sin().powi(2);
 
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
     r * c
@@ -100,8 +99,14 @@ mod tests {
 
         // Precision loss is expected due to u32 quantization, but should be small
         let epsilon = 0.0001;
-        assert!((lat - lat_out).abs() < epsilon, "Lat mismatch: {lat} vs {lat_out}");
-        assert!((lng - lng_out).abs() < epsilon, "Lng mismatch: {lng} vs {lng_out}");
+        assert!(
+            (lat - lat_out).abs() < epsilon,
+            "Lat mismatch: {lat} vs {lat_out}"
+        );
+        assert!(
+            (lng - lng_out).abs() < epsilon,
+            "Lng mismatch: {lng} vs {lng_out}"
+        );
     }
 
     #[test]
@@ -116,6 +121,9 @@ mod tests {
         let diff_near = berlin.abs_diff(potsdam);
         let diff_far = berlin.abs_diff(nyc);
 
-        assert!(diff_near < diff_far, "Nearby cities should have closer IDs in general");
+        assert!(
+            diff_near < diff_far,
+            "Nearby cities should have closer IDs in general"
+        );
     }
 }

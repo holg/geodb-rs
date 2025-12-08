@@ -17,7 +17,7 @@ targets = ["wasm32-unknown-unknown"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 [features]
-default = ["search_blobs","compact"]
+default = ["search_blobs", "compact"]
 # Forwarding features
 legacy_model = ["geodb-core/legacy_model"]
 search_blobs = ["geodb-core/search_blobs"]

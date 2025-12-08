@@ -1,4 +1,3 @@
-
 //! geodb-wasm — WebAssembly bindings for geodb-core
 //!
 //! This crate exposes a small, ergonomic JS/WASM API built on top of

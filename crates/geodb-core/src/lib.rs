@@ -9,9 +9,9 @@ pub mod loader;
 #[cfg(not(feature = "legacy_model"))]
 pub mod model; // The NEW model folder
 pub mod prelude;
+pub mod spatial;
 pub mod text;
 pub mod traits;
-pub mod spatial;
 
 pub use crate::error::{GeoDbError, GeoError, Result};
 

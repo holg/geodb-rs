@@ -175,7 +175,8 @@ pub trait GeoSearch<B: GeoBackend> {
     ///
     /// 1. Decodes the GeoID to find the center.
     /// 2. Scans for cities within the radius.
-    fn find_cities_in_radius_by_geoid(&self, geoid: u64, radius_km: f64) -> Vec<CityContext<'_, B>>;
+    fn find_cities_in_radius_by_geoid(&self, geoid: u64, radius_km: f64)
+        -> Vec<CityContext<'_, B>>;
 }
 
 pub trait CountryTimezone<B: GeoBackend> {}

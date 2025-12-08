@@ -15,8 +15,12 @@ build/
 .env
 *.keystore
 *.jks
+*.json
+keystore*.txt
 key.properties
 keystore.properties
+*service-account*.json
+geodb-play-store-*.json
 
 # Native libraries (built by Rust)
 app/src/main/jniLibs/

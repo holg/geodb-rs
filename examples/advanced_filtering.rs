@@ -65,9 +65,17 @@ fn main() -> Result<()> {
 
     // The search returns the full context tuple (City, State, Country)
     for (i, (city, state, country)) in springfields.iter().take(5).enumerate() {
-        println!("{}. {:<15} in {:<15}, {}", i+1, city.name(), state.name(), country.iso2());
+        println!(
+            "{}. {:<15} in {:<15}, {}",
+            i + 1,
+            city.name(),
+            state.name(),
+            country.iso2()
+        );
     }
-    if springfields.len() > 5 { println!("... and {} more", springfields.len() - 5); }
+    if springfields.len() > 5 {
+        println!("... and {} more", springfields.len() - 5);
+    }
     println!();
 
     // -------------------------------------------------------------------------
@@ -82,8 +90,19 @@ fn main() -> Result<()> {
     let neighbors = db.find_nearest(lat, lng, 5);
 
     for (i, (city, state, _)) in neighbors.iter().enumerate() {
-        let dist = spatial::haversine_distance(lat, lng, city.lat().unwrap_or(0.0), city.lng().unwrap_or(0.0));
-        println!("{}. {:<20} ({:<4.2} km) - {}", i+1, city.name(), dist, state.name());
+        let dist = spatial::haversine_distance(
+            lat,
+            lng,
+            city.lat().unwrap_or(0.0),
+            city.lng().unwrap_or(0.0),
+        );
+        println!(
+            "{}. {:<20} ({:<4.2} km) - {}",
+            i + 1,
+            city.name(),
+            dist,
+            state.name()
+        );
     }
     println!();
 
@@ -103,7 +122,9 @@ fn main() -> Result<()> {
     for (city, _, _) in nearby.iter().take(5) {
         println!("- {}", city.name());
     }
-    if nearby.len() > 5 { println!("... and others"); }
+    if nearby.len() > 5 {
+        println!("... and others");
+    }
     println!();
 
     // -------------------------------------------------------------------------
@@ -116,8 +137,19 @@ fn main() -> Result<()> {
     let hits = db.smart_search("München");
 
     for hit in hits.iter().take(3) {
-        if let SmartItem::City { city, state, country } = hit.item {
-            println!("City Hit: {} ({}, {}) [Score: {}]", city.name(), state.name(), country.iso2(), hit.score);
+        if let SmartItem::City {
+            city,
+            state,
+            country,
+        } = hit.item
+        {
+            println!(
+                "City Hit: {} ({}, {}) [Score: {}]",
+                city.name(),
+                state.name(),
+                country.iso2(),
+                hit.score
+            );
         }
     }
 

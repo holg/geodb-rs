@@ -1,12 +1,12 @@
 // crates/geodb-core/src/legacy_model/search.rs
 
-use crate::traits::CityContext;
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::legacy_model::nested::{City, Country, GeoDb, State};
-use crate::spatial::{decode_geoid, haversine_distance, distance_squared};
+use crate::spatial::{decode_geoid, distance_squared, haversine_distance};
 #[allow(unused_imports)]
 use crate::text::{fold_key, match_score};
+use crate::traits::CityContext;
 use crate::traits::{GeoBackend, GeoSearch};
 use std::collections::HashSet;
 type MySmartHit<'a, B> = SmartHitGeneric<'a, Country<B>, State<B>, City<B>>;
@@ -525,7 +525,11 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
 
     // crates/geodb-core/src/legacy_model/search.rs
 
-    fn find_cities_in_radius_by_geoid(&self, geoid: u64, radius_km: f64) -> Vec<CityContext<'_, B>> {
+    fn find_cities_in_radius_by_geoid(
+        &self,
+        geoid: u64,
+        radius_km: f64,
+    ) -> Vec<CityContext<'_, B>> {
         let (center_lat, center_lng) = decode_geoid(geoid);
 
         // BBox calc (Same as above)
@@ -556,8 +560,12 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
             }
         }
 
-        candidates.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.into_iter().map(|(_, city, state, country)| (city, state, country)).collect()
+        candidates
+            .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates
+            .into_iter()
+            .map(|(_, city, state, country)| (city, state, country))
+            .collect()
     }
 
     // ... (Ensure enrich_with_city_meta is present as a no-op or todo) ...
