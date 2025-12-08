@@ -1,13 +1,12 @@
-name: Build Universal SPM Package
+name: Build Universal SPM Package (DISABLED)
 
+# DISABLED: GitHub runners cannot build Apple platform binaries reliably
+# Use local build script instead: ./scripts/build_spm_package.sh
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v0.1.0)'
+        description: 'Version tag (e.g., v0.1.0) - DISABLED, use local build'
         required: true
         default: 'v0.1.0'
 

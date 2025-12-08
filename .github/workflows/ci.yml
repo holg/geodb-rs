@@ -3,10 +3,10 @@ name: CI
 on:
   push:
     branches: [ main ]
+    tags-ignore:
+      - 'v*'
   pull_request:
   workflow_dispatch:
-  release:
-    types: [ published ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -181,10 +181,13 @@ jobs:
   # =========================
   attach-release-assets:
     # Wait for binaries + wheels to be built
+    # Using always() to run even if some jobs are skipped
     needs: [ build-cli, build-wheels ]
-
-    # Only run for real releases, not pushes/PRs
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: |
+      always() &&
+      github.event_name == 'release' &&
+      github.event.action == 'published' &&
+      (needs.build-cli.result == 'success' || needs.build-wheels.result == 'success')
 
     runs-on: ubuntu-latest
 
