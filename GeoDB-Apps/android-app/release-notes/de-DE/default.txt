@@ -1,0 +1,14 @@
+GeoDB v0.1.5 - Mehrsprachiges Update!
+
+NEU:
+• Vollständige Lokalisierung in 7 Sprachen: Englisch, Chinesisch, Deutsch, Spanisch, Französisch, Italienisch, Portugiesisch
+• App zeigt automatisch Ihre Gerätesprache
+• Kinderfreundliche Oberfläche mit klarer, einfacher Sprache
+• R8-Code-Optimierung - kleinere App-Größe!
+
+VERBESSERUNGEN:
+• App-Größe um ~30% reduziert
+• Bessere Leistung durch optimierten Code
+• Verbesserte Absturzberichte
+
+Perfekt für Kinder, die Geografie lernen!

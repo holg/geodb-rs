@@ -15,6 +15,7 @@ dictionary CityResult {
     f64 lng;
     u64 population;
     f64? distance_km;
+    record<string, string> translations;
 };
 
 dictionary DbStatsDto {
@@ -56,6 +57,9 @@ sequence<CityResult> find_in_radius(f64 lat, f64 lng, f64 radius_km);
 
 // Rust: pub fn smart_search(&self, query: String) -> Vec<CityResult>
 sequence<CityResult> smart_search(string query);
+
+// Rust: pub fn get_country_translation(&self, iso2: String, lang_code: String) -> string?
+string? get_country_translation(string iso2, string lang_code);
 };
 
 // 4. Optional namespace, as you already had

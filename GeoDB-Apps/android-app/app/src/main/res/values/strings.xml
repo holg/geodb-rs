@@ -1,4 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- App Name -->
     <string name="app_name">GeoDB</string>
+
+    <!-- Search Modes -->
+    <string name="search_mode_smart">Smart Search</string>
+    <string name="search_mode_cities">Cities Only</string>
+    <string name="search_mode_states">States/Regions</string>
+    <string name="search_mode_countries">Countries</string>
+    <string name="search_mode_nearest">Nearest</string>
+    <string name="search_mode_radius">In Radius</string>
+
+    <!-- Search Hints -->
+    <string name="search_hint_smart">Search cities, states, countries...</string>
+    <string name="search_hint_cities">Search cities...</string>
+    <string name="search_hint_states">Search states/regions...</string>
+    <string name="search_hint_countries">Search countries...</string>
+
+    <!-- Input Fields -->
+    <string name="label_latitude">Latitude</string>
+    <string name="label_longitude">Longitude</string>
+    <string name="label_radius_km">Radius (km)</string>
+
+    <!-- Buttons -->
+    <string name="button_find_nearest">Find Nearest</string>
+    <string name="button_search_radius">Search Radius</string>
+    <string name="button_use_location">Use Location</string>
+    <string name="button_close">Close</string>
+
+    <!-- Status Messages -->
+    <string name="status_initializing">Initializing database...</string>
+    <string name="status_results">%d results</string>
+
+    <!-- Error Messages -->
+    <string name="error_search">Search error: %s</string>
+    <string name="error_init">Failed to initialize: %s</string>
+    <string name="error_invalid_coords">Please enter valid latitude and longitude</string>
+
+    <!-- Detail Dialog -->
+    <string name="detail_type">Type</string>
+    <string name="detail_type_country">Country</string>
+    <string name="detail_type_state">State/Region</string>
+    <string name="detail_type_city">City</string>
+    <string name="detail_state">State/Region</string>
+    <string name="detail_country">Country</string>
+    <string name="detail_iso_code">ISO Code</string>
+    <string name="detail_latitude">Latitude</string>
+    <string name="detail_longitude">Longitude</string>
+    <string name="detail_population">Population</string>
+    <string name="detail_distance">Distance</string>
+
+    <!-- Statistics -->
+    <string name="stats_format">%1$d countries, %2$d states, %3$d cities</string>
 </resources>

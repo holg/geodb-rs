@@ -31,6 +31,7 @@ pub struct CityResult {
     pub lng: f64,
     pub population: u64,
     pub distance_km: Option<f64>,
+    pub translations: std::collections::HashMap<String, String>,
 }
 #[derive(uniffi::Record, Debug, Clone)]
 pub struct DbStatsDto {
@@ -178,11 +179,24 @@ impl GeoDbEngine {
             .take(50)
             .collect()
     }
+
+    pub fn get_country_translation(&self, iso2: String, lang_code: String) -> Option<String> {
+        let db = DB.get().unwrap();
+        let country = db.find_country_by_code(&iso2)?;
+
+        country.translations.iter()
+            .find(|(lang, _)| lang == &lang_code)
+            .map(|(_, name)| name.to_string())
+    }
 }
 
 // Private implementation, hidden from UniFFI
 impl GeoDbEngine {
     fn map_country(&self, c: &Country<DefaultBackend>) -> CityResult {
+        let translations = c.translations.iter()
+            .map(|(lang, name)| (lang.clone(), name.to_string()))
+            .collect();
+
         CityResult {
             name: c.name().to_string(),
             state: "".to_string(),
@@ -192,10 +206,15 @@ impl GeoDbEngine {
             lng: c.lng().unwrap_or(0.0),
             population: c.population().unwrap_or(0),
             distance_km: None,
+            translations,
         }
     }
 
     fn map_state(&self, s: &State<DefaultBackend>, c: &Country<DefaultBackend>) -> CityResult {
+        let translations = c.translations.iter()
+            .map(|(lang, name)| (lang.clone(), name.to_string()))
+            .collect();
+
         CityResult {
             name: s.name().to_string(),
             state: s.name().to_string(),
@@ -205,6 +224,7 @@ impl GeoDbEngine {
             lng: s.lng().unwrap_or(0.0),
             population: 0,
             distance_km: None,
+            translations,
         }
     }
 
@@ -215,6 +235,10 @@ impl GeoDbEngine {
         country: &Country<DefaultBackend>,
         dist: Option<f64>,
     ) -> CityResult {
+        let translations = country.translations.iter()
+            .map(|(lang, name)| (lang.clone(), name.to_string()))
+            .collect();
+
         CityResult {
             name: city.name().to_string(),
             state: state.name().to_string(),
@@ -224,6 +248,7 @@ impl GeoDbEngine {
             lng: city.lng().unwrap_or(0.0),
             population: city.population().unwrap_or(0),
             distance_km: dist,
+            translations,
         }
     }
 }

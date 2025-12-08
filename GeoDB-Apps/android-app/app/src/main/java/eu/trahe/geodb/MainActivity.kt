@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -103,7 +104,7 @@ fun GeoDBScreen() {
 
         dbStats?.let { stats ->
             Text(
-                text = "${stats.countries} countries, ${stats.states} states, ${stats.cities} cities",
+                text = stringResource(R.string.stats_format, stats.countries, stats.states, stats.cities),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.secondary
             )
@@ -117,7 +118,7 @@ fun GeoDBScreen() {
                 Tab(
                     selected = searchMode == mode,
                     onClick = { searchMode = mode },
-                    text = { Text("${mode.icon} ${mode.displayName}") }
+                    text = { Text("${mode.icon} ${stringResource(mode.displayNameResId)}") }
                 )
             }
         }
@@ -127,11 +128,11 @@ fun GeoDBScreen() {
         when (searchMode) {
             SearchMode.SMART, SearchMode.CITIES, SearchMode.STATES, SearchMode.COUNTRIES -> {
                 // Text search field
-                val searchLabel = when (searchMode) {
-                    SearchMode.CITIES -> "Search cities..."
-                    SearchMode.STATES -> "Search states/regions..."
-                    SearchMode.COUNTRIES -> "Search countries..."
-                    else -> "Search cities, states, countries..."
+                val searchLabelResId = when (searchMode) {
+                    SearchMode.CITIES -> R.string.search_hint_cities
+                    SearchMode.STATES -> R.string.search_hint_states
+                    SearchMode.COUNTRIES -> R.string.search_hint_countries
+                    else -> R.string.search_hint_smart
                 }
 
                 OutlinedTextField(
@@ -162,7 +163,7 @@ fun GeoDBScreen() {
                             searchResults = emptyList()
                         }
                     },
-                    label = { Text(searchLabel) },
+                    label = { Text(stringResource(searchLabelResId)) },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = isInitialized,
                     singleLine = true
@@ -178,7 +179,7 @@ fun GeoDBScreen() {
                     OutlinedTextField(
                         value = latInput,
                         onValueChange = { latInput = it },
-                        label = { Text("Latitude") },
+                        label = { Text(stringResource(R.string.label_latitude)) },
                         modifier = Modifier.weight(1f),
                         enabled = isInitialized,
                         singleLine = true,
@@ -187,7 +188,7 @@ fun GeoDBScreen() {
                     OutlinedTextField(
                         value = lngInput,
                         onValueChange = { lngInput = it },
-                        label = { Text("Longitude") },
+                        label = { Text(stringResource(R.string.label_longitude)) },
                         modifier = Modifier.weight(1f),
                         enabled = isInitialized,
                         singleLine = true,
@@ -206,7 +207,7 @@ fun GeoDBScreen() {
                         OutlinedTextField(
                             value = radiusInput,
                             onValueChange = { radiusInput = it },
-                            label = { Text("Radius (km)") },
+                            label = { Text(stringResource(R.string.label_radius_km)) },
                             modifier = Modifier.weight(1f),
                             enabled = isInitialized,
                             singleLine = true,
@@ -245,7 +246,7 @@ fun GeoDBScreen() {
                         },
                         enabled = isInitialized && latInput.isNotEmpty() && lngInput.isNotEmpty()
                     ) {
-                        Text(if (searchMode == SearchMode.NEAREST) "Find Nearest" else "Search Radius")
+                        Text(stringResource(if (searchMode == SearchMode.NEAREST) R.string.button_find_nearest else R.string.button_search_radius))
                     }
                 }
             }
@@ -272,7 +273,7 @@ fun GeoDBScreen() {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("Initializing database...")
+                    Text(stringResource(R.string.status_initializing))
                 }
             }
         } else if (isLoading) {
@@ -286,7 +287,7 @@ fun GeoDBScreen() {
             // Results count
             if (searchResults.isNotEmpty()) {
                 Text(
-                    text = "${searchResults.size} results",
+                    text = stringResource(R.string.status_results, searchResults.size),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary
                 )
@@ -308,13 +309,13 @@ fun GeoDBScreen() {
     }
 }
 
-enum class SearchMode(val displayName: String, val icon: String) {
-    SMART("Smart Search", "🔍"),
-    CITIES("Cities Only", "🏙️"),
-    STATES("States/Regions", "🗺️"),
-    COUNTRIES("Countries", "🌍"),
-    NEAREST("Nearest", "📍"),
-    RADIUS("In Radius", "⭕")
+enum class SearchMode(val displayNameResId: Int, val icon: String) {
+    SMART(R.string.search_mode_smart, "🔍"),
+    CITIES(R.string.search_mode_cities, "🏙️"),
+    STATES(R.string.search_mode_states, "🗺️"),
+    COUNTRIES(R.string.search_mode_countries, "🌍"),
+    NEAREST(R.string.search_mode_nearest, "📍"),
+    RADIUS(R.string.search_mode_radius, "⭕")
 }
 
 @Composable
@@ -391,27 +392,30 @@ fun CityDetailDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                DetailRow("Type", when {
-                    city.state.isEmpty() && city.name == city.country -> "Country"
-                    city.state == city.name -> "State/Region"
-                    else -> "City"
-                })
+                DetailRow(
+                    stringResource(R.string.detail_type),
+                    stringResource(when {
+                        city.state.isEmpty() && city.name == city.country -> R.string.detail_type_country
+                        city.state == city.name -> R.string.detail_type_state
+                        else -> R.string.detail_type_city
+                    })
+                )
 
                 if (city.state.isNotEmpty() && city.state != city.name) {
-                    DetailRow("State/Region", city.state)
+                    DetailRow(stringResource(R.string.detail_state), city.state)
                 }
 
-                DetailRow("Country", city.country)
-                DetailRow("ISO Code", city.iso2)
-                DetailRow("Latitude", String.format("%.6f", city.lat))
-                DetailRow("Longitude", String.format("%.6f", city.lng))
+                DetailRow(stringResource(R.string.detail_country), city.country)
+                DetailRow(stringResource(R.string.detail_iso_code), city.iso2)
+                DetailRow(stringResource(R.string.detail_latitude), String.format("%.6f", city.lat))
+                DetailRow(stringResource(R.string.detail_longitude), String.format("%.6f", city.lng))
 
                 if (city.population > 0uL) {
-                    DetailRow("Population", String.format("%,d", city.population.toLong()))
+                    DetailRow(stringResource(R.string.detail_population), String.format("%,d", city.population.toLong()))
                 }
 
                 city.distanceKm?.let { dist ->
-                    DetailRow("Distance", String.format("%.2f km", dist))
+                    DetailRow(stringResource(R.string.detail_distance), String.format("%.2f km", dist))
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -424,13 +428,13 @@ fun CityDetailDialog(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Close")
+                        Text(stringResource(R.string.button_close))
                     }
                     Button(
                         onClick = { onUseLocation(city.lat, city.lng) },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Use Location")
+                        Text(stringResource(R.string.button_use_location))
                     }
                 }
             }

@@ -38,8 +38,8 @@ android {
         applicationId = "eu.trahe.geodb"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 6
+        versionName = "0.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,7 +50,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -59,6 +60,9 @@ android {
             if (envFile.exists() && getEnvProperty("KEYSTORE_FILE").isNotEmpty()) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
 

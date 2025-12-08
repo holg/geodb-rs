@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Name -->
+    <string name="app_name">GeoDB</string>
+
+    <!-- Search Modes -->
+    <string name="search_mode_smart">Intelligente Suche</string>
+    <string name="search_mode_cities">Nur Städte</string>
+    <string name="search_mode_states">Bundesländer/Regionen</string>
+    <string name="search_mode_countries">Länder</string>
+    <string name="search_mode_nearest">In der Nähe</string>
+    <string name="search_mode_radius">Im Umkreis</string>
+
+    <!-- Search Hints -->
+    <string name="search_hint_smart">Suche Städte, Bundesländer, Länder...</string>
+    <string name="search_hint_cities">Suche Städte...</string>
+    <string name="search_hint_states">Suche Bundesländer/Regionen...</string>
+    <string name="search_hint_countries">Suche Länder...</string>
+
+    <!-- Input Fields -->
+    <string name="label_latitude">Breitengrad</string>
+    <string name="label_longitude">Längengrad</string>
+    <string name="label_radius_km">Radius (km)</string>
+
+    <!-- Buttons -->
+    <string name="button_find_nearest">Nächste finden</string>
+    <string name="button_search_radius">Umkreis durchsuchen</string>
+    <string name="button_use_location">Standort verwenden</string>
+    <string name="button_close">Schließen</string>
+
+    <!-- Status Messages -->
+    <string name="status_initializing">Datenbank wird initialisiert...</string>
+    <string name="status_results">%d Ergebnisse</string>
+
+    <!-- Error Messages -->
+    <string name="error_search">Suchfehler: %s</string>
+    <string name="error_init">Initialisierung fehlgeschlagen: %s</string>
+    <string name="error_invalid_coords">Bitte geben Sie gültige Koordinaten ein</string>
+
+    <!-- Detail Dialog -->
+    <string name="detail_type">Typ</string>
+    <string name="detail_type_country">Land</string>
+    <string name="detail_type_state">Bundesland/Region</string>
+    <string name="detail_type_city">Stadt</string>
+    <string name="detail_state">Bundesland/Region</string>
+    <string name="detail_country">Land</string>
+    <string name="detail_iso_code">ISO-Code</string>
+    <string name="detail_latitude">Breitengrad</string>
+    <string name="detail_longitude">Längengrad</string>
+    <string name="detail_population">Bevölkerung</string>
+    <string name="detail_distance">Entfernung</string>
+
+    <!-- Statistics -->
+    <string name="stats_format">%1$d Länder, %2$d Bundesländer, %3$d Städte</string>
+</resources>

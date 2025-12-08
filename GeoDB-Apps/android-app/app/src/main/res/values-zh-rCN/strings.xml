@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Name -->
+    <string name="app_name">地理数据库</string>
+
+    <!-- Search Modes -->
+    <string name="search_mode_smart">智能搜索</string>
+    <string name="search_mode_cities">仅城市</string>
+    <string name="search_mode_states">州/地区</string>
+    <string name="search_mode_countries">国家</string>
+    <string name="search_mode_nearest">最近</string>
+    <string name="search_mode_radius">半径范围</string>
+
+    <!-- Search Hints -->
+    <string name="search_hint_smart">搜索城市、州、国家...</string>
+    <string name="search_hint_cities">搜索城市...</string>
+    <string name="search_hint_states">搜索州/地区...</string>
+    <string name="search_hint_countries">搜索国家...</string>
+
+    <!-- Input Fields -->
+    <string name="label_latitude">纬度</string>
+    <string name="label_longitude">经度</string>
+    <string name="label_radius_km">半径（公里）</string>
+
+    <!-- Buttons -->
+    <string name="button_find_nearest">查找最近</string>
+    <string name="button_search_radius">搜索半径</string>
+    <string name="button_use_location">使用位置</string>
+    <string name="button_close">关闭</string>
+
+    <!-- Status Messages -->
+    <string name="status_initializing">正在初始化数据库...</string>
+    <string name="status_results">%d 个结果</string>
+
+    <!-- Error Messages -->
+    <string name="error_search">搜索错误：%s</string>
+    <string name="error_init">初始化失败：%s</string>
+    <string name="error_invalid_coords">请输入有效的纬度和经度</string>
+
+    <!-- Detail Dialog -->
+    <string name="detail_type">类型</string>
+    <string name="detail_type_country">国家</string>
+    <string name="detail_type_state">州/地区</string>
+    <string name="detail_type_city">城市</string>
+    <string name="detail_state">州/地区</string>
+    <string name="detail_country">国家</string>
+    <string name="detail_iso_code">ISO代码</string>
+    <string name="detail_latitude">纬度</string>
+    <string name="detail_longitude">经度</string>
+    <string name="detail_population">人口</string>
+    <string name="detail_distance">距离</string>
+
+    <!-- Statistics -->
+    <string name="stats_format">%1$d 个国家，%2$d 个州，%3$d 个城市</string>
+</resources>
