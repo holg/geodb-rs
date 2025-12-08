@@ -66,12 +66,15 @@ android {
         }
     }
 
+    // Note: ABI splits are disabled because they conflict with AAB (Android App Bundle) builds
+    // The AAB already handles per-ABI optimization when uploading to Play Store
+    // If you need split APKs for direct distribution, build with assembleRelease instead of bundleRelease
     splits {
         abi {
-            isEnable = true
+            isEnable = false  // Disabled for AAB compatibility
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-            isUniversalApk = true  // Also build a universal APK with all ABIs
+            isUniversalApk = true
         }
     }
 
