@@ -9,16 +9,19 @@ use crate::common::raw::CountryRaw;
 use crate::common::raw_normalize::apply_all_metadata;
 use crate::error::{GeoError, Result};
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 #[cfg(feature = "compact")]
 use flate2::{write::GzEncoder, Compression};
 
+// Raw download URL for the dataset (GitHub raw content)
+const DATA_DOWNLOAD_URL: &str = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/json/countries%2Bstates%2Bcities.json.gz";
+
 // Extends GeoDb with Builder/Source capabilities
 impl GeoDb<DefaultBackend> {
     /// **Smart Builder Logic:**
-    /// Checks cache -> Loads Binary OR Builds Source -> Writes Cache.
+    /// Checks cache -> Downloads if missing -> Loads Binary OR Builds Source -> Writes Cache.
     pub(super) fn load_via_builder(path: &Path, filter: Option<&[&str]>) -> Result<Self> {
         let cache_path = common_io::get_cache_path(path);
 
@@ -30,7 +33,13 @@ impl GeoDb<DefaultBackend> {
             }
         }
 
-        // 2. Build (Slow)
+        // 2. Download if source file doesn't exist
+        if !path.exists() {
+            eprintln!("Data file not found at {:?}, downloading from GitHub...", path);
+            Self::download_dataset(path)?;
+        }
+
+        // 3. Build (Slow)
         // This converts JSON -> Active Structs (Flat or Nested)
         let db = Self::build_from_source(path)?;
 
@@ -156,6 +165,36 @@ impl GeoDb<DefaultBackend> {
             bincode::serialize_into(writer, db).map_err(GeoError::Bincode)?;
         }
 
+        Ok(())
+    }
+
+    /// Downloads the dataset from GitHub to the specified path
+    fn download_dataset(dest_path: &Path) -> Result<()> {
+        // Ensure parent directory exists
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent).map_err(GeoError::Io)?;
+        }
+
+        // Download using reqwest (blocking)
+        let response = reqwest::blocking::get(DATA_DOWNLOAD_URL)
+            .map_err(|e| GeoError::InvalidData(format!("Failed to download dataset: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(GeoError::InvalidData(format!(
+                "Failed to download dataset: HTTP {}",
+                response.status()
+            )));
+        }
+
+        // Write to file
+        let mut file = File::create(dest_path).map_err(GeoError::Io)?;
+        let bytes = response
+            .bytes()
+            .map_err(|e| GeoError::InvalidData(format!("Failed to read response: {}", e)))?;
+
+        file.write_all(&bytes).map_err(GeoError::Io)?;
+
+        eprintln!("Downloaded {} bytes to {:?}", bytes.len(), dest_path);
         Ok(())
     }
 }

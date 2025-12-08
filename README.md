@@ -55,13 +55,21 @@ The dataset is adapted from
 https://github.com/dr5hn/countries-states-cities-database
 (licensed under **CC-BY-4.0**, attribution required).
 
-> Important: Data source we rely on
+> **Important: Data source and automatic downloading**
 >
-> geodb-core ships and expects the upstream dataset from the following file in the dr5hn/countries-states-cities-database repository:
+> geodb-core uses the upstream dataset from the dr5hn/countries-states-cities-database repository:
 >
 > https://github.com/dr5hn/countries-states-cities-database/blob/master/json/countries%2Bstates%2Bcities.json.gz
 >
-> The default loader uses a copy of this file placed under `crates/geodb-core/data/countries+states+cities.json.gz` and builds a binary cache alongside it. If you update or replace the dataset, ensure it retains the same JSON structure. Please observe the CC-BY-4.0 license and attribution of the upstream project.
+> **Automatic data download and caching:**
+> - The published crate does NOT include data files (keeps package size under 1MB)
+> - **On first load**, the library automatically downloads the dataset from GitHub (~3.7MB)
+> - After download, a binary cache is generated for fast subsequent loads
+> - Download and cache generation happen only once per system
+> - Requires the `builder` feature (enabled by default) and internet connection for first load
+> - Downloaded data and cache stored in `crates/geodb-core/data/` directory
+>
+> If you update or replace the dataset, ensure it retains the same JSON structure. Please observe the CC-BY-4.0 license and attribution of the upstream project.
 
 ---
 
@@ -71,14 +79,16 @@ https://github.com/dr5hn/countries-states-cities-database
 
 ```toml
 [dependencies]
-geodb-core = "0.2"
+geodb-core = "0.1"
 ```
+
+**Note:** First load will download the dataset from GitHub (~3.7MB) and build the binary cache (requires internet connection). Subsequent loads will be instant using the cached binary.
 
 ### For WebAssembly (browser/Node)
 
 ```toml
 [dependencies]
-geodb-wasm = "0.2"
+geodb-wasm = "0.1"
 ```
 
 ### For Swift (iOS, macOS, watchOS)

@@ -10,6 +10,14 @@ readme = "../../README.md"
 documentation = "https://docs.rs/geodb-core"
 keywords = ["geography", "database", "countries", "cities", "geo"]
 categories = ["database", "data-structures"]
+# Exclude all data files from published package (reduces package to <1MB)
+# Data is automatically downloaded from GitHub on first load
+# Download requires the 'builder' feature (enabled by default)
+exclude = [
+    "data/*.bin",
+    "data/*.json.gz",
+    "data/*.json",
+]
 
 # Configure docs.rs build
 [package.metadata.docs.rs]

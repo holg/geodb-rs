@@ -124,6 +124,8 @@ jobs:
     needs: publish-wheels
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Download all wheel artifacts

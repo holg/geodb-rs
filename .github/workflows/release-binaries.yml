@@ -62,6 +62,8 @@ jobs:
     needs: build-cli-binaries
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Download all CLI binaries
