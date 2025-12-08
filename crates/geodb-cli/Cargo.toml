@@ -1,11 +1,12 @@
 [package]
 name = "geodb-cli"
-version = "0.1.4"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 description = "Command-line interface for the geodb-core geographic database."
-license = "MIT"
+license.workspace = true
 readme = "../../README.md"
-repository = "https://github.com/holg/geodb-rs"
+repository.workspace = true
 homepage = "https://github.com/holg/geodb-rs"
 categories = ["command-line-utilities", "database"]
 keywords = ["geodb", "geo", "countries", "regions", "cities"]

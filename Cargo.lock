@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bincode",
  "criterion",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-ffi"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bincode",
  "flate2",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "geodb-py"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "geodb-core",
  "pyo3",
@@ -590,14 +590,14 @@ dependencies = [
 
 [[package]]
 name = "geodb-rs"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "geodb-core",
 ]
 
 [[package]]
 name = "geodb-wasm"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bincode",
  "console_error_panic_hook",

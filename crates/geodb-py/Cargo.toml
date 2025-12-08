@@ -1,11 +1,13 @@
 [package]
 name = "geodb-py"
-version = "0.1.4"
-edition = "2021"
+# NOTE: Maturin uses this version directly for PyPI, so we keep it explicit
+# rather than using workspace inheritance to avoid any maturin compatibility issues
+version = "0.1.5"
+edition.workspace = true
 description = "Python bindings for geodb-rs"
-license = "MIT"
-authors = ["Holger Trahe"]
-repository = "https://github.com/holg/geodb-rs"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 homepage = "https://github.com/holg/geodb-rs"
 readme = "README.md"
 keywords = ["geodb", "geo", "countries", "regions", "cities"]

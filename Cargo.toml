@@ -1,24 +1,30 @@
-[package]
-name = "geodb-rs"
-version = "0.1.4"
-edition = "2021"
-publish = false
-license = "MIT"
-description = "Workspace crate for geodb-core and geodb-wasm; hosts examples and dev tooling."
-repository = "https://github.com/holg/geodb-rs"
-readme = "README.md"
 [workspace]
 members = [
     "crates/geodb-cli",
-    #    "crates/geodb-core-before-refactor",
     "crates/geodb-core",
-    "crates/geodb-ffi",
     "crates/geodb-ffi",
     "crates/geodb-py",
     "crates/geodb-wasm",
 ]
 
 resolver = "2"
+
+[workspace.package]
+version = "0.1.5"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/holg/geodb-rs"
+authors = ["Holger Trahe"]
+
+[package]
+name = "geodb-rs"
+version.workspace = true
+edition.workspace = true
+publish = false
+license.workspace = true
+description = "Workspace crate for geodb-core and geodb-wasm; hosts examples and dev tooling."
+repository.workspace = true
+readme = "README.md"
 
 [workspace.dependencies]
 bincode = "1"

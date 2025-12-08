@@ -1,10 +1,11 @@
 [package]
-edition = "2021"
-license = "MIT AND ODbL-1.0"
 name = "geodb-wasm"
-version = "0.1.4"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "MIT AND ODbL-1.0"
 description = "WebAssembly bindings for geodb-core with simple JS API and embedded dataset"
-repository = "https://github.com/holg/geodb-rs"
+repository.workspace = true
 homepage = "https://github.com/holg/geodb-rs"
 readme = "../../README.md"
 # Configure docs.rs build

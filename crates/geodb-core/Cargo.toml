@@ -1,11 +1,11 @@
 [package]
 name = "geodb-core"
-version = "0.1.4"
-edition = "2021"
-authors = ["Holger Trahe"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 license = "MIT OR Apache-2.0"
 description = "A high-performance geographic database with countries, states, cities, and more"
-repository = "https://github.com/holg/geodb-rs"
+repository.workspace = true
 readme = "../../README.md"
 documentation = "https://docs.rs/geodb-core"
 keywords = ["geography", "database", "countries", "cities", "geo"]
