@@ -2,13 +2,8 @@ name: Android Release
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'GeoDB-Apps/android-app/**'
-      - 'crates/geodb-ffi/**'
-      - '.github/workflows/android-release.yml'
-  release:
-    types: [ published ]
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       deploy_to_play_store:
@@ -153,7 +148,7 @@ jobs:
   deploy-play-store:
     needs: build-android
     if: |
-      github.event_name == 'release' ||
+      github.ref_type == 'tag' ||
       (github.event_name == 'workflow_dispatch' && inputs.deploy_to_play_store == true)
     runs-on: ubuntu-latest
 
@@ -196,9 +191,7 @@ jobs:
 
   attach-to-release:
     needs: build-android
-    if: |
-      github.event_name == 'release' ||
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_to_play_store == true)
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
 
     steps:
