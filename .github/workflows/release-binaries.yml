@@ -1,0 +1,95 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-cli-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+            ext: ""
+          - os: macos-14
+            target: x86_64-apple-darwin
+            use_cross: false
+            ext: ""
+          - os: macos-15
+            target: aarch64-apple-darwin
+            use_cross: false
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            use_cross: false
+            ext: ".exe"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build geodb-cli
+        shell: bash
+        run: |
+          cargo build --release -p geodb-cli --target ${{ matrix.target }}
+
+      - name: Upload geodb-cli binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodb-cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/geodb-cli${{ matrix.ext }}
+
+  attach-binaries-to-release:
+    needs: build-cli-binaries
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all CLI binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          pattern: geodb-cli-*
+          merge-multiple: false
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cd binaries
+          for dir in geodb-cli-*; do
+            target=${dir#geodb-cli-}
+            if [[ -f "$dir/geodb-cli.exe" ]]; then
+              # Windows
+              zip "../release-assets/geodb-cli-${target}.zip" "$dir/geodb-cli.exe"
+            else
+              # Unix
+              tar czf "../release-assets/geodb-cli-${target}.tar.gz" -C "$dir" geodb-cli
+            fi
+          done
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: release-assets/*

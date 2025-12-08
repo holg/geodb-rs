@@ -70,14 +70,14 @@ jobs:
           cp target/i686-linux-android/release/libgeodb_ffi.so GeoDB-Apps/android-app/app/src/main/jniLibs/x86/
 
       - name: Decode keystore
-        if: github.event_name == 'release'
+        if: github.ref_type == 'tag'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > GeoDB-Apps/android-app/app/release.keystore
 
       - name: Create .env file
-        if: github.event_name == 'release'
+        if: github.ref_type == 'tag'
         working-directory: GeoDB-Apps/android-app
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -95,51 +95,51 @@ jobs:
 
           # App configuration
           APPLICATION_ID=eu.trahe.geodb
-          VERSION_NAME=0.1.4
-          VERSION_CODE=5
+          VERSION_NAME=0.1.5
+          VERSION_CODE=6
           EOF
 
       - name: Grant execute permission for gradlew
         working-directory: GeoDB-Apps/android-app
         run: chmod +x gradlew
 
-      - name: Build signed AAB (Release only)
-        if: github.event_name == 'release'
+      - name: Build signed AAB (Tag builds)
+        if: github.ref_type == 'tag'
         working-directory: GeoDB-Apps/android-app
         run: |
           ./gradlew clean
           ./gradlew bundleRelease
 
-      - name: Build unsigned APK (for main branch)
-        if: github.event_name != 'release'
+      - name: Build unsigned APK (Manual dispatch)
+        if: github.ref_type != 'tag'
         working-directory: GeoDB-Apps/android-app
         run: |
           ./gradlew clean
           ./gradlew assembleRelease
 
-      - name: Upload AAB artifact (Release)
-        if: github.event_name == 'release'
+      - name: Upload AAB artifact (Tag builds)
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: geodb-android-aab
           path: GeoDB-Apps/android-app/app/build/outputs/bundle/release/*.aab
 
-      - name: Upload APKs artifact (Release)
-        if: github.event_name == 'release'
+      - name: Upload APKs artifact (Tag builds)
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: geodb-android-apks
           path: GeoDB-Apps/android-app/app/build/outputs/apk/release/*.apk
 
-      - name: Upload ProGuard mapping file (Release)
-        if: github.event_name == 'release'
+      - name: Upload ProGuard mapping file (Tag builds)
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: geodb-android-mapping
           path: GeoDB-Apps/android-app/app/build/outputs/mapping/release/mapping.txt
 
-      - name: Upload APK artifact (Main branch)
-        if: github.event_name != 'release'
+      - name: Upload APK artifact (Manual dispatch)
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: geodb-android-apk-unsigned

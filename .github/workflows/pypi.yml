@@ -44,7 +44,7 @@ jobs:
 
 
   # =====================================================================
-  # 2) Build and publish platform wheels
+  # 2) Build and publish platform wheels (All platforms)
   # =====================================================================
   publish-wheels:
     needs: publish-sdist
@@ -54,15 +54,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64
             manylinux: auto
+          # macOS Intel
           - os: macos-14
             target: x86_64
             manylinux: ""
+          # macOS Apple Silicon
           - os: macos-15
             target: aarch64
             manylinux: ""
+          # Windows
           - os: windows-latest
             target: x64
             manylinux: ""
@@ -96,3 +100,33 @@ jobs:
             --skip-existing
             --no-sdist
             -m crates/geodb-py/Cargo.toml
+
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: geodb-py-wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: target/wheels/*.whl
+
+  # =====================================================================
+  # 3) Attach wheels to GitHub Release
+  # =====================================================================
+  attach-wheels-to-release:
+    needs: publish-wheels
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: wheels
+          pattern: geodb-py-wheel-*
+          merge-multiple: true
+
+      - name: Upload wheels to GitHub Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: wheels/*.whl
