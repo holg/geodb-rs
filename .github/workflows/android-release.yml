@@ -98,7 +98,7 @@ jobs:
           # App configuration
           APPLICATION_ID=eu.trahe.geodb
           VERSION_NAME=0.1.5
-          VERSION_CODE=6
+          VERSION_CODE=7
           EOF
 
       - name: Grant execute permission for gradlew
