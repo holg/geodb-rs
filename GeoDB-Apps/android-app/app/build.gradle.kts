@@ -38,7 +38,7 @@ android {
         applicationId = "eu.trahe.geodb"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
+        versionCode = 7
         versionName = "0.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
