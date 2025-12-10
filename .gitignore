@@ -53,7 +53,7 @@ crates/geodb-ffi/.swiftpm/
 # Flutter plugin (not included in this release)
 geodb_flutter/
 
-# GeoDB-App build artifacts
+# GeoDB-App build artifacts (old singular naming)
 GeoDB-App/android-app/.gradle/
 GeoDB-App/android-app/app/build/
 GeoDB-App/android-app/build/
@@ -65,6 +65,12 @@ GeoDB-App/GeoDB-App/.build/
 GeoDB-App/GeoDB-App/.swiftpm/
 GeoDB-App/SPM\ GeoDBKit/.build/
 GeoDB-App/SPM\ GeoDBKit/.swiftpm/
+
+# GeoDB-Apps build artifacts (new plural naming)
+GeoDB-Apps/android-app/.gradle/
+GeoDB-Apps/android-app/app/build/
+GeoDB-Apps/android-app/build/
+GeoDB-Apps/android-app/local.properties
 
 # Xcode - User settings and build artifacts
 *.xcuserdatad
@@ -112,6 +118,10 @@ GeoDB-App/.firebase/
 *.jks
 !releases/android/*.apk
 
+# ProGuard/R8 mapping files (generated at build time, 27MB each)
+GeoDB-Apps/android-app/app/mapping.txt
+GeoDB-Apps/android-app/app/build/outputs/mapping/
+
 # Keep release binaries
 !releases/**
 
@@ -120,3 +130,18 @@ GeoDB-App/.firebase/
 *.temp
 *.log
 GeoDB-Apps/SPM-GeoDBKit/.build
+
+# HarmonyOS build artifacts
+GeoDB-Apps/harmonyos-cangjie/GeoDB/entry/libs/
+GeoDB-Apps/harmonyos-cangjie/GeoDB/entry/.cxx/
+GeoDB-Apps/harmonyos-cangjie/GeoDB/.hvigor/
+GeoDB-Apps/harmonyos-cangjie/GeoDB/oh_modules/
+GeoDB-Apps/harmonyos-cangjie/GeoDB/local.properties
+GeoDB-Apps/harmonyos-cangjie/GeoDB/**/*.hap
+GeoDB-Apps/harmonyos-cangjie/GeoDB/**/*.app
+GeoDB-Apps/harmonyos-cangjie/GeoDB/**/build/
+GeoDB-Apps/harmonyos-cangjie/GeoDB/.cxx/
+GeoDB-Apps/harmonyos-cangjie/GeoDB/entry/.preview
+GeoDB-Apps/android-app/app/.gradle
+GeoDB-Apps/android-app/app/local.properties
+GeoDB-Apps/android-app/app/release.keystore

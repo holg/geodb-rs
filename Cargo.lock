@@ -563,6 +563,7 @@ dependencies = [
  "geodb-core",
  "once_cell",
  "serde",
+ "serde_json",
  "uniffi",
 ]
 

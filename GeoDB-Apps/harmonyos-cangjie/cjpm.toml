@@ -1,0 +1,12 @@
+[package]
+name = "geodb_harmonyos"
+version = "0.1.5"
+output-type = "executable"
+
+[dependencies]
+# Cangjie standard library is automatically included
+
+[build]
+# Link against our Rust FFI library
+# The .so file should be in libs/arm64-v8a/ or libs/armeabi-v7a/
+link-args = ["-lgeodb_ffi", "-L./libs/arm64-v8a"]

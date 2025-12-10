@@ -149,9 +149,8 @@ jobs:
 
   deploy-play-store:
     needs: build-android
-    if: |
-      github.ref_type == 'tag' ||
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_to_play_store == true)
+    # Only run on manual trigger (Play Store requires first release to be manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_to_play_store == true
     runs-on: ubuntu-latest
 
     steps:
@@ -215,15 +214,13 @@ jobs:
         run: |
           mkdir -p release-assets/android
 
-          # Move AAB
-          if [ -f android-raw/aab/*.aab ]; then
-            mv android-raw/aab/*.aab release-assets/android/
-          fi
+          # Move AAB files
+          find android-raw/aab -name "*.aab" -exec mv {} release-assets/android/ \; 2>/dev/null || true
 
-          # Move APKs and rename clearly
-          if [ -f android-raw/apk/app-release.apk ]; then
-            mv android-raw/apk/app-release.apk release-assets/android/geodb-android-release.apk
-          fi
+          # Move and rename APK files
+          find android-raw/apk -name "*.apk" -exec basename {} \; | while read apk; do
+            mv "android-raw/apk/$apk" "release-assets/android/geodb-android-${apk}"
+          done
 
       - name: Create Android README
         run: |

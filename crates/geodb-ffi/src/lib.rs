@@ -2,6 +2,9 @@
 
 mod error;
 use error::FfiError;
+
+// C API for Cangjie FFI (separate from UniFFI)
+pub mod c_api;
 use flate2::read::GzDecoder;
 use geodb_core::prelude::*;
 use std::io::Read;

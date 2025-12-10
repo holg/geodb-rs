@@ -28,6 +28,7 @@ bincode = { workspace = true }
 flate2 = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [build-dependencies]
 #uniffi_build = { version = "0.30", features = [ "build" ] }

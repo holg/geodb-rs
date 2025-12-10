@@ -1,0 +1,13 @@
+# Cargo configuration for cross-compilation
+
+[target.aarch64-unknown-linux-ohos]
+linker = "/Users/htr/Library/OpenHarmony/Sdk/20/native/llvm/bin/aarch64-unknown-linux-ohos-clang"
+ar = "/Users/htr/Library/OpenHarmony/Sdk/20/native/llvm/bin/llvm-ar"
+
+[target.armv7-unknown-linux-ohos]
+linker = "/Users/htr/Library/OpenHarmony/Sdk/20/native/llvm/bin/armv7-unknown-linux-ohos-clang"
+ar = "/Users/htr/Library/OpenHarmony/Sdk/20/native/llvm/bin/llvm-ar"
+
+[target.x86_64-unknown-linux-ohos]
+linker = "/Users/htr/Library/OpenHarmony/Sdk/20/native/llvm/bin/x86_64-unknown-linux-ohos-clang"
+ar = "/Users/htr/Library/OpenHarmony/Sdk/20/native/llvm/bin/llvm-ar"
