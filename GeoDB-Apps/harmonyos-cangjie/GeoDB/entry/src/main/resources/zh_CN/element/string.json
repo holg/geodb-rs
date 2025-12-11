@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "包含城市、州和国家的地理数据库"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "地理数据库 - 快速地理数据库搜索"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "地理数据库"
+    }
+  ]
+}

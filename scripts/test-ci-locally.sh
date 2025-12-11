@@ -10,6 +10,66 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Parse command line arguments
+AUTO_FIX=false
+DEPLOY=false
+COMMIT_MSG=""
+
+print_usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Options:
+    --fix           Auto-fix formatting issues (cargo fmt, cargo-sort, taplo)
+    --deploy MSG    Deploy after successful checks (commit + push with message)
+    -h, --help      Show this help message
+
+Examples:
+    $0                                  # Run all checks (no fixes)
+    $0 --fix                            # Run checks and auto-fix formatting
+    $0 --deploy "Fix clippy warnings"   # Check, and deploy if successful
+    $0 --fix --deploy "Update code"     # Fix, check, and deploy
+
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --fix)
+            AUTO_FIX=true
+            shift
+            ;;
+        --deploy)
+            DEPLOY=true
+            COMMIT_MSG="${2:-}"
+            if [[ -z "$COMMIT_MSG" ]]; then
+                echo -e "${RED}Error: --deploy requires a commit message${NC}"
+                print_usage
+                exit 1
+            fi
+            shift 2
+            ;;
+        -h|--help)
+            print_usage
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            print_usage
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$AUTO_FIX" == true ]]; then
+    echo -e "${BLUE}=== Auto-fix mode enabled ===${NC}\n"
+fi
+
+if [[ "$DEPLOY" == true ]]; then
+    echo -e "${BLUE}=== Deploy mode enabled ===${NC}"
+    echo -e "${BLUE}Commit message: ${COMMIT_MSG}${NC}\n"
+fi
+
 echo -e "${YELLOW}=== Testing CI Workflow Locally ===${NC}\n"
 
 # Run cargo fmt check
@@ -17,9 +77,15 @@ echo -e "${YELLOW}Step 1: Running cargo fmt check...${NC}"
 if cargo fmt --all -- --check; then
     echo -e "${GREEN}✓ cargo fmt passed${NC}\n"
 else
-    echo -e "${RED}✗ cargo fmt failed${NC}"
-    echo -e "${YELLOW}Run 'cargo fmt --all' to fix formatting issues${NC}\n"
-    exit 1
+    if [[ "$AUTO_FIX" == true ]]; then
+        echo -e "${YELLOW}⚠ cargo fmt failed, auto-fixing...${NC}"
+        cargo fmt --all
+        echo -e "${GREEN}✓ cargo fmt auto-fixed${NC}\n"
+    else
+        echo -e "${RED}✗ cargo fmt failed${NC}"
+        echo -e "${YELLOW}Run 'cargo fmt --all' or use --fix flag to fix formatting issues${NC}\n"
+        exit 1
+    fi
 fi
 
 # Run clippy
@@ -74,9 +140,15 @@ if command -v cargo-sort &> /dev/null; then
     if cargo-sort -cwg; then
         echo -e "${GREEN}✓ cargo-sort passed${NC}"
     else
-        echo -e "${RED}✗ cargo-sort failed${NC}"
-        echo -e "${YELLOW}Run 'cargo-sort -wg' to fix Cargo.toml sorting${NC}"
-        exit 1
+        if [[ "$AUTO_FIX" == true ]]; then
+            echo -e "${YELLOW}⚠ cargo-sort failed, auto-fixing...${NC}"
+            cargo-sort -wg
+            echo -e "${GREEN}✓ cargo-sort auto-fixed${NC}"
+        else
+            echo -e "${RED}✗ cargo-sort failed${NC}"
+            echo -e "${YELLOW}Run 'cargo-sort -wg' or use --fix flag to fix Cargo.toml sorting${NC}"
+            exit 1
+        fi
     fi
 else
     echo -e "${YELLOW}⚠ cargo-sort not installed, skipping Cargo.toml sort check${NC}"
@@ -89,9 +161,15 @@ if command -v taplo &> /dev/null; then
     if taplo format --check; then
         echo -e "${GREEN}✓ taplo passed${NC}"
     else
-        echo -e "${RED}✗ taplo failed${NC}"
-        echo -e "${YELLOW}Run 'taplo format' to fix TOML formatting${NC}"
-        exit 1
+        if [[ "$AUTO_FIX" == true ]]; then
+            echo -e "${YELLOW}⚠ taplo failed, auto-fixing...${NC}"
+            taplo format
+            echo -e "${GREEN}✓ taplo auto-fixed${NC}"
+        else
+            echo -e "${RED}✗ taplo failed${NC}"
+            echo -e "${YELLOW}Run 'taplo format' or use --fix flag to fix TOML formatting${NC}"
+            exit 1
+        fi
     fi
 else
     echo -e "${YELLOW}⚠ taplo not installed, skipping TOML format check${NC}"
@@ -340,7 +418,54 @@ else
 fi
 
 echo -e "\n${GREEN}=== All CI checks passed! ===${NC}"
-echo -e "${GREEN}Your code is ready to be pushed.${NC}"
+
+# Deploy if requested
+if [[ "$DEPLOY" == true ]]; then
+    echo -e "\n${BLUE}=== Deploying Changes ===${NC}\n"
+
+    # Check for uncommitted changes
+    if [[ -z $(git status --porcelain) ]]; then
+        echo -e "${YELLOW}⚠ No changes to commit${NC}"
+        echo -e "${GREEN}✓ Repository is already clean, nothing to deploy${NC}"
+        exit 0
+    fi
+
+    # Show what will be committed
+    echo -e "${YELLOW}Changes to be committed:${NC}"
+    git status --short
+    echo ""
+
+    # Stage all changes
+    echo -e "${YELLOW}Staging all changes...${NC}"
+    git add -A
+
+    # Commit
+    echo -e "${YELLOW}Committing with message: ${COMMIT_MSG}${NC}"
+    git commit -m "${COMMIT_MSG}"
+
+    # Push
+    echo -e "${YELLOW}Pushing to remote...${NC}"
+    current_branch=$(git branch --show-current)
+
+    if git push origin "$current_branch"; then
+        echo -e "${GREEN}✓ Successfully pushed to origin/${current_branch}${NC}"
+
+        # Show commit info
+        echo -e "\n${BLUE}Latest commit:${NC}"
+        git log -1 --oneline --decorate
+
+        echo -e "\n${GREEN}=== Deploy successful! ===${NC}"
+    else
+        echo -e "${RED}✗ Push failed${NC}"
+        echo -e "${YELLOW}You may need to pull changes first or resolve conflicts${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}Your code is ready to be pushed.${NC}"
+    echo -e "\n${BLUE}To deploy, run:${NC}"
+    echo -e "  ${YELLOW}$0 --deploy \"Your commit message\"${NC}"
+fi
+
 echo -e "\n${BLUE}Publishing Order (IMPORTANT - follow this sequence):${NC}"
 echo -e "  ${YELLOW}1.${NC} Review the documentation that was just opened"
 echo -e "  ${YELLOW}2.${NC} Ensure all changes are committed"

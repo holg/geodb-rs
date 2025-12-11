@@ -57,8 +57,8 @@ pub struct CCityResultList {
 impl From<&CityResult> for CCityResult {
     fn from(city: &CityResult) -> Self {
         // Convert translations HashMap to JSON string
-        let translations_json = serde_json::to_string(&city.translations)
-            .unwrap_or_else(|_| "{}".to_string());
+        let translations_json =
+            serde_json::to_string(&city.translations).unwrap_or_else(|_| "{}".to_string());
 
         Self {
             name: CString::new(city.name.as_str()).unwrap().into_raw(),
@@ -90,6 +90,9 @@ impl From<&DbStatsDto> for CDbStatsDto {
 
 /// Create a new GeoDbEngine
 /// Returns NULL on failure
+///
+/// # Safety
+/// This function is safe to call from C with no arguments.
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_new() -> *mut CGeoDbEngine {
     match GeoDbEngine::new() {
@@ -102,6 +105,11 @@ pub unsafe extern "C" fn geodb_engine_new() -> *mut CGeoDbEngine {
 }
 
 /// Free a GeoDbEngine
+///
+/// # Safety
+/// - `engine` must be a valid pointer returned from `geodb_engine_new`
+/// - `engine` must not be used after calling this function
+/// - This function must only be called once per engine
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_free(engine: *mut CGeoDbEngine) {
     if !engine.is_null() {
@@ -110,6 +118,9 @@ pub unsafe extern "C" fn geodb_engine_free(engine: *mut CGeoDbEngine) {
 }
 
 /// Get database statistics
+///
+/// # Safety
+/// `engine` must be a valid pointer to a GeoDbEngine instance
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_stats(engine: *const CGeoDbEngine) -> CDbStatsDto {
     let engine = &*(engine as *const Arc<GeoDbEngine>);
@@ -118,6 +129,9 @@ pub unsafe extern "C" fn geodb_engine_stats(engine: *const CGeoDbEngine) -> CDbS
 }
 
 /// Get country count
+///
+/// # Safety
+/// `engine` must be a valid pointer to a GeoDbEngine instance
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_country_count(engine: *const CGeoDbEngine) -> u64 {
     let engine = &*(engine as *const Arc<GeoDbEngine>);
@@ -127,6 +141,10 @@ pub unsafe extern "C" fn geodb_engine_country_count(engine: *const CGeoDbEngine)
 /// Find country by ISO2 code
 /// Returns NULL if not found
 /// Caller must free with geodb_city_result_free
+///
+/// # Safety
+/// - `engine` must be a valid pointer to a GeoDbEngine instance
+/// - `code` must be a valid null-terminated C string or NULL
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_find_country_by_code(
     engine: *const CGeoDbEngine,
@@ -147,6 +165,10 @@ pub unsafe extern "C" fn geodb_engine_find_country_by_code(
 
 /// Find countries by substring
 /// Caller must free with geodb_city_result_list_free
+///
+/// # Safety
+/// - `engine` must be a valid pointer to a GeoDbEngine instance
+/// - `substr` must be a valid null-terminated C string or NULL
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_find_countries_by_substring(
     engine: *const CGeoDbEngine,
@@ -167,6 +189,10 @@ pub unsafe extern "C" fn geodb_engine_find_countries_by_substring(
 }
 
 /// Find states by substring
+///
+/// # Safety
+/// - `engine` must be a valid pointer to a GeoDbEngine instance
+/// - `substr` must be a valid null-terminated C string or NULL
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_find_states_by_substring(
     engine: *const CGeoDbEngine,
@@ -187,6 +213,10 @@ pub unsafe extern "C" fn geodb_engine_find_states_by_substring(
 }
 
 /// Find cities by substring
+///
+/// # Safety
+/// - `engine` must be a valid pointer to a GeoDbEngine instance
+/// - `substr` must be a valid null-terminated C string or NULL
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_find_cities_by_substring(
     engine: *const CGeoDbEngine,
@@ -207,6 +237,9 @@ pub unsafe extern "C" fn geodb_engine_find_cities_by_substring(
 }
 
 /// Find nearest cities
+///
+/// # Safety
+/// `engine` must be a valid pointer to a GeoDbEngine instance
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_find_nearest(
     engine: *const CGeoDbEngine,
@@ -219,6 +252,9 @@ pub unsafe extern "C" fn geodb_engine_find_nearest(
 }
 
 /// Find cities in radius
+///
+/// # Safety
+/// `engine` must be a valid pointer to a GeoDbEngine instance
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_find_in_radius(
     engine: *const CGeoDbEngine,
@@ -231,6 +267,10 @@ pub unsafe extern "C" fn geodb_engine_find_in_radius(
 }
 
 /// Smart search
+///
+/// # Safety
+/// - `engine` must be a valid pointer to a GeoDbEngine instance
+/// - `query` must be a valid null-terminated C string or NULL
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_smart_search(
     engine: *const CGeoDbEngine,
@@ -253,6 +293,11 @@ pub unsafe extern "C" fn geodb_engine_smart_search(
 /// Get country translation
 /// Returns NULL if not found
 /// Caller must free with geodb_string_free
+///
+/// # Safety
+/// - `engine` must be a valid pointer to a GeoDbEngine instance
+/// - `iso2` must be a valid null-terminated C string or NULL
+/// - `lang_code` must be a valid null-terminated C string or NULL
 #[no_mangle]
 pub unsafe extern "C" fn geodb_engine_get_country_translation(
     engine: *const CGeoDbEngine,
@@ -274,6 +319,11 @@ pub unsafe extern "C" fn geodb_engine_get_country_translation(
 }
 
 /// Free a string returned from FFI
+///
+/// # Safety
+/// - `s` must be a valid pointer returned from a geodb FFI function or NULL
+/// - `s` must not be used after calling this function
+/// - This function must only be called once per string
 #[no_mangle]
 pub unsafe extern "C" fn geodb_string_free(s: *mut c_char) {
     if !s.is_null() {
@@ -282,6 +332,11 @@ pub unsafe extern "C" fn geodb_string_free(s: *mut c_char) {
 }
 
 /// Free a single CityResult
+///
+/// # Safety
+/// - `result` must be a valid pointer returned from a geodb FFI function or NULL
+/// - `result` must not be used after calling this function
+/// - This function must only be called once per result
 #[no_mangle]
 pub unsafe extern "C" fn geodb_city_result_free(result: *mut CCityResult) {
     if !result.is_null() {
@@ -295,6 +350,11 @@ pub unsafe extern "C" fn geodb_city_result_free(result: *mut CCityResult) {
 }
 
 /// Free a CityResultList
+///
+/// # Safety
+/// - `list` must be a valid CCityResultList returned from a geodb FFI function
+/// - `list.data` must not be used after calling this function
+/// - This function must only be called once per list
 #[no_mangle]
 pub unsafe extern "C" fn geodb_city_result_list_free(list: CCityResultList) {
     if !list.data.is_null() {

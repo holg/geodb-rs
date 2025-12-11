@@ -2,11 +2,11 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "Geographic database with cities, states, and countries"
+      "value": "Base de données géographique avec villes, états et pays"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "GeoDB - Fast geographic database search"
+      "value": "GeoDB - Recherche rapide de base de données géographique"
     },
     {
       "name": "EntryAbility_label",

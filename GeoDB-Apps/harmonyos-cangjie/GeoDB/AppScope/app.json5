@@ -1,10 +1,13 @@
 {
   "app": {
     "bundleName": "eu.trahe.geodb",
-    "vendor": "example",
+    "vendor": "trahe.eu",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "icon": "$media:layered_image",
-    "label": "$string:app_name"
+    "label": "$string:app_name",
+    "distributedNotificationEnabled": true,
+    "targetAPIVersion": 21,
+    "minAPIVersion": 21
   }
 }

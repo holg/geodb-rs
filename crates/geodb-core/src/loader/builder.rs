@@ -35,7 +35,10 @@ impl GeoDb<DefaultBackend> {
 
         // 2. Download if source file doesn't exist
         if !path.exists() {
-            eprintln!("Data file not found at {:?}, downloading from GitHub...", path);
+            eprintln!(
+                "Data file not found at {:?}, downloading from GitHub...",
+                path
+            );
             Self::download_dataset(path)?;
         }
 
