@@ -40,13 +40,10 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: maturin upload --skip-existing dist/*.tar.gz
 
-
-
-
   # =====================================================================
-  # 2) Build and publish platform wheels (All platforms)
+  # 2) Build Linux wheels (using manylinux containers)
   # =====================================================================
-  publish-wheels:
+  publish-wheels-linux:
     needs: publish-sdist
     if: github.event_name != 'pull_request'
 
@@ -54,22 +51,70 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 (uses manylinux container)
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            manylinux: manylinux2014
+          - arch: x86_64
+            container: quay.io/pypa/manylinux2014_x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            container: quay.io/pypa/manylinux2014_aarch64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install maturin
+        run: /opt/python/cp311-cp311/bin/pip install "maturin>=1.7,<2.0"
+
+      - name: Build wheel
+        run: |
+          source $HOME/.cargo/env
+          /opt/python/cp311-cp311/bin/maturin build --release \
+            -m crates/geodb-py/Cargo.toml -o dist \
+            --manylinux 2014 \
+            -i /opt/python/cp311-cp311/bin/python
+
+      - name: Upload wheel to PyPI
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          source $HOME/.cargo/env
+          /opt/python/cp311-cp311/bin/maturin upload --skip-existing dist/*.whl
+
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: geodb-py-wheel-linux-${{ matrix.arch }}
+          path: dist/*.whl
+
+  # =====================================================================
+  # 3) Build macOS/Windows wheels (native)
+  # =====================================================================
+  publish-wheels-native:
+    needs: publish-sdist
+    if: github.event_name != 'pull_request'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           # macOS Intel
           - os: macos-14
             target: x86_64-apple-darwin
-            manylinux: ""
           # macOS Apple Silicon
           - os: macos-15
             target: aarch64-apple-darwin
-            manylinux: ""
           # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            manylinux: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -90,31 +135,14 @@ jobs:
       - name: Install maturin
         run: pip install "maturin>=1.7,<2.0"
 
-      # Linux: use manylinux container via maturin
-      - name: Build wheel (Linux manylinux)
-        if: runner.os == 'Linux'
-        run: |
-          maturin build --release --target ${{ matrix.target }} \
-            -m crates/geodb-py/Cargo.toml -o dist \
-            --manylinux ${{ matrix.manylinux }}
-
-      # macOS/Windows: direct build
-      - name: Build wheel (macOS/Windows)
-        if: runner.os != 'Linux'
-        run: |
-          maturin build --release --target ${{ matrix.target }} -m crates/geodb-py/Cargo.toml -o dist
+      - name: Build wheel
+        run: maturin build --release --target ${{ matrix.target }} -m crates/geodb-py/Cargo.toml -o dist
 
       - name: Upload wheel to PyPI
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         shell: bash
         run: maturin upload --skip-existing dist/*.whl
-
-      - name: List built wheels for debugging
-        shell: bash
-        run: |
-          echo "=== Searching for built wheels ==="
-          find . -name "*.whl" -type f 2>/dev/null || echo "No wheels found"
 
       - name: Upload wheels as artifacts
         uses: actions/upload-artifact@v4
@@ -124,10 +152,10 @@ jobs:
           path: dist/*.whl
 
   # =====================================================================
-  # 3) Attach wheels to GitHub Release
+  # 4) Attach wheels to GitHub Release
   # =====================================================================
   attach-wheels-to-release:
-    needs: publish-wheels
+    needs: [publish-wheels-linux, publish-wheels-native]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
