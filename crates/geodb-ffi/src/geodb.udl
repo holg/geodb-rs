@@ -14,6 +14,7 @@ dictionary CityResult {
     f64 lat;
     f64 lng;
     u64 population;
+    u64 geoid;
     f64? distance_km;
     record<string, string> translations;
 };

@@ -1,0 +1,6 @@
+2025-12-28T18:03:24.243477Z  INFO 🚀 Starting trunk 0.21.14
+2025-12-28T18:03:24.383145Z  INFO 📦 starting build
+warning: geodb-wasm@0.1.5: Embedding GeoDB: geodb.flat.comp.blobs.bin
+    Finished `release` profile [optimized] target(s) in 0.04s
+2025-12-28T18:03:25.327875Z  INFO applying new distribution
+2025-12-28T18:03:25.328910Z  INFO ✅ success

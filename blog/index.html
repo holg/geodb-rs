@@ -1,0 +1,1675 @@
+<!--blog/index.html-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Building for Scale: A Guide to High-Performance Web Services in Rust</title>
+    <!-- Light theme when OS is in light mode -->
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"
+          media="(prefers-color-scheme: light)">
+
+    <!-- Dark theme when OS is in dark mode -->
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+          media="(prefers-color-scheme: dark)">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #111827;
+            color: #e5e7eb;
+        }
+
+        #container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 4rem;
+        }
+
+        a {
+            color: #3b82f6;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        pre {
+            padding: 1rem;
+            overflow-x: auto;
+            border-radius: 0.5rem;
+            background: #020617;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.9em;
+        }
+
+        h1, h2, h3 {
+            color: #f9fafb;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        h2 {
+            margin-top: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        h3 {
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        p, ul, ol {
+            line-height: 1.6;
+            margin-bottom: 0.75rem;
+        }
+
+        blockquote {
+            border-left: 4px solid #4b5563;
+            padding-left: 1rem;
+            color: #9ca3af;
+            margin: 1rem 0;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #374151;
+            margin: 2rem 0;
+        }
+      </style>
+</head>
+<body>
+<div id="container">
+    <div id="content"></div>
+</div>
+
+<!-- Markdown content embedded here -->
+<script type="text/markdown" id="markdown-content">
+# From Nested Trees to Flat Blobs
+### How I Built a Cross‑Platform Geo Database in Rust (CLI, WASM, and Python)
+
+I started this project with a simple goal:
+
+> **Have one high‑quality world dataset (countries, states, cities, aliases, regions)**
+> and make it available everywhere:
+>
+> - as a **Rust library**
+> - via a **CLI tool**
+> - compiled to **WASM** for the browser
+> - and as a **Python package** on PyPI
+
+On paper, this sounded straightforward. In practice, it turned into a tour through:
+
+- data modelling (nested vs flat),
+- cross‑platform builds (Linux, macOS, Windows, manylinux),
+- OpenSSL vs rustls,
+- Rust → Python bindings with `pyo3` and `maturin`,
+- and performance profiling with `criterion` and **Xcode Instruments**.
+
+This post is a walk‑through of that journey, using the [`geodb-rs`](https://github.com/holg/geodb-rs) repo as a concrete example.
+
+---
+
+## 1. The Core Idea: One GeoDB, Many Frontends
+
+At the heart of the repo is **`geodb-core`**, a Rust crate that:
+
+- reads a big JSON dataset (`countries+states+cities.json.gz`),
+- normalizes it into a strongly typed `GeoDb` structure,
+- supports basic queries: countries, states, cities, phone codes, regions, aliases,
+- and caches a binary representation (`*.bin`) to avoid reparsing JSON every time.
+
+On top of this, there are three “frontends”:
+
+- **`geodb-cli`** – a command‑line interface for quick querying and scripting,
+- **`geodb-wasm`** – a WASM bundle for use in the browser with a simple JS API,
+- **`geodb-py` / `geodb_rs`** – Python bindings, published on PyPI with prebuilt wheels.
+
+The design principle is:
+
+> **All serious logic lives in `geodb-core`.**
+> Everything else is just a thin integration layer.
+
+This paid off repeatedly: whenever I fixed bugs or added features (like regions or aliases), they became instantly available in the CLI, the WASM demo, and Python bindings.
+
+---
+
+## 2. The Data Model: Nested vs Flat
+
+The raw JSON dataset looks like this (simplified):
+
+```json
+[
+  {
+    "name": "Germany",
+    "iso2": "DE",
+    "iso3": "DEU",
+    "phonecode": "49",
+    "states": [
+      {
+        "name": "Nordrhein-Westfalen",
+        "iso2": "NW",
+        "cities": [
+          { "name": "Münster", "latitude": "51.9624", "longitude": "7.6257" },
+          { "name": "Dortmund", "latitude": "51.5136", "longitude": "7.4653" }
+        ]
+      }
+    ]
+  }
+]
+```
+
+The **obvious** Rust representation mirrors this 1:1:
+
+```rust
+pub struct GeoDb<B: GeoBackend> {
+    pub countries: Vec<Country<B>>,
+}
+
+pub struct Country<B: GeoBackend> {
+    pub name: B::Str,
+    pub iso2: B::Str,
+    pub iso3: Option<B::Str>,
+    pub states: Vec<State<B>>,
+    // ...
+}
+
+pub struct State<B: GeoBackend> {
+    pub name: B::Str,
+    pub cities: Vec<City<B>>,
+    // ...
+}
+
+pub struct City<B: GeoBackend> {
+    pub name: B::Str,
+    pub latitude: Option<B::Float>,
+    pub longitude: Option<B::Float>,
+    pub timezone: Option<B::Str>,
+}
+```
+
+This is what I now call the **legacy nested model**.
+
+### Why even consider a flat model?
+
+Nested structures are great for readability (and for anyone debugging the JSON), but inside tight loops they can be:
+
+- cache‑unfriendly,
+- expensive to traverse,
+- awkward to store in compact binary format if you want to squeeze memory.
+
+I wanted to experiment with a **“flat” model** where:
+
+- cities are stored in big contiguous arrays,
+- with index ranges or small indirection layers (like `Country` → range of `State` indices, `State` → range of `City` indices).
+
+The expectation was:
+
+> “Flatten data, get **much faster** lookups and better cache utilisation.”
+
+So I added a feature flag `legacy_model` in `geodb-core` and built a second internal representation gated by features. Same API on top, different storage underneath.
+
+---
+
+## 3. Measuring Reality: Criterion Benchmarks
+
+Opinion is nice, numbers are better.
+
+I set up **criterion** benchmarks in `crates/geodb-core/benches/benchmarks.rs` and compiled two variants:
+
+- legacy nested model:
+
+```bash
+cargo bench -p geodb-core \
+  --no-default-features \
+  --features "compact,json,legacy_model" \
+  --bench benchmarks
+```
+
+- new flat model:
+
+```bash
+cargo bench -p geodb-core \
+  --no-default-features \
+  --features "compact,json" \
+  --bench benchmarks
+```
+
+Then I used **criterion baselines** to compare them:
+
+```bash
+# 1) Save baseline for nested model
+cargo bench -p geodb-core \
+  --no-default-features \
+  --features "compact,json,legacy_model" \
+  --bench benchmarks \
+  -- \
+  --save-baseline nested
+
+# 2) Save baseline for flat model
+cargo bench -p geodb-core \
+  --no-default-features \
+  --features "compact,json" \
+  --bench benchmarks \
+  -- \
+  --save-baseline flat
+
+# 3) Compare flat model against nested baseline
+cargo bench -p geodb-core \
+  --no-default-features \
+  --features "compact,json" \
+  --bench benchmarks \
+  -- \
+  --baseline nested
+```
+
+### What we measured
+
+The benchmarks focus on:
+
+- smart search for “Berlin” (realistic usage),
+- a “worst‑case” search (stress test),
+- micro‑benchmarks for the text folding and substring checks used in search.
+
+The results (summarised):
+
+- **Smart search (Berlin)**:
+  Flat model is ~2–4% faster – an improvement, but not a game‑changer.
+- **Worst‑case search**:
+  Flat model improved by ~1–3% in many runs, occasionally within noise.
+- **Micro‑benchmarks** (folding / matching):
+  Mostly identical or micro improvements / regressions within noise.
+
+The uncomfortable but important conclusion:
+
+> The flat model is **only slightly faster** than the simple nested structure.
+
+Given the complexity it introduced (indices, extra mapping logic, more code paths), this forced me to think hard about trade‑offs.
+
+---
+
+## 4. Profiling with Xcode Instruments
+
+Benchmarks told me *how much* faster, but I also wanted to know *why*.
+
+On macOS, Instruments (with the **Time Profiler** template) gave good insight into where the time actually goes during a search.
+
+Rough steps:
+
+1. Build the benchmark binary:
+
+   ```bash
+   cargo bench -p geodb-core --no-default-features --features "compact,json" --bench benchmarks
+   ```
+
+2. Locate the compiled bench in `target/aarch64-apple-darwin/release/deps/`.
+
+3. Create a **Time Profiler** run in Instruments, attach it to that binary.
+
+4. Run a benchmark (or a dedicated binary that runs one search many times) and capture a profile.
+
+### What the profiler showed
+
+A representative profile looked like this (flattened):
+
+- ~96% of time in `benchmarks::main`
+- of that, a big chunk in `GeoDb::smart_search`
+- and **inside that**, a lot of time in:
+
+  - `geodb_core::text::match_score`
+  - `geodb_core::text::fold_key`
+  - `deunicode::deunicode_with_tofu_cow`
+  - `str::to_lowercase`
+
+In other words:
+
+> The bottleneck is **text normalisation and scoring**, not data structure layout.
+
+Flattening the data helped a bit (better locality, simpler traversal), but it couldn’t magically fix the fundamental cost of:
+
+- deunicoding (e.g. “Münster” → “Munster”),
+- lowercasing,
+- substring and similarity scoring.
+
+This is actually good news:
+
+- It means the **data layout is “good enough” already.**
+- Real gains will come from improving the text pipeline (caching folded keys, using cheaper scoring, precomputing tokens, etc.), which we can do orthogonally to the underlying structure.
+
+---
+
+## 5. The Loader & Cache Design
+
+The loader in `geodb-core/src/loader.rs` is responsible for:
+
+- finding the dataset,
+- loading JSON (via gzip),
+- applying optional ISO2 filters,
+- building the `GeoDb` structure,
+- and caching a `.bin` file next to the JSON for fast reload.
+
+Key aspects:
+
+```rust
+impl GeoDb<DefaultBackend> {
+    /// Default directory: `<crate>/data`
+    pub fn default_data_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data")
+    }
+
+    /// Default dataset file name
+    pub fn default_dataset_filename() -> &'static str {
+        "countries+states+cities.json.gz"
+    }
+
+    /// Load the default DB (unfiltered)
+    pub fn load() -> Result<Self> {
+        GEO_DB_CACHE.get_or_try_init(|| {
+            let dir = Self::default_data_dir();
+            let file = Self::default_dataset_filename();
+            Self::load_from_path(dir.join(file), None)
+        }).cloned()
+    }
+
+    /// Load from a custom on-disk dataset path
+    pub fn load_from_path(
+        json_path: impl AsRef<Path>,
+        iso2_filter: Option<&[&str]>
+    ) -> Result<Self> {
+        let json_path = json_path.as_ref().to_path_buf();
+        load_generic(json_path, iso2_filter)
+    }
+
+    /// Load filtered DB using default dataset
+    pub fn load_filtered_by_iso2(iso2: &[&str]) -> Result<Self> {
+        let dir = Self::default_data_dir();
+        let file = Self::default_dataset_filename();
+        Self::load_from_path(dir.join(file), Some(iso2))
+    }
+}
+```
+
+The cache file naming is simple and robust:
+
+- base JSON: `countries+states+cities.json.gz`
+- cache for all countries: `countries+states+cities.json.gz.ALL.bin`
+- cache for ISO2 filter `["DE", "FR"]`: `countries+states+cities.json.gz.DE_FR.bin`
+
+So the cache is always **derived from the data file name**, no extra config needed.
+You can also point `load_from_path` at your own dataset copy and it will generate separate caches for that file.
+
+---
+
+## 6. CLI: `geodb-cli` as a Living Example
+
+One goal of the CLI was **not** to reinvent logic in another crate, but to:
+
+- show how to use `geodb-core` idiomatically,
+- expose a few useful queries on the command line,
+- and serve as extra coverage for error handling, filtering, etc.
+
+The argument parsing is done via `clap` in `crates/geodb-cli/src/args.rs`, kept separate from `main.rs` for clarity.
+
+The CLI exposes commands like:
+
+- `geodb-cli stats` – show country/state/city counts,
+- `geodb-cli country DE` – lookup by ISO2/ISO3,
+- `geodb-cli phone +49` – lookup by phone code prefix.
+
+Internally, you’ll see things like:
+
+```rust
+match db.find_country_by_code(&code) {
+    Some(c) => {
+        println!("Country: {}", c.name());
+        println!("ISO2: {}", c.iso2());
+        println!("ISO3: {}", c.iso3());
+        println!("Capital: {:?}", c.capital());
+        println!("Phone Code: {}", c.phone_code());
+        println!("Currency: {}", c.currency());
+        println!("Region: {}", c.region());
+        println!("Population: {:?}", c.population());
+        println!("States: {}", c.states().len());
+    }
+    None => {
+        eprintln!("No country found for: {}", code);
+    }
+}
+```
+
+Here, `find_country_by_code` is a small helper in `GeoDb` that checks both ISO2 and ISO3:
+
+```rust
+impl<B: GeoBackend> GeoDb<B> {
+    pub fn find_country_by_iso2(&self, iso2: &str) -> Option<&Country<B>> {
+        self.countries
+            .iter()
+            .find(|c| c.iso2.as_ref().eq_ignore_ascii_case(iso2))
+    }
+
+    pub fn find_country_by_iso3(&self, iso3: &str) -> Option<&Country<B>> {
+        self.countries
+            .iter()
+            .find(|c| c.iso3.as_ref().map_or(false, |s| s.as_ref().eq_ignore_ascii_case(iso3)))
+    }
+
+    pub fn find_country_by_code(&self, code: &str) -> Option<&Country<B>> {
+        self.find_country_by_iso2(code).or_else(|| self.find_country_by_iso3(code))
+    }
+}
+```
+
+The nice part: this logic lives in `geodb-core`, so Python and WASM could use it too.
+
+---
+
+## 7. WASM: `geodb-wasm` and Embedded DB
+
+The WASM crate (`crates/geodb-wasm`) does roughly two things:
+
+1. Embeds a prebuilt binary DB (generated from the JSON) at compile time.
+2. Exposes a simple JS API to query it from the browser.
+
+The init path uses `OnceCell` and `bincode`:
+
+```rust
+static DB: OnceCell<GeoDb<StandardBackend>> = OnceCell::new();
+
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
+    web_sys::console::log_1(&"Initializing GeoDB WASM module...".into());
+
+    DB.get_or_init(|| {
+        web_sys::console::log_1(&"Deserializing embedded DB...".into());
+        match bincode::deserialize::<GeoDb<StandardBackend>>(EMBEDDED_DB) {
+            Ok(db) => {
+                web_sys::console::log_1(
+                    &format!("✓ Loaded {} countries", db.countries().len()).into(),
+                );
+                db
+            }
+            Err(e) => {
+                web_sys::console::error_1(&format!("✗ DB load failed: {}", e).into());
+                panic!("Failed to load DB: {}", e);
+            }
+        }
+    });
+}
+```
+
+The DB is embedded as a `&'static [u8]` using `include_bytes!` in a small build step. That way, the WASM bundle is self‑contained – no separate fetch needed.
+
+### Why this design?
+
+- You get **instant, offline data** in the demo.
+- The same `GeoDb` structure is used as in the CLI and library.
+- The benchmark work we did applies here too: if `smart_search` gets faster, the browser demo becomes faster automatically.
+
+---
+
+## 8. Python: `geodb_rs` Wheels on PyPI
+
+Publishing the Python binding was another rabbit hole:
+
+- use `pyo3` for the Rust ↔ Python bridge,
+- use `maturin` to build wheels and sdist,
+- make sure **data files are bundled** inside the Python package,
+- and make CI build manylinux + macOS + Windows wheels.
+
+The Python crate layout:
+
+- `crates/geodb-py/Cargo.toml` – Rust side, crate name `geodb-py`, library `geodb_rs`
+- `crates/geodb-py/pyproject.toml` – Python packaging config, project name `geodb-rs`
+
+Example `pyproject.toml`:
+
+```toml
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "geodb-rs"
+dynamic = ["version"]
+description = "Python bindings for geodb-core"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Holger Trahe" }]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "geodb_rs"
+include = [
+  { path = "geodb_rs_data/countries+states+cities.json.gz", format = "sdist" },
+  { path = "geodb_rs_data/countries+states+cities.json.gz", format = "wheel" },
+]
+```
+
+The important points:
+
+- **Rust crate name** (`geodb-py`) and **Python package name** (`geodb-rs`) can differ – maturin handles this via metadata.
+- Data is shipped via the `include` section, so the Python package has direct access to the same JSON (or prebuilt bin) as Rust.
+
+### CI for wheels
+
+Using `messense/maturin-action`, we build wheels for:
+
+- linux `x86_64` and `aarch64` (manylinux),
+- macOS `x86_64` and `aarch64`,
+- Windows `x64`.
+
+The CI job looks roughly like this:
+
+```yaml
+build-wheels:
+  needs: lint-test
+  if: github.event_name != 'pull_request'
+  strategy:
+    fail-fast: false
+    matrix:
+      include:
+        - os: ubuntu-latest
+          target: x86_64
+          manylinux: auto
+        - os: ubuntu-latest
+          target: aarch64
+          manylinux: auto
+        - os: macos-13
+          target: x86_64
+          manylinux: ""
+        - os: macos-14
+          target: aarch64
+          manylinux: ""
+        - os: windows-latest
+          target: x64
+          manylinux: ""
+
+  runs-on: ${{ matrix.os }}
+
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - uses: dtolnay/rust-toolchain@stable
+
+    - name: Build wheels with maturin
+      uses: messense/maturin-action@v1
+      env:
+        CARGO_TARGET_DIR: /tmp/maturin-target
+      with:
+        manylinux: ${{ matrix.manylinux }}
+        target: ${{ matrix.target }}
+        args: --release -m crates/geodb-py/Cargo.toml -o dist
+```
+
+The wheels are then uploaded as workflow artifacts and, in a separate `pypi.yml`, published to PyPI on tagged releases (using `MATURIN_PYPI_TOKEN`).
+
+---
+
+## 9. CI, OpenSSL, and the Switch to rustls
+
+One fun CI failure came from **OpenSSL**:
+
+- On manylinux containers and some CI environments, system OpenSSL is missing or incompatible.
+- `reqwest` defaults to OpenSSL (`native-tls`) unless you ask for `rustls`.
+
+The fix in `geodb-core`:
+
+```toml
+[dependencies]
+# ...
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], optional = true }
+```
+
+After adding this, I verified with:
+
+```bash
+cargo tree -i openssl-sys --target all
+```
+
+and made sure **no** dependency pulls `openssl-sys` anymore.
+
+This is one of those things that matter a lot when you want:
+
+- manylinux wheels,
+- reproducible CI builds,
+- and minimal non‑Rust system dependencies.
+
+---
+
+## 10. Release Automation: Tags, Crates.io, PyPI, GitHub Releases
+
+Last piece of the puzzle: release hygiene.
+
+I use `cargo-release` with a small `release.toml`:
+
+```toml
+# release.toml – config for the `cargo release` tool.
+
+shared-version = true
+dependent-version = "upgrade"
+
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+
+publish = false
+push = false
+
+allow-branch = ["main"]
+```
+
+The flow is:
+
+1. **Bump versions + tag**:
+
+   ```bash
+   cargo release patch --execute
+   ```
+
+   This updates versions, creates a commit, and tags `vX.Y.Z`.
+
+2. **CI reacts to the tag**:
+
+   - runs tests and checks,
+   - builds CLI binaries and Python wheels,
+   - uploads artifacts,
+   - publishes to crates.io (via a dedicated workflow, if desired),
+   - publishes to PyPI (via `pypi.yml`),
+   - and finally attaches binaries + wheels to the GitHub Release.
+
+End result:
+
+- A tagged release like `v0.1.3` has:
+  - Rust crates updated and published,
+  - Python wheels for major platforms on PyPI,
+  - CLI binaries downloadable directly from the GitHub Release,
+  - and a WASM demo build artifact if you wire it in.
+
+---
+
+## 11. Lessons Learned
+
+A few takeaways from this little adventure:
+
+1. **Start simple, measure first.**
+   The flat vs nested saga was a good reminder: complexity should follow proven need.
+   The flat model is marginally faster, but the real bottleneck was text processing.
+
+2. **Invest in a clean core crate.**
+   Having everything go through `geodb-core` made it easy to:
+   - add features once (aliases, regions, phone search),
+   - reuse in CLI, WASM, and Python,
+   - and drive all tests and benchmarks from one place.
+
+3. **CI for multi‑platform is worth it early.**
+   It forces you to:
+   - get rid of OpenSSL pain,
+   - think about manylinux constraints,
+   - and set up proper caching, feature flags, and build scripts.
+
+4. **Profilers and benchmarks are complementary.**
+   - Criterion: “flat is ~2–4% faster than nested.”
+   - Instruments: “you’re mostly paying for text folding and scoring.”
+   Both are necessary to understand where to focus next.
+
+5. **Rust + Python + WASM is a powerful trio.**
+   - Rust gives you robust core logic and performance,
+   - Python bindings unlock the data science ecosystem,
+   - WASM gives you instant demos and interactive docs.
+
+---
+
+## 12. What’s Next?
+
+From here, the most interesting improvements are likely in:
+
+- **Text search pipeline**
+  - caching folded keys per city,
+  - precomputing tokens,
+  - exploring simpler scoring algorithms.
+
+- **Smaller / more compact backends**
+  - using `smol_str` or similar compact string storage,
+  - considering more advanced binary layouts.
+
+- **Richer APIs**
+  - better alias and region search,
+  - reverse lookups (geo → city/country),
+  - timezone utilities on top of `CountryTimezone`.
+
+If any of that sounds fun, contributions and issue discussions are very welcome:
+
+👉 Repo: `https://github.com/holg/geodb-rs`
+
+This is very much a "real" project: it scrapes enough of the Rust, CI, packaging, and profiling surface area that you can learn a lot by poking around – exactly how I like it.
+
+---
+
+## Addendum: Building for Apple Platforms (iOS, macOS, watchOS)
+
+After getting the core library, CLI, WASM, and Python bindings working, I wanted to explore another frontier: **native Apple apps** using Swift with the Rust GeoDB as a backend.
+
+This turned into a deep dive into:
+- Creating **XCFrameworks** from Rust libraries using UniFFI
+- Setting up **Swift Package Manager (SPM)** for local development
+- Building for **iOS, macOS, and watchOS** from a single Rust codebase
+- Dealing with platform-specific challenges, especially the experimental watchOS targets
+
+### 13. The Goal: Native Swift Apps with Embedded Database
+
+The vision was simple but ambitious:
+- Build native SwiftUI apps for iOS, macOS, and watchOS
+- Embed the entire GeoDB dataset (~11MB compressed) in each app
+- Use the same Rust core logic (`geodb-core`) we'd already built
+- Generate Swift bindings automatically via **UniFFI**
+- Distribute as a proper Swift Package for clean integration
+
+This would give us:
+- **Offline-first apps** with instant search (no network needed)
+- **Native performance** from Rust compiled to native code
+- **Platform-specific UIs** in SwiftUI
+- **Code reuse** - the same Rust code powering CLI, Python, WASM, and now native apps
+
+### 14. Architecture: UniFFI for Rust ↔ Swift Bindings
+
+Rather than writing FFI bindings manually, I used **UniFFI** from Mozilla, which:
+- Takes Rust code annotated with `#[uniffi::export]`
+- Generates C headers, Swift code, and metadata automatically
+- Handles memory management and type conversions
+
+The FFI crate structure (`crates/geodb-ffi/`):
+
+```rust
+// lib.rs - Define the FFI interface
+use uniffi;
+
+#[uniffi::export]
+pub fn new_geodb_engine() -> Arc<GeoDbEngine> {
+    Arc::new(GeoDbEngine::new())
+}
+
+pub struct GeoDbEngine {
+    db: OnceCell<GeoDb<StandardBackend>>,
+}
+
+#[uniffi::export]
+impl GeoDbEngine {
+    pub fn stats(&self) -> DbStatsDto {
+        let db = self.db();
+        DbStatsDto {
+            country_count: db.countries().len() as u32,
+            state_count: db.all_states().count() as u32,
+            city_count: db.all_cities().count() as u32,
+        }
+    }
+
+    pub fn find_cities_by_substring(
+        &self,
+        substr: String,
+        limit: u32
+    ) -> Vec<CityResult> {
+        // Implementation using geodb-core...
+    }
+
+    pub fn smart_search(
+        &self,
+        query: String,
+        limit: u32
+    ) -> Vec<CityResult> {
+        // Fuzzy search using geodb-core...
+    }
+
+    // More methods...
+}
+```
+
+The `Cargo.toml` specified both dynamic and static library types:
+
+```toml
+[lib]
+crate-type = ["cdylib", "staticlib"]
+name = "geodb_ffi"
+```
+
+This flexibility became crucial later for watchOS compatibility.
+
+### 15. Creating the XCFramework
+
+An **XCFramework** is Apple's format for distributing binary frameworks that support multiple platforms and architectures in a single bundle.
+
+The structure looks like:
+```
+GeodbFfi.xcframework/
+├── Info.plist                      # Describes all available libraries
+├── ios-arm64/                      # iPhone/iPad device
+│   └── GeodbFfi.framework/
+│       ├── GeodbFfi               # Binary
+│       ├── Headers/
+│       │   ├── geodb_ffi.swift
+│       │   ├── geodb_ffiFFI.h
+│       │   └── geodb_ffiFFI.modulemap
+│       └── Info.plist
+├── ios-arm64-simulator/            # iOS Simulator
+│   └── GeodbFfi.framework/
+├── macos-arm64/                    # macOS Apple Silicon
+│   └── GeodbFfi.framework/
+├── watchos-arm64/                  # Apple Watch device
+│   └── GeodbFfi.framework/
+└── watchos-arm64-simulator/        # Watch Simulator
+    └── GeodbFfi.framework/
+```
+
+#### Building for iOS and macOS (The Easy Part)
+
+iOS and macOS are tier-1 Rust targets with full support:
+
+```bash
+# Install targets
+rustup target add aarch64-apple-ios          # iOS device
+rustup target add aarch64-apple-ios-sim      # iOS simulator
+rustup target add aarch64-apple-darwin       # macOS
+
+# Build for each target
+cargo build --lib --release --target aarch64-apple-ios
+cargo build --lib --release --target aarch64-apple-ios-sim
+cargo build --lib --release --target aarch64-apple-darwin
+```
+
+This produces dynamic libraries (`.dylib`) that we package into framework bundles.
+
+#### Generating Swift Bindings
+
+UniFFI provides a `uniffi-bindgen` tool that reads your Rust library and generates Swift code:
+
+```bash
+cargo run --bin uniffi-bindgen generate \
+  --library target/aarch64-apple-ios/release/libgeodb_ffi.dylib \
+  --language swift \
+  --out-dir bindings/
+```
+
+This creates three files:
+- `geodb_ffi.swift` - Swift classes and functions
+- `geodb_ffiFFI.h` - C header with FFI declarations
+- `geodb_ffiFFI.modulemap` - Module map for importing
+
+#### The Build Script
+
+I created `scripts/build_spm_package.sh` to automate everything:
+
+```bash
+#!/bin/bash
+set -e
+
+# Build for all targets
+for target in aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin; do
+  cargo build --lib --release --target $target
+done
+
+# Generate Swift bindings (once, works for all platforms)
+cargo run --bin uniffi-bindgen generate \
+  --library target/aarch64-apple-ios/release/libgeodb_ffi.dylib \
+  --language swift \
+  --out-dir /tmp/bindings
+
+# Create framework structure for each platform
+for platform in ios-arm64 ios-arm64-simulator macos-arm64; do
+  mkdir -p "crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/$platform/GeodbFfi.framework/Headers"
+
+  # Copy binary
+  cp "target/$target/release/libgeodb_ffi.dylib" \
+     "crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/$platform/GeodbFfi.framework/GeodbFfi"
+
+  # Copy headers
+  cp /tmp/bindings/* \
+     "crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/$platform/GeodbFfi.framework/Headers/"
+
+  # Generate Info.plist
+  cat > "crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/$platform/GeodbFfi.framework/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>GeodbFfi</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.geodb.GeodbFfi</string>
+    <!-- ... more keys ... -->
+</dict>
+</plist>
+EOF
+done
+
+# Create XCFramework Info.plist describing all platforms
+cat > "crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AvailableLibraries</key>
+    <array>
+        <dict>
+            <key>LibraryIdentifier</key>
+            <string>ios-arm64</string>
+            <key>LibraryPath</key>
+            <string>GeodbFfi.framework</string>
+            <key>SupportedPlatform</key>
+            <string>ios</string>
+            <key>SupportedArchitectures</key>
+            <array><string>arm64</string></array>
+        </dict>
+        <!-- Similar entries for other platforms -->
+    </array>
+    <key>CFBundlePackageType</key>
+    <string>XFWK</string>
+    <key>XCFrameworkFormatVersion</key>
+    <string>1.0</string>
+</dict>
+</plist>
+EOF
+```
+
+### 16. Swift Package Manager Integration
+
+With the XCFramework built, the next step was creating a **local Swift Package** for easy Xcode integration.
+
+The package structure:
+```
+crates/SPM-GeoDB-ffi/
+├── Package.swift              # SPM manifest
+├── GeodbFfi.xcframework/      # The binary framework
+└── Sources/
+    └── GeodbKit/              # Swift wrapper layer
+        └── GeodbKit.swift
+```
+
+#### Package.swift Manifest
+
+```swift
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "GeodbKit",
+    platforms: [
+        .iOS(.v13),
+        .macOS(.v13),
+        .watchOS(.v6),  // Added later for watchOS support
+    ],
+    products: [
+        .library(
+            name: "GeodbKit",
+            targets: ["GeodbKit", "GeodbFfi"]
+        ),
+    ],
+    targets: [
+        // The Rust XCFramework
+        .binaryTarget(
+            name: "GeodbFfi",
+            path: "GeodbFfi.xcframework"
+        ),
+
+        // Swift wrapper
+        .target(
+            name: "GeodbKit",
+            dependencies: ["GeodbFfi"],
+            path: "Sources/GeodbKit"
+        ),
+    ]
+)
+```
+
+Key points:
+- **`binaryTarget`** points to the XCFramework (local path for development)
+- **`platforms`** specifies minimum OS versions
+- **`GeodbKit`** is a thin Swift wrapper that re-exports the Rust API cleanly
+
+#### Using the Package in Xcode
+
+In an Xcode project, add the package via:
+1. File → Add Package Dependencies
+2. Enter local path: `/path/to/geodb-rs/crates/SPM-GeoDB-ffi`
+3. Xcode resolves the package and links the frameworks
+
+Then in Swift code:
+
+```swift
+import GeodbKit
+
+@MainActor
+class GeoDatabase: ObservableObject {
+    @Published var isInitialized = false
+    @Published var stats: DbStatsDto?
+    private var db: GeoDbEngine?
+
+    init() {
+        Task {
+            await initializeDatabase()
+        }
+    }
+
+    func initializeDatabase() async {
+        // The Rust FFI init
+        db = newGeodbEngine()
+        stats = db?.stats()
+        isInitialized = true
+    }
+
+    func search(query: String) -> [CityResult] {
+        guard let db = db else { return [] }
+        return db.smartSearch(query: query, limit: 50)
+    }
+}
+```
+
+### 17. The watchOS Challenge
+
+iOS and macOS worked smoothly because Rust has excellent support for them. watchOS, however, was a different story.
+
+#### Problem 1: No Pre-built watchOS Targets
+
+When trying to build for watchOS:
+
+```bash
+$ rustup target add aarch64-apple-watchos
+error: toolchain 'stable-aarch64-apple-darwin' does not support target 'aarch64-apple-watchos'
+```
+
+While `rustc --print target-list` showed watchOS targets exist:
+```
+aarch64-apple-watchos
+aarch64-apple-watchos-sim
+arm64_32-apple-watchos
+```
+
+These are **tier 3 targets** - they exist in rustc but have no pre-built standard library.
+
+#### Solution: Build the Standard Library On-the-Fly
+
+Rust nightly supports `-Zbuild-std` which compiles the standard library from source:
+
+```bash
+# Install nightly
+rustup toolchain install nightly
+
+# Build with -Zbuild-std
+cargo +nightly build --lib --release \
+  --target aarch64-apple-watchos \
+  -Zbuild-std=std,panic_abort
+```
+
+This worked! But revealed the next problem...
+
+#### Problem 2: watchOS Doesn't Support cdylib
+
+```
+error: cannot produce cdylib for `geodb-ffi` as the target
+`aarch64-apple-watchos` does not support these crate types
+```
+
+watchOS only supports static libraries, not dynamic ones.
+
+#### Solution: Add staticlib Support
+
+Modified `Cargo.toml`:
+
+```toml
+[lib]
+crate-type = ["cdylib", "staticlib"]  # Was just ["cdylib"]
+```
+
+Now:
+```bash
+cargo +nightly build --lib --release \
+  --target aarch64-apple-watchos \
+  -Zbuild-std=std,panic_abort
+
+warning: dropping unsupported crate type `cdylib` for target `aarch64-apple-watchos`
+Finished release [optimized] target(s) in 46.21s
+```
+
+Success! The static library was created at:
+```
+target/aarch64-apple-watchos/release/libgeodb_ffi.a
+```
+
+#### Building for Both watchOS Targets
+
+```bash
+# Device (real Apple Watch)
+cargo +nightly build --lib --release \
+  --target aarch64-apple-watchos \
+  -Zbuild-std=std,panic_abort
+
+# Simulator
+cargo +nightly build --lib --release \
+  --target aarch64-apple-watchos-sim \
+  -Zbuild-std=std,panic_abort
+```
+
+Both produced ~31MB static archives (with embedded database).
+
+#### Problem 3: arm64_32 Support (Older Watches) - The Deep Rabbit Hole
+
+Older Apple Watches (Series 3 and earlier) use `arm64_32` architecture - a weird hybrid where the CPU is 64-bit ARM but runs with 32-bit pointers. Apple did this to save memory on resource-constrained devices.
+
+First attempt:
+
+```bash
+cargo +nightly build --lib --release \
+  --target arm64_32-apple-watchos \
+  -Z build-std
+```
+
+**Explosion #1 - The `ring` crate:**
+
+```
+error[E0599]: no method named `in_out_whole_block_bits` found for mutable
+reference `&mut gcm::Context<'_, clmul::Key>` in the current scope
+  --> ring-0.17.14/src/aead/aes_gcm/aarch64.rs:27:33
+   |
+27 |     let whole_block_bits = auth.in_out_whole_block_bits();
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^ method not found
+```
+
+The `ring` cryptographic library - a foundational crate used by `rustls` for TLS - has incomplete support for arm64_32. The assembly routines assume either pure 32-bit or pure 64-bit, not this hybrid monster.
+
+**The Detective Work:**
+
+Where does `ring` come from? Let's trace the dependency:
+
+```bash
+$ cargo tree -p geodb-ffi -i ring
+ring v0.17.14
+├── rustls v0.23.35
+│   ├── hyper-rustls v0.27.7
+│   │   └── reqwest v0.12.24
+│   │       └── geodb-core v0.1.3
+│   │           └── geodb-ffi v0.1.0
+```
+
+Aha! `reqwest` → `rustls` → `ring`. But wait - we use `reqwest` for **downloading** the dataset. On a watch app, the data is **embedded**. We don't need HTTP at runtime!
+
+**The Solution - Surgical Feature Removal:**
+
+In `geodb-core/Cargo.toml`, the `builder` feature pulls in `reqwest`:
+
+```toml
+[features]
+default = ["json", "builder", "compact", "search_blobs"]
+builder = ["json", "dep:reqwest"]  # ← This is the culprit
+```
+
+Modified `geodb-ffi/Cargo.toml` to exclude the builder:
+
+```toml
+# Before (pulls in reqwest → rustls → ring → 💥)
+geodb-core = { path = "../geodb-core" }
+
+# After (no network deps, watchOS-compatible!)
+geodb-core = { path = "../geodb-core", default-features = false, features = ["json", "compact", "search_blobs"] }
+```
+
+**Victory!**
+
+```bash
+$ cargo +nightly build --release --target arm64_32-apple-watchos -Z build-std -p geodb-ffi
+
+warning: dropping unsupported crate type `cdylib` for target `arm64_32-apple-watchos`
+    Finished `release` profile [optimized] target(s) in 32.01s
+```
+
+IT BUILDS! 🎉
+
+Now we have both architectures:
+- `target/aarch64-apple-watchos/release/libgeodb_ffi.a` (30MB, arm64)
+- `target/arm64_32-apple-watchos/release/libgeodb_ffi.a` (31MB, arm64_32)
+
+#### Creating the Universal watchOS Binary
+
+Apple expects a **fat binary** (universal binary) containing both architectures. Enter `lipo`:
+
+```bash
+# Create directory for the combined binary
+mkdir -p target/watchos-device-fat/release
+
+# Combine arm64 and arm64_32 into one fat binary
+lipo -create \
+    target/aarch64-apple-watchos/release/libgeodb_ffi.a \
+    target/arm64_32-apple-watchos/release/libgeodb_ffi.a \
+    -output target/watchos-device-fat/release/libgeodb_ffi.a
+
+# Verify
+$ lipo -info target/watchos-device-fat/release/libgeodb_ffi.a
+Architectures in the fat file: libgeodb_ffi.a are: arm64_32 arm64
+```
+
+**Final XCFramework structure:**
+
+```
+GeodbFfi.xcframework/
+├── ios-arm64/                      # iPhone/iPad
+├── ios-arm64-simulator/            # iOS Simulator
+├── macos-arm64/                    # macOS
+├── watchos-arm64_arm64_32/         # ← Fat binary for ALL watches!
+│   └── GeodbFfi.framework/
+│       └── GeodbFfi               # Contains both arm64 AND arm64_32
+└── watchos-arm64-simulator/        # Watch Simulator
+```
+
+#### The Full Build Script for watchOS
+
+```bash
+#!/bin/bash
+# Build watchOS targets (requires nightly + rust-src)
+
+echo "Building for watchOS device (arm64)..."
+cargo +nightly build --release --target aarch64-apple-watchos -Z build-std --lib
+
+echo "Building for watchOS device (arm64_32 - older watches)..."
+cargo +nightly build --release --target arm64_32-apple-watchos -Z build-std --lib
+
+echo "Building for watchOS simulator..."
+cargo +nightly build --release --target aarch64-apple-watchos-sim -Z build-std --lib
+
+echo "Creating fat binary for watchOS device..."
+mkdir -p target/watchos-device-fat/release
+lipo -create \
+    target/aarch64-apple-watchos/release/libgeodb_ffi.a \
+    target/arm64_32-apple-watchos/release/libgeodb_ffi.a \
+    -output target/watchos-device-fat/release/libgeodb_ffi.a
+
+echo "✓ watchOS builds complete!"
+echo "  - Device (fat): target/watchos-device-fat/release/libgeodb_ffi.a"
+echo "  - Simulator:    target/aarch64-apple-watchos-sim/release/libgeodb_ffi.a"
+```
+
+**Prerequisites:**
+
+```bash
+# Install nightly toolchain
+rustup toolchain install nightly
+
+# Install rust-src component (needed for -Z build-std)
+rustup component add rust-src --toolchain nightly
+```
+
+Note: You do NOT need `rustup target add` for these targets! They're tier-3 targets that don't have pre-built standard libraries. The `-Z build-std` flag compiles the standard library from source for each target.
+
+#### Lessons from the arm64_32 Adventure
+
+1. **Dependency archaeology matters** - `cargo tree -i <crate>` is your friend for finding why something is being pulled in
+
+2. **Feature flags are surgical tools** - Disabling `builder` removed the entire TLS/crypto stack we didn't need
+
+3. **Tier-3 targets are surprisingly usable** - With nightly + build-std, you can target almost anything rustc knows about
+
+4. **Fat binaries are still a thing** - Apple's `lipo` tool from 1990s NeXT is still essential in 2024
+
+5. **The warning is fine** - "dropping unsupported crate type cdylib" just means watchOS only supports static libraries, which is exactly what we want
+
+The final result: **Full watchOS support for ALL Apple Watch models**, from Series 3 (2017) to the latest Ultra 2.
+
+#### Creating watchOS Framework Structure
+
+With the static libraries built, I created the framework structure:
+
+```bash
+# Create directories
+mkdir -p crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/watchos-arm64/GeodbFfi.framework/Headers
+mkdir -p crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/watchos-arm64-simulator/GeodbFfi.framework/Headers
+
+# Copy static libraries (rename to match framework name)
+cp target/aarch64-apple-watchos/release/libgeodb_ffi.a \
+   crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/watchos-arm64/GeodbFfi.framework/GeodbFfi
+
+cp target/aarch64-apple-watchos-sim/release/libgeodb_ffi.a \
+   crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/watchos-arm64-simulator/GeodbFfi.framework/GeodbFfi
+
+# Copy Swift bindings
+cp /tmp/bindings/* \
+   crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/watchos-arm64/GeodbFfi.framework/Headers/
+
+cp /tmp/bindings/* \
+   crates/SPM-GeoDB-ffi/GeodbFfi.xcframework/watchos-arm64-simulator/GeodbFfi.framework/Headers/
+```
+
+#### Framework Info.plist Files
+
+Each framework needs an `Info.plist`:
+
+**watchos-arm64/GeodbFfi.framework/Info.plist** (device):
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>GeodbFfi</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.geodb.GeodbFfi</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>WatchOS</string>
+    </array>
+    <key>MinimumOSVersion</key>
+    <string>6.0</string>
+</dict>
+</plist>
+```
+
+**watchos-arm64-simulator/GeodbFfi.framework/Info.plist** (simulator):
+```xml
+<!-- Same as above, but with: -->
+<key>CFBundleSupportedPlatforms</key>
+<array>
+    <string>WatchSimulator</string>
+</array>
+```
+
+#### Updating XCFramework Info.plist
+
+Updated the main `Info.plist` to include watchOS libraries:
+
+```xml
+<dict>
+    <key>AvailableLibraries</key>
+    <array>
+        <!-- iOS entries... -->
+        <!-- macOS entry... -->
+
+        <!-- watchOS device -->
+        <dict>
+            <key>BinaryPath</key>
+            <string>GeodbFfi.framework/GeodbFfi</string>
+            <key>LibraryIdentifier</key>
+            <string>watchos-arm64</string>
+            <key>LibraryPath</key>
+            <string>GeodbFfi.framework</string>
+            <key>SupportedArchitectures</key>
+            <array>
+                <string>arm64</string>
+            </array>
+            <key>SupportedPlatform</key>
+            <string>watchos</string>
+        </dict>
+
+        <!-- watchOS simulator -->
+        <dict>
+            <key>BinaryPath</key>
+            <string>GeodbFfi.framework/GeodbFfi</string>
+            <key>LibraryIdentifier</key>
+            <string>watchos-arm64-simulator</string>
+            <key>LibraryPath</key>
+            <string>GeodbFfi.framework</string>
+            <key>SupportedArchitectures</key>
+            <array>
+                <string>arm64</string>
+            </array>
+            <key>SupportedPlatform</key>
+            <string>watchos</string>
+            <key>SupportedPlatformVariant</key>
+            <string>simulator</string>
+        </dict>
+    </array>
+</dict>
+```
+
+#### Updated Package.swift
+
+Added watchOS platform support:
+
+```swift
+let package = Package(
+    name: "GeodbKit",
+    platforms: [
+        .iOS(.v13),
+        .macOS(.v13),
+        .watchOS(.v6),  // ← Added this
+    ],
+    // ... rest unchanged
+)
+```
+
+### 18. Building the watchOS App
+
+With the XCFramework complete, building a watchOS app was straightforward:
+
+```bash
+xcodebuild -scheme "GeoDb Watch App" \
+  -destination 'platform=watchOS Simulator,id=<DEVICE_ID>' \
+  build
+```
+
+The build succeeded! Verification:
+
+```bash
+# Check app size
+$ ls -lh "Build/Products/Debug-watchsimulator/GeoDb Watch App.app/GeoDb Watch App.debug.dylib"
+-rwxr-xr-x  1 user  staff    11M Nov 28 21:06 GeoDb Watch App.debug.dylib
+
+# Check for Rust symbols
+$ nm -gU "GeoDb Watch App.debug.dylib" | grep uniffi | head -5
+0000000000029df4 T _uniffi_geodb_ffi_fn_clone_geodbengine
+0000000000029e18 T _uniffi_geodb_ffi_fn_constructor_geodbengine_new
+0000000000029e60 T _uniffi_geodb_ffi_fn_method_geodbengine_country_count
+0000000000029e84 T _uniffi_geodb_ffi_fn_method_geodbengine_find_cities_by_substring
+0000000000029ec0 T _uniffi_geodb_ffi_fn_method_geodbengine_find_countries_by_substring
+```
+
+Perfect! The Rust library (with 31MB embedded database) was fully linked into the watchOS app binary.
+
+### 19. Lessons from the Apple Platform Journey
+
+#### What Worked Well
+
+1. **UniFFI is excellent** - Automatic binding generation saved weeks of manual FFI work
+2. **XCFramework is the right abstraction** - Single artifact supporting multiple platforms
+3. **Local SPM packages are great for development** - No need to publish during iteration
+4. **Rust's compile-time features** - The same core library works on all platforms
+
+#### Key Challenges
+
+1. **watchOS tier-3 support** - Required nightly toolchain and `-Zbuild-std`
+2. **cdylib vs staticlib** - Different platforms need different library types
+3. **Dependency compatibility** - Some crates (like `ring`) don't support all targets
+4. **Build script complexity** - Automating XCFramework creation for 5+ platforms needs careful scripting
+
+#### Build Script Summary
+
+Final automated build process:
+
+```bash
+#!/bin/bash
+set -e
+
+echo "Building geodb-ffi for all Apple platforms..."
+
+# iOS (stable toolchain)
+cargo build --lib --release --target aarch64-apple-ios
+cargo build --lib --release --target aarch64-apple-ios-sim
+
+# macOS (stable toolchain)
+cargo build --lib --release --target aarch64-apple-darwin
+
+# watchOS (nightly toolchain with build-std)
+cargo +nightly build --lib --release \
+  --target aarch64-apple-watchos \
+  -Zbuild-std=std,panic_abort
+
+cargo +nightly build --lib --release \
+  --target aarch64-apple-watchos-sim \
+  -Zbuild-std=std,panic_abort
+
+# Generate Swift bindings (once)
+cargo run --bin uniffi-bindgen generate \
+  --library target/aarch64-apple-ios/release/libgeodb_ffi.dylib \
+  --language swift \
+  --out-dir /tmp/bindings
+
+# Create XCFramework structure
+./scripts/create_xcframework.sh /tmp/bindings
+
+echo "✓ XCFramework ready at crates/SPM-GeoDB-ffi/GeodbFfi.xcframework"
+```
+
+### 20. The Apps
+
+With the package complete, I built three native apps:
+
+**iOS App**: Full-featured with map view, search, detail views
+```swift
+import SwiftUI
+import MapKit
+import GeodbKit
+
+struct ContentView: View {
+    @EnvironmentObject var database: GeoDatabase
+    @State private var searchText = ""
+    @State private var results: [CityResult] = []
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(results, id: \.id) { city in
+                    NavigationLink(destination: CityDetailView(city: city)) {
+                        HStack {
+                            Text(city.flag)
+                            VStack(alignment: .leading) {
+                                Text(city.name)
+                                Text(city.countryName).font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $searchText)
+            .onChange(of: searchText) { _, newValue in
+                results = database.search(query: newValue)
+            }
+        }
+    }
+}
+```
+
+**macOS App**: Same code with platform-specific adjustments
+- Larger detail sheets
+- Toolbar instead of navigation bars
+- Multi-window support
+
+**watchOS App**: Simplified UI for small screens
+```swift
+import SwiftUI
+import GeodbKit
+
+struct WatchContentView: View {
+    @EnvironmentObject var database: GeoDatabase
+    @State private var searchText = ""
+    @State private var results: [CityResult] = []
+
+    var body: some View {
+        List {
+            ForEach(results, id: \.id) { city in
+                NavigationLink(destination: CityDetailView(city: city)) {
+                    VStack(alignment: .leading) {
+                        Text("\(city.flag) \(city.name)")
+                            .font(.headline)
+                        Text(city.countryName)
+                            .font(.caption)
+                    }
+                }
+            }
+        }
+        .searchable(text: $searchText)
+    }
+}
+```
+
+All three apps share:
+- The same Rust backend (`geodb-core`)
+- The same FFI layer (`geodb-ffi`)
+- The same Swift package (`GeodbKit`)
+- The same embedded database (31MB, ~150K cities)
+
+### 21. Performance and Size
+
+Final binary sizes with embedded database:
+
+| Platform | Architectures | Framework Size | Notes |
+|----------|---------------|----------------|-------|
+| iOS      | arm64 | 8.6MB | iPhone 5s and later |
+| iOS Simulator | arm64 | 8.6MB | Apple Silicon Macs |
+| macOS    | arm64 | 8.6MB | Apple Silicon |
+| watchOS  | arm64 + arm64_32 | ~62MB (fat) | ALL watches from Series 3+ |
+| watchOS Simulator | arm64 | 31MB | Apple Silicon Macs |
+
+The watchOS fat binary is larger because it contains **two complete copies** of the library - one for each architecture. This is the price of supporting older Apple Watch models, but App Store thinning will deliver only the relevant slice to each device.
+
+Performance (measured on M1 Mac):
+- Database initialization: ~50ms (deserializing bincode)
+- Smart search for "Berlin": ~2-5ms
+- Spatial search (10km radius): ~1-3ms
+- Memory usage: ~15MB (mostly the embedded data)
+
+### 22. What's Next for Apple Platforms
+
+**Already achieved:**
+- ✅ Full watchOS support including arm64_32 (Series 3+)
+- ✅ Fat binaries combining multiple architectures
+- ✅ Flutter plugin using the same XCFramework
+
+**Future improvements:**
+1. **Optimize binary size** - Explore compression and lazy loading strategies
+2. **Add x86_64 support** - For Intel Macs and older simulators
+3. **Publish to SwiftPM registry** - When it's ready for public use
+4. **App Store submission** - Polish the apps and submit
+
+The journey from Rust library to native Apple apps taught me:
+- Cross-platform doesn't have to mean "lowest common denominator"
+- Build-time flexibility (features, build-std) enables supporting even experimental targets
+- The Apple ecosystem is actually quite Rust-friendly once you understand the tooling
+- A well-architected core library can power an incredible variety of frontends
+
+Full code available at: `https://github.com/holg/geodb-rs`
+
+The `GeoDB-App/` directory contains the Xcode projects, and `crates/SPM-GeoDB-ffi/` has the complete Swift package setup.
+
+</script>
+</body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const markdownEl = document.getElementById('markdown-content');
+        const contentEl = document.getElementById('content');
+
+        if (!markdownEl || !contentEl) {
+            console.error("Markdown container or content target not found");
+            return;
+        }
+
+        const markdown = markdownEl.textContent || markdownEl.innerText || "";
+        const html = marked.parse(markdown);
+
+        contentEl.innerHTML = html;
+
+        if (window.hljs) {
+            document.querySelectorAll('pre code').forEach((block) => {
+                window.hljs.highlightElement(block);
+            });
+        }
+    });
+</script>
+</html>

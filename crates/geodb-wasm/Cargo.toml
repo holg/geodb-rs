@@ -36,7 +36,19 @@ serde = { workspace = true, features = ["derive"] }
 serde-wasm-bindgen = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["console"] }
+web-sys = { workspace = true, features = [
+    "console",
+    "Window",
+    "Document",
+    "Location",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Event",
+    "EventTarget",
+    "UrlSearchParams",
+    "CssStyleDeclaration"
+] }
 [build-dependencies]
 geodb-core = { version = "0.1", path = "../geodb-core", default-features = false }
 

@@ -336,6 +336,59 @@ impl PyGeoDb {
         }
         to_py(py, &out)
     }
+
+    /// Query cities with optional filters for country, region, and city name.
+    /// This allows disambiguating cities with common names (e.g., Springfield).
+    ///
+    /// Args:
+    ///     country: Filter by country name or ISO2/ISO3 code (e.g., "US", "Germany")
+    ///     region: Filter by state/region name or code (e.g., "Illinois", "NW")
+    ///     city: Filter by city name substring (accent-insensitive)
+    ///     limit: Maximum number of results to return (default: 20)
+    ///
+    /// Returns:
+    ///     List of matching cities as dicts with full location info
+    ///
+    /// Example:
+    ///     # Find Springfield in Illinois, US
+    ///     results = db.query_cities(country="US", region="Illinois", city="Springfield")
+    ///
+    ///     # Find all cities in Bavaria, Germany
+    ///     results = db.query_cities(country="DE", region="Bavaria", limit=100)
+    #[pyo3(signature = (country=None, region=None, city=None, limit=20))]
+    pub fn query_cities<'py>(
+        &self,
+        py: Python<'py>,
+        country: Option<&str>,
+        region: Option<&str>,
+        city: Option<&str>,
+        limit: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut query = self.inner.query_cities();
+
+        if let Some(c) = country {
+            query = query.filter_country(c);
+        }
+        if let Some(r) = region {
+            query = query.filter_region(r);
+        }
+        if let Some(ci) = city {
+            query = query.filter_city(ci);
+        }
+
+        let items: Vec<_> = query
+            .collect()
+            .into_iter()
+            .take(limit)
+            .map(|(city, state, country)| CityView {
+                country,
+                state,
+                city,
+            })
+            .collect();
+
+        to_py(py, &items)
+    }
 }
 
 /// Python module entry point

@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/htr/Documents/develeop/rust/geodb-rs/target/macos-universal-release/libgeodb_ffi.dylib'
+relocations:     []
+...

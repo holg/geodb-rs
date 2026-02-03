@@ -1,3 +1,23 @@
+## 0.1.8
+
+* Fixed geoid overflow crash: geoid now passed as String instead of Int to handle values > Int64.max
+* Updated README with correct API documentation
+
+## 0.1.7
+
+* Fixed iOS build: Updated C header file (geodb_ffiFFI.h) with all function declarations
+* All UniFFI bindings (Swift, Kotlin, C header) now properly synchronized with native libraries
+
+## 0.1.6
+
+* Rebuilt native libraries with geoid support
+
+## 0.1.5
+
+* Added `geoid` field to CityResult for unique geographic identification
+* Cities now return their numeric geoid from the database
+* Countries and states return geoid=0
+
 ## 0.1.4
 
 * Added Android support with all architectures (arm64-v8a, armeabi-v7a, x86_64, x86)

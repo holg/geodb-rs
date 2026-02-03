@@ -33,6 +33,7 @@ pub struct CityResult {
     pub lat: f64,
     pub lng: f64,
     pub population: u64,
+    pub geoid: u64,
     pub distance_km: Option<f64>,
     pub translations: std::collections::HashMap<String, String>,
 }
@@ -183,6 +184,37 @@ impl GeoDbEngine {
             .collect()
     }
 
+    /// Query cities with optional filters for country, region, and city name.
+    /// This allows disambiguating cities with common names (e.g., Springfield).
+    /// All filters are optional and use substring matching (accent-insensitive).
+    pub fn query_cities(
+        &self,
+        country: Option<String>,
+        region: Option<String>,
+        city: Option<String>,
+        limit: u32,
+    ) -> Vec<CityResult> {
+        let db = DB.get().unwrap();
+        let mut query = db.query_cities();
+
+        if let Some(ref c) = country {
+            query = query.filter_country(c);
+        }
+        if let Some(ref r) = region {
+            query = query.filter_region(r);
+        }
+        if let Some(ref ci) = city {
+            query = query.filter_city(ci);
+        }
+
+        query
+            .collect()
+            .into_iter()
+            .take(limit as usize)
+            .map(|(city, state, country)| self.map_city(city, state, country, None))
+            .collect()
+    }
+
     pub fn get_country_translation(&self, iso2: String, lang_code: String) -> Option<String> {
         let db = DB.get().unwrap();
         let country = db.find_country_by_code(&iso2)?;
@@ -212,6 +244,7 @@ impl GeoDbEngine {
             lat: c.lat().unwrap_or(0.0),
             lng: c.lng().unwrap_or(0.0),
             population: c.population().unwrap_or(0),
+            geoid: 0, // Countries don't have a geoid
             distance_km: None,
             translations,
         }
@@ -232,6 +265,7 @@ impl GeoDbEngine {
             lat: s.lat().unwrap_or(0.0),
             lng: s.lng().unwrap_or(0.0),
             population: 0,
+            geoid: 0, // States don't have a geoid
             distance_km: None,
             translations,
         }
@@ -258,6 +292,7 @@ impl GeoDbEngine {
             lat: city.lat().unwrap_or(0.0),
             lng: city.lng().unwrap_or(0.0),
             population: city.population().unwrap_or(0),
+            geoid: city.geoid,
             distance_km: dist,
             translations,
         }

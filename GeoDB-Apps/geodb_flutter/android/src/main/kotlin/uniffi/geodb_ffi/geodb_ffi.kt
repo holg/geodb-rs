@@ -648,6 +648,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_geodb_ffi_checksum_method_geodbengine_find_states_by_substring(
     ): Short
+    external fun uniffi_geodb_ffi_checksum_method_geodbengine_get_country_translation(
+    ): Short
     external fun uniffi_geodb_ffi_checksum_method_geodbengine_smart_search(
     ): Short
     external fun uniffi_geodb_ffi_checksum_method_geodbengine_stats(
@@ -691,6 +693,8 @@ internal object UniffiLib {
     external fun uniffi_geodb_ffi_fn_method_geodbengine_find_nearest(`ptr`: Long,`lat`: Double,`lng`: Double,`count`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_geodb_ffi_fn_method_geodbengine_find_states_by_substring(`ptr`: Long,`substr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_geodb_ffi_fn_method_geodbengine_get_country_translation(`ptr`: Long,`iso2`: RustBuffer.ByValue,`langCode`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_geodb_ffi_fn_method_geodbengine_smart_search(`ptr`: Long,`query`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -834,6 +838,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_geodb_ffi_checksum_method_geodbengine_find_states_by_substring() != 26495.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_geodb_ffi_checksum_method_geodbengine_get_country_translation() != 49976.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_geodb_ffi_checksum_method_geodbengine_smart_search() != 33908.toShort()) {
@@ -1244,6 +1251,8 @@ public interface GeoDbEngineInterface {
     
     fun `findStatesBySubstring`(`substr`: kotlin.String): List<CityResult>
     
+    fun `getCountryTranslation`(`iso2`: kotlin.String, `langCode`: kotlin.String): kotlin.String?
+    
     fun `smartSearch`(`query`: kotlin.String): List<CityResult>
     
     fun `stats`(): DbStatsDto
@@ -1449,6 +1458,19 @@ open class GeoDbEngine: Disposable, AutoCloseable, GeoDbEngineInterface
     }
     
 
+    override fun `getCountryTranslation`(`iso2`: kotlin.String, `langCode`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_geodb_ffi_fn_method_geodbengine_get_country_translation(
+        it,
+        FfiConverterString.lower(`iso2`),FfiConverterString.lower(`langCode`),_status)
+}
+    }
+    )
+    }
+    
+
     override fun `smartSearch`(`query`: kotlin.String): List<CityResult> {
             return FfiConverterSequenceTypeCityResult.lift(
     callWithHandle {
@@ -1530,7 +1552,11 @@ data class CityResult (
     , 
     var `population`: kotlin.ULong
     , 
+    var `geoid`: kotlin.ULong
+    , 
     var `distanceKm`: kotlin.Double?
+    , 
+    var `translations`: Map<kotlin.String, kotlin.String>
     
 ){
     
@@ -1552,7 +1578,9 @@ public object FfiConverterTypeCityResult: FfiConverterRustBuffer<CityResult> {
             FfiConverterDouble.read(buf),
             FfiConverterDouble.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
             FfiConverterOptionalDouble.read(buf),
+            FfiConverterMapStringString.read(buf),
         )
     }
 
@@ -1564,7 +1592,9 @@ public object FfiConverterTypeCityResult: FfiConverterRustBuffer<CityResult> {
             FfiConverterDouble.allocationSize(value.`lat`) +
             FfiConverterDouble.allocationSize(value.`lng`) +
             FfiConverterULong.allocationSize(value.`population`) +
-            FfiConverterOptionalDouble.allocationSize(value.`distanceKm`)
+            FfiConverterULong.allocationSize(value.`geoid`) +
+            FfiConverterOptionalDouble.allocationSize(value.`distanceKm`) +
+            FfiConverterMapStringString.allocationSize(value.`translations`)
     )
 
     override fun write(value: CityResult, buf: ByteBuffer) {
@@ -1575,7 +1605,9 @@ public object FfiConverterTypeCityResult: FfiConverterRustBuffer<CityResult> {
             FfiConverterDouble.write(value.`lat`, buf)
             FfiConverterDouble.write(value.`lng`, buf)
             FfiConverterULong.write(value.`population`, buf)
+            FfiConverterULong.write(value.`geoid`, buf)
             FfiConverterOptionalDouble.write(value.`distanceKm`, buf)
+            FfiConverterMapStringString.write(value.`translations`, buf)
     }
 }
 
@@ -1759,6 +1791,38 @@ public object FfiConverterOptionalDouble: FfiConverterRustBuffer<kotlin.Double?>
 /**
  * @suppress
  */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeCityResult: FfiConverterRustBuffer<CityResult?> {
     override fun read(buf: ByteBuffer): CityResult? {
         if (buf.get().toInt() == 0) {
@@ -1809,6 +1873,45 @@ public object FfiConverterSequenceTypeCityResult: FfiConverterRustBuffer<List<Ci
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeCityResult.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.String, kotlin.String>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, kotlin.String> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, kotlin.String>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterString.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, kotlin.String>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterString.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterString.write(v, buf)
         }
     }
 }

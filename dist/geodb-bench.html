@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GeoDB WASM Benchmark: Flat vs Nested Vs Blobs</title>
+    <link rel="stylesheet" href="bench.css">
+
+</head>
+<body>
+<h1>GeoDB Architecture Benchmark</h1>
+<p>Compare the startup time and search latency of the new Flat architecture vs the Legacy Nested architecture.</p>
+
+<div class="controls">
+    <button class="nested" onclick="runBench('./nested/geodb_wasm.js', 'NESTED')">
+        🐢 Run Nested Benchmark
+    </button>
+
+    <button class="flat" onclick="runBench('./flat/geodb_wasm.js', 'FLAT')">
+        🚀 Run Flat Benchmark
+    </button>
+
+    <button class="nested-blobs" onclick="runBench('./nested-blobs/geodb_wasm.js', 'NESTED_BLOBS')">
+        📦 Run Nested+Blobs Benchmark
+    </button>
+
+    <button class="flat-blobs" onclick="runBench('./flat-blobs/geodb_wasm.js', 'FLAT_BLOBS')">
+        📦🚀 Run Flat+Blobs Benchmark
+    </button>
+</div>
+
+<div id="log">Ready. Click a button to start.</div>
+
+<script type="module" src="./bench.js"></script>
+
+</body>
+</html>

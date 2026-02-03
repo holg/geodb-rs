@@ -16,7 +16,7 @@
   "searchFailed": "搜索失败：{error}",
   "foundNearest": "找到柏林附近 {count} 个城市",
   "foundInRadius": "在柏林50公里范围内找到 {count} 个城市",
-  "foundCountries": "找到 {count} 个包含"United"的国家",
+  "foundCountries": "找到 {count} 个包含 United 的国家",
   "failedFindNearest": "查找附近城市失败：{error}",
   "failedFindRadius": "查找范围内城市失败：{error}",
   "failedFindCountries": "查找国家失败：{error}"

@@ -8,7 +8,6 @@ let package = Package(
         .macOS(.v13),
         .tvOS(.v13),
         .watchOS(.v6),
-        .visionOS(.v1),
     ],
     products: [
         .library(
@@ -18,7 +17,6 @@ let package = Package(
     ],
     targets: [
         // Binary FFI target - the framework module name is GeodbFfi
-        // For debug builds, replace path with "GeodbFfi-debug.xcframework"
         .binaryTarget(
             name: "GeodbFfi",
             path: "GeodbFfi.xcframework"

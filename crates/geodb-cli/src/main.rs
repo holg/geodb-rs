@@ -266,6 +266,66 @@ fn main() -> anyhow::Result<()> {
                 println!("Finding cities by query: {item:?}")
             }
         }
+
+        Commands::Query {
+            city,
+            region,
+            country,
+            limit,
+        } => {
+            // Build the query with optional filters
+            let mut query = db.query_cities();
+
+            if let Some(ref c) = country {
+                query = query.filter_country(c);
+            }
+            if let Some(ref r) = region {
+                query = query.filter_region(r);
+            }
+            if let Some(ref ci) = city {
+                query = query.filter_city(ci);
+            }
+
+            let results = query.collect();
+            let total = results.len();
+
+            if results.is_empty() {
+                println!("No cities found matching the criteria:");
+                if let Some(c) = &country {
+                    println!("  Country: {c}");
+                }
+                if let Some(r) = &region {
+                    println!("  Region: {r}");
+                }
+                if let Some(ci) = &city {
+                    println!("  City: {ci}");
+                }
+            } else {
+                println!("Found {total} cities:");
+                for (city, state, country) in results.into_iter().take(limit) {
+                    let pop = city
+                        .population()
+                        .map(|p| format!(" (pop: {})", p))
+                        .unwrap_or_default();
+                    let coords = match (city.lat(), city.lng()) {
+                        (Some(lat), Some(lng)) => format!(" [{:.4}, {:.4}]", lat, lng),
+                        _ => String::new(),
+                    };
+                    println!(
+                        "  {} — {}, {} ({}){}{}",
+                        city.name(),
+                        state.name(),
+                        country.name(),
+                        country.iso2(),
+                        pop,
+                        coords
+                    );
+                }
+                if total > limit {
+                    println!("  ... and {} more (use -n to show more)", total - limit);
+                }
+            }
+        }
     }
 
     Ok(())

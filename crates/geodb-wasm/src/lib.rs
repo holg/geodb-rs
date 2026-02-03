@@ -55,12 +55,17 @@ use std::io::Read;
 
 use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
+use web_sys::{HtmlInputElement, UrlSearchParams};
 
 // Core Imports
-use geodb_core::api::{CityView, CountryView, StateView};
+use geodb_core::common::SmartHitGeneric;
 use geodb_core::prelude::*; // Imports DefaultGeoDb, GeoSearch, etc.
+use geodb_core::traits::GeoBackend;
+use geodb_core::SmartHit;
 use serde::Serialize;
 use serde_wasm_bindgen::to_value;
+
+type DefaultBackend = geodb_core::common::DefaultBackend;
 
 // 1. Embed the Database
 // We expect a file named 'geodb.bin' (or whatever standard name you choose) to exist.
@@ -86,6 +91,123 @@ static EMBEDDED_DB: &[u8] = b"";
 
 // 2. Static Instance
 static DB: OnceLock<DefaultGeoDb> = OnceLock::new();
+static LAST_HASH: OnceLock<std::sync::Mutex<String>> = OnceLock::new();
+
+fn get_last_hash() -> String {
+    LAST_HASH
+        .get_or_init(|| std::sync::Mutex::new(String::new()))
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+fn set_last_hash(h: &str) {
+    let mut lock = LAST_HASH
+        .get_or_init(|| std::sync::Mutex::new(String::new()))
+        .lock()
+        .unwrap();
+    *lock = h.to_string();
+}
+
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct WasmResult {
+    #[wasm_bindgen(skip)]
+    pub kind: String,
+    #[wasm_bindgen(skip)]
+    pub name: String,
+    #[wasm_bindgen(skip)]
+    pub country: String,
+    #[wasm_bindgen(skip)]
+    pub state: String,
+    #[wasm_bindgen(skip)]
+    pub iso2: String,
+    #[wasm_bindgen(skip)]
+    pub iso3: String,
+    #[wasm_bindgen(skip)]
+    pub phone: String,
+    #[wasm_bindgen(skip)]
+    pub capital: String,
+    #[wasm_bindgen(skip)]
+    pub region: String,
+    #[wasm_bindgen(skip)]
+    pub emoji: String,
+    pub lat: f64,
+    pub lng: f64,
+    pub pop: u32,
+    pub score: i32,
+}
+
+#[wasm_bindgen]
+impl WasmResult {
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn country(&self) -> String {
+        self.country.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn state(&self) -> String {
+        self.state.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn iso2(&self) -> String {
+        self.iso2.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn iso3(&self) -> String {
+        self.iso3.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn phone(&self) -> String {
+        self.phone.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn capital(&self) -> String {
+        self.capital.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn region(&self) -> String {
+        self.region.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn emoji(&self) -> String {
+        self.emoji.clone()
+    }
+
+    pub fn to_sexpr(&self) -> String {
+        format!(
+            "({} :name {:?} :country {:?} :state {:?} :iso2 {:?} :iso3 {:?} :phone {:?} :capital {:?} :region {:?} :emoji {:?} :lat {:.4} :lng {:.4} :pop {} :score {})",
+            self.kind, self.name, self.country, self.state, self.iso2, self.iso3, self.phone, self.capital, self.region, self.emoji, self.lat, self.lng, self.pop, self.score
+        )
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "kind": self.kind,
+            "name": self.name,
+            "country": self.country,
+            "state": self.state,
+            "iso2": self.iso2,
+            "iso3": self.iso3,
+            "phone": self.phone,
+            "capital": self.capital,
+            "region": self.region,
+            "emoji": self.emoji,
+            "latitude": self.lat,
+            "longitude": self.lng,
+            "population": self.pop,
+            "score": self.score,
+        }))
+        .unwrap_or_default()
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
@@ -100,21 +222,648 @@ pub fn start() {
         decoder
             .read_to_end(&mut decompressed)
             .expect("Decompression failed");
-        web_sys::console::log_1(&DefaultGeoDb::default_dataset_filename().into());
+
         // ... deserialization ...
         let db: DefaultGeoDb = bincode::deserialize(&decompressed).expect("Deserialize failed");
 
-        // Log stats via Trait
-        let stats = db.stats();
-        web_sys::console::log_1(&format!("✓ Loaded {} countries", stats.countries).into());
+        // Update stats box in UI from Rust (only if window exists - not in Node.js tests)
+        if let Some(window) = web_sys::window() {
+            if let Some(document) = window.document() {
+                if let Some(stats_el) = document.get_element_by_id("stats") {
+                    let stats = db.stats();
+                    stats_el.set_inner_html(&format!(
+                        "<strong>Database Statistics (Rust)</strong><br>\
+                         Countries: {}<br>\
+                         States/Regions: {}<br>\
+                         Cities: {}",
+                        stats.countries, stats.states, stats.cities
+                    ));
+                }
+            }
+        }
 
         db
     });
+
+    // Automatically trigger run_app on start when using Trunk (only if window exists)
+    // In Node.js tests, window() returns None, so we skip UI setup
+    if web_sys::window().is_some() {
+        run_app();
+    }
 }
 
 /* --------------------------------------------------------------------------
    Basic Queries
 -------------------------------------------------------------------------- */
+
+#[wasm_bindgen]
+pub fn run_app() {
+    let window = web_sys::window().expect("no global `window` exists");
+    let document = window.document().expect("should have a document on window");
+
+    setup_input_listener(&document, "countryInput", "countryOut", |v| {
+        let list = smart_search(v);
+        if list.is_empty() {
+            format!("<div>No country found: {v}</div>")
+        } else {
+            format_result_card(&list[0], None)
+        }
+    });
+
+    setup_input_listener(&document, "phoneInput", "phoneOut", |v| {
+        let list = search_countries_by_phone(v);
+        if list.is_empty() {
+            format!("<div>No match for phone code: {v}</div>")
+        } else {
+            list.iter()
+                .map(|res| format_result_card(res, None))
+                .collect::<String>()
+        }
+    });
+
+    setup_input_listener(&document, "cityInput", "cityOut", |v| {
+        let list = search_city_substring(v);
+        if list.is_empty() {
+            format!("<div>No city found: {v}</div>")
+        } else {
+            list.iter()
+                .map(|res| format_result_card(res, None))
+                .collect::<String>()
+        }
+    });
+
+    setup_input_listener(&document, "smartInput", "smartOut", |v| {
+        let list = smart_search(v);
+        if list.is_empty() {
+            format!("<div>No results for: {v}</div>")
+        } else {
+            list.iter()
+                .map(|res| format_result_card(res, None))
+                .collect::<String>()
+        }
+    });
+
+    // Initial hash apply
+    let window_clone = window.clone();
+
+    // Hash Polling (Every 500ms)
+    let poll_closure = Closure::wrap(Box::new(move || {
+        apply_hash_params_rust();
+    }) as Box<dyn FnMut()>);
+
+    window_clone
+        .set_interval_with_callback_and_timeout_and_arguments_0(
+            poll_closure.as_ref().unchecked_ref(),
+            500,
+        )
+        .expect("should set interval");
+    poll_closure.forget();
+
+    // Hash change listener (redundant but good for instant reaction)
+    let on_hash_change = Closure::wrap(Box::new(move || {
+        apply_hash_params_rust();
+    }) as Box<dyn FnMut()>);
+
+    window
+        .add_event_listener_with_callback("hashchange", on_hash_change.as_ref().unchecked_ref())
+        .expect("should register hashchange");
+    on_hash_change.forget();
+}
+
+fn setup_input_listener<F>(
+    document: &web_sys::Document,
+    input_id: &str,
+    out_id: &str,
+    mut search_logic: F,
+) where
+    F: FnMut(&str) -> String + 'static,
+{
+    let input = document
+        .get_element_by_id(input_id)
+        .and_then(|el| el.dyn_into::<HtmlInputElement>().ok());
+    let output = document.get_element_by_id(out_id);
+
+    if let (Some(input), Some(output)) = (input, output) {
+        let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
+            let target = e.target().unwrap().dyn_into::<HtmlInputElement>().unwrap();
+            let val = target.value().trim().to_string();
+            if val.is_empty() {
+                output.set_inner_html("");
+                return;
+            }
+            // Add length checks if needed
+            output.set_inner_html(&search_logic(&val));
+        }) as Box<dyn FnMut(web_sys::Event)>);
+
+        input
+            .add_event_listener_with_callback("input", closure.as_ref().unchecked_ref())
+            .expect("should register input");
+        closure.forget();
+    }
+}
+
+fn map_hit_to_wasm_result(hit: SmartHit<'_, DefaultBackend>) -> WasmResult {
+    let score = hit.score;
+    match hit.item {
+        SmartItem::Country(c) => WasmResult {
+            kind: "country".into(),
+            name: DefaultBackend::str_to_string(&c.name),
+            country: DefaultBackend::str_to_string(&c.name),
+            state: "".into(),
+            iso2: DefaultBackend::str_to_string(&c.iso2),
+            iso3: c
+                .iso3
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            phone: c
+                .phone_code
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            capital: c
+                .capital
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            region: c
+                .region
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            emoji: c
+                .emoji
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            lat: DefaultBackend::float_to_f64(c.lat.unwrap_or(0.0)),
+            lng: DefaultBackend::float_to_f64(c.lng.unwrap_or(0.0)),
+            pop: c.population.unwrap_or(0),
+            score,
+        },
+        SmartItem::State { state, country } => WasmResult {
+            kind: "state".into(),
+            name: DefaultBackend::str_to_string(&state.name),
+            country: DefaultBackend::str_to_string(&country.name),
+            state: DefaultBackend::str_to_string(&state.name),
+            iso2: DefaultBackend::str_to_string(&country.iso2),
+            iso3: country
+                .iso3
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            phone: country
+                .phone_code
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            capital: country
+                .capital
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            region: country
+                .region
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            emoji: country
+                .emoji
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            lat: DefaultBackend::float_to_f64(state.lat.unwrap_or(0.0)),
+            lng: DefaultBackend::float_to_f64(state.lng.unwrap_or(0.0)),
+            pop: 0,
+            score,
+        },
+        SmartItem::City {
+            city,
+            state,
+            country,
+        } => WasmResult {
+            kind: "city".into(),
+            name: DefaultBackend::str_to_string(&city.name),
+            country: DefaultBackend::str_to_string(&country.name),
+            state: DefaultBackend::str_to_string(&state.name),
+            iso2: DefaultBackend::str_to_string(&country.iso2),
+            iso3: country
+                .iso3
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            phone: country
+                .phone_code
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            capital: country
+                .capital
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            region: country
+                .region
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            emoji: country
+                .emoji
+                .as_ref()
+                .map(DefaultBackend::str_to_string)
+                .unwrap_or_default(),
+            lat: DefaultBackend::float_to_f64(city.lat.unwrap_or(0.0)),
+            lng: DefaultBackend::float_to_f64(city.lng.unwrap_or(0.0)),
+            pop: city.population.unwrap_or(0),
+            score,
+        },
+    }
+}
+
+fn apply_hash_params_rust() {
+    let window = web_sys::window().expect("no window");
+    let document = window.document().expect("no document");
+    let location = window.location();
+    let hash = location.hash().unwrap_or_default();
+
+    // Only proceed if the hash has actually changed
+    if hash == get_last_hash() {
+        return;
+    }
+    set_last_hash(&hash);
+
+    web_sys::console::log_1(
+        &format!("DEBUG: Applying hash params. Current hash: '{}'", hash).into(),
+    );
+
+    if hash.is_empty() || hash == "#" {
+        web_sys::console::log_1(&"DEBUG: Hash is empty, skipping.".into());
+        if let Some(url_box) = document.get_element_by_id("urlParams") {
+            let _ = url_box
+                .dyn_into::<web_sys::HtmlElement>()
+                .map(|el| el.style().set_property("display", "none"));
+        }
+        return;
+    }
+
+    let hash_content = hash.trim_start_matches('#');
+    web_sys::console::log_1(&format!("DEBUG: Parsing hash content: '{}'", hash_content).into());
+    let params = UrlSearchParams::new_with_str(hash_content).unwrap();
+
+    let query = params.get("q");
+    let min_pop = params
+        .get("pop")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let comment = params
+        .get("htr_comment")
+        .or_else(|| params.get("comment_htr"));
+    let hashsum = params.get("hashsum");
+    let creation_time = params.get("creation_time").or_else(|| params.get("dt"));
+
+    if query.is_some()
+        || min_pop > 0
+        || comment.is_some()
+        || hashsum.is_some()
+        || creation_time.is_some()
+    {
+        web_sys::console::log_1(
+            &format!(
+                "DEBUG: Params detected - q: {:?}, pop: {}, comment: {:?}, hashsum: {:?}, dt: {:?}",
+                query, min_pop, comment, hashsum, creation_time
+            )
+            .into(),
+        );
+        if let Some(url_box) = document.get_element_by_id("urlParams") {
+            let _ = url_box
+                .dyn_into::<web_sys::HtmlElement>()
+                .map(|el| el.style().set_property("display", "block"));
+        }
+        if let Some(url_content) = document.get_element_by_id("urlParamsContent") {
+            let comment_html = comment.map(|c| format!("<br><strong>Secret Comment:</strong> <span style=\"color: #d32f2f\">{}</span>", c)).unwrap_or_default();
+            let hashsum_html = hashsum
+                .map(|h| format!("<br><strong>Hashsum:</strong> <code>{}</code>", h))
+                .unwrap_or_default();
+            let time_html = creation_time
+                .map(|t| format!("<br><strong>Creation Time:</strong> {}", t))
+                .unwrap_or_default();
+
+            url_content.set_inner_html(&format!(
+                "<strong>Hash Fragment (Rust):</strong> Query: <b>{}</b>, Min Population: <b>{}</b>{}{}{}",
+                query.as_deref().unwrap_or("(none)"),
+                min_pop,
+                comment_html,
+                hashsum_html,
+                time_html
+            ));
+        }
+
+        let mut results_html = String::new();
+        let mut target_city_info: Option<(String, f64, f64)> = None;
+
+        if let Some(q) = query {
+            let db = match DB.get() {
+                Some(db) => db,
+                None => {
+                    web_sys::console::error_1(
+                        &"DB not initialized yet! Retrying in 200ms...".into(),
+                    );
+
+                    // Recursive retry
+                    let closure = Closure::wrap(Box::new(move || {
+                        apply_hash_params_rust();
+                    }) as Box<dyn FnMut()>);
+
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                            closure.as_ref().unchecked_ref(),
+                            200,
+                        );
+                    }
+                    closure.forget();
+                    return;
+                }
+            };
+            web_sys::console::log_1(&format!("Searching for: {}", q).into());
+            let hits = db.smart_search(&q);
+            web_sys::console::log_1(&format!("Found {} initial hits", hits.len()).into());
+
+            results_html.push_str(&format!(
+                "<h3>Results for \"{q}\" (Min Pop: {min_pop})</h3>"
+            ));
+
+            let mut matched_hits = hits;
+            // Special case: "trahe" -> "Lüdinghausen"
+            if q.to_lowercase() == "trahe" {
+                web_sys::console::log_1(&"Special 'trahe' mapping active".into());
+                let ludi_hits = db.smart_search("Lüdinghausen");
+                web_sys::console::log_1(&format!("Lüdinghausen hits: {}", ludi_hits.len()).into());
+                for h in ludi_hits {
+                    if !matched_hits
+                        .iter()
+                        .any(|existing| format!("{:?}", existing.item) == format!("{:?}", h.item))
+                    {
+                        matched_hits.push(h);
+                    }
+                }
+            }
+
+            for hit in matched_hits {
+                let res = map_hit_to_wasm_result(hit);
+
+                if res.pop > min_pop || res.kind != "city" {
+                    let mut display_name = res.name.clone();
+                    let is_direct_match = display_name.to_lowercase().contains(&q.to_lowercase())
+                        || (q.to_lowercase() == "trahe" && display_name == "Lüdinghausen");
+
+                    if is_direct_match {
+                        if target_city_info.is_none() {
+                            target_city_info = Some((display_name.clone(), res.lat, res.lng));
+                            web_sys::console::log_1(
+                                &format!(
+                                    "Target city found: {} at {}, {}",
+                                    display_name, res.lat, res.lng
+                                )
+                                .into(),
+                            );
+                        }
+                        display_name = format!("📍 {display_name}");
+                    }
+
+                    results_html.push_str(&format_result_card(&res, Some(&display_name)));
+                }
+            }
+        }
+
+        if let Some((name, lat, lng)) = target_city_info {
+            let db = DB.get().unwrap();
+            let nearest = db.find_nearest(lat, lng, 200);
+            let filter_val = min_pop.max(20000);
+            let top5: Vec<_> = nearest
+                .into_iter()
+                .filter(|(c, _, _)| c.population.unwrap_or(0) > filter_val)
+                .take(5)
+                .collect();
+
+            results_html.push_str(&format!(
+                "<h3>Top 5 Cities near {name} with Population > {filter_val}</h3>"
+            ));
+            for (city, state, country) in top5 {
+                let res = map_hit_to_wasm_result(SmartHitGeneric::city(100, country, state, city));
+                results_html.push_str(&format_result_card(&res, None));
+            }
+        }
+
+        if let Some(out_smart) = document.get_element_by_id("smartOut") {
+            out_smart.set_inner_html(&results_html);
+        }
+    }
+}
+
+fn format_result_card(res: &WasmResult, override_name: Option<&str>) -> String {
+    let name = override_name.unwrap_or(&res.name);
+    let sexpr = res.to_sexpr();
+    let sexpr_escaped = sexpr.replace('\"', "&quot;");
+
+    let details = match res.kind.as_str() {
+        "city" => format!(
+            "Country: {}<br>State: {}<br>Coords: <span class=\"city-marker\">{:.4}, {:.4}</span><br>Population: <b>{}</b>",
+            res.country, res.state, res.lat, res.lng, res.pop
+        ),
+        "country" => format!(
+            "ISO2: <b>{}</b> • ISO3: <b>{}</b> • Phone: <b>+{}</b><br>Capital: {} • Region: {}<br>Population: {}",
+            res.iso2, res.iso3, res.phone, res.capital, res.region, res.pop
+        ),
+        "state" => format!("Country: {}", res.country),
+        _ => format!("Unknown kind: {}", res.kind),
+    };
+
+    let emoji_span = if !res.emoji.is_empty() {
+        format!("<span class=\"flag\">{}</span>", res.emoji)
+    } else {
+        "".into()
+    };
+
+    format!(
+        "<div class=\"result-card\">
+            {emoji_span}<span class=\"kind\">[{}]</span> {name}
+            <div class=\"small\">
+              {details}
+            </div>
+            <div style=\"margin-top:8px; border-top:1px solid #ddd; padding-top:4px;\">
+                <button onclick=\"alert('{}')\" style=\"font-size:10px; cursor:pointer;\">Show XLISP S-Expr</button>
+            </div>
+        </div>",
+        res.kind, sexpr_escaped
+    )
+}
+
+#[allow(dead_code)]
+fn format_results_array(array: &JsValue) -> String {
+    let arr = js_sys::Array::from(array);
+    let mut html = String::new();
+    for i in 0..arr.length() {
+        html.push_str(&format_result_jsvalue(&arr.get(i)));
+    }
+    html
+}
+
+#[allow(dead_code)]
+fn format_results_array_jsvalue(array: &js_sys::Array) -> String {
+    let mut html = String::new();
+    for i in 0..array.length() {
+        html.push_str(&format_result_jsvalue(&array.get(i)));
+    }
+    html
+}
+
+#[allow(dead_code)]
+fn format_result_jsvalue(val: &JsValue) -> String {
+    if val.is_null() || val.is_undefined() {
+        return String::new();
+    }
+
+    // Check if it's a WasmResult by accessing property kind
+    let kind = js_sys::Reflect::get(val, &"kind".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let name = js_sys::Reflect::get(val, &"name".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+
+    if kind.is_empty() {
+        return String::new();
+    }
+
+    let country = js_sys::Reflect::get(val, &"country".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let state = js_sys::Reflect::get(val, &"state".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let iso2 = js_sys::Reflect::get(val, &"iso2".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let iso3 = js_sys::Reflect::get(val, &"iso3".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let phone = js_sys::Reflect::get(val, &"phone".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let capital = js_sys::Reflect::get(val, &"capital".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let region = js_sys::Reflect::get(val, &"region".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let emoji = js_sys::Reflect::get(val, &"emoji".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let lat = js_sys::Reflect::get(val, &"lat".into())
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let lng = js_sys::Reflect::get(val, &"lng".into())
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let pop = js_sys::Reflect::get(val, &"pop".into())
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as u32;
+    let score = js_sys::Reflect::get(val, &"score".into())
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as i32;
+
+    let res = WasmResult {
+        kind,
+        name,
+        country,
+        state,
+        iso2,
+        iso3,
+        phone,
+        capital,
+        region,
+        emoji,
+        lat,
+        lng,
+        pop,
+        score,
+    };
+
+    format_result_card(&res, None)
+}
+
+#[allow(dead_code)]
+fn format_city_card(
+    name: &str,
+    country: &str,
+    state: &str,
+    lat: f64,
+    lng: f64,
+    pop: u32,
+) -> String {
+    format!(
+        "<div class=\"result-card\"><span class=\"kind\">[city]</span> {name}
+            <div class=\"small\">
+              Country: {country}<br>
+              State: {state}<br>
+              Coords: <span class=\"city-marker\">{lat:.4}, {lng:.4}</span><br>
+              Population: <b>{pop}</b>
+            </div>
+        </div>"
+    )
+}
+
+#[allow(dead_code, clippy::too_many_arguments)]
+fn format_country_card(
+    name: &str,
+    iso2: &str,
+    iso3: Option<&str>,
+    phone: Option<&str>,
+    capital: Option<&str>,
+    region: Option<&str>,
+    emoji: Option<&str>,
+    pop: u32,
+) -> String {
+    let emoji_html = emoji
+        .map(|e| format!("<span class=\"flag\">{e}</span>"))
+        .unwrap_or_default();
+    format!(
+        "<div class=\"result-card\">{emoji_html}<span class=\"kind\">[country]</span> {name}
+        <div class=\"small\">
+          ISO2: <b>{iso2}</b> •
+          ISO3: <b>{}</b> •
+          Phone: <b>+{}</b><br>
+          Capital: {} • Region: {}<br>
+          Population: {pop}
+        </div></div>",
+        iso3.unwrap_or("-"),
+        phone.unwrap_or("-"),
+        capital.unwrap_or("?"),
+        region.unwrap_or("?")
+    )
+}
+
+#[allow(dead_code)]
+fn format_state_card(name: &str, country: &str) -> String {
+    format!(
+        "<div class=\"result-card\"><span class=\"kind\">[state]</span> {name}
+        <div class=\"small\">Country: {country}</div></div>"
+    )
+}
 
 #[wasm_bindgen]
 pub fn get_country_count() -> usize {
@@ -154,23 +903,50 @@ pub fn get_country_name(iso2: &str) -> Option<String> {
 /// Canada with "+1"), all will be returned. Returns `JsValue::NULL` if the
 /// database is not initialized.
 #[wasm_bindgen]
-pub fn search_countries_by_phone(phone: &str) -> JsValue {
+pub fn search_countries_by_phone(phone: &str) -> Vec<WasmResult> {
     let code = phone.trim().trim_start_matches('+');
     match DB.get() {
-        Some(db) => {
-            let _ = db
-                .find_countries_by_phone_code(code)
-                .iter()
-                .map(|c| CountryView(c))
-                .collect::<Vec<_>>();
-            let items: Vec<_> = db
-                .find_countries_by_phone_code(code)
-                .iter()
-                .map(|c| CountryView(c))
-                .collect();
-            to_value(&items).unwrap_or(JsValue::NULL)
-        }
-        None => JsValue::NULL,
+        Some(db) => db
+            .find_countries_by_phone_code(code)
+            .into_iter()
+            .map(|c| WasmResult {
+                kind: "country".into(),
+                name: DefaultBackend::str_to_string(&c.name),
+                country: DefaultBackend::str_to_string(&c.name),
+                state: "".into(),
+                iso2: DefaultBackend::str_to_string(&c.iso2),
+                iso3: c
+                    .iso3
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                phone: c
+                    .phone_code
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                capital: c
+                    .capital
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                region: c
+                    .region
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                emoji: c
+                    .emoji
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                lat: DefaultBackend::float_to_f64(c.lat.unwrap_or(0.0)),
+                lng: DefaultBackend::float_to_f64(c.lng.unwrap_or(0.0)),
+                pop: c.population.unwrap_or(0),
+                score: 20,
+            })
+            .collect(),
+        None => Vec::new(),
     }
 }
 
@@ -193,14 +969,50 @@ pub fn search_countries_by_phone(phone: &str) -> JsValue {
 /// search query. Each object includes details about the state and its parent
 /// country. Returns `JsValue::NULL` if the database is not initialized.
 #[wasm_bindgen]
-pub fn search_state_substring(substr: &str) -> JsValue {
-    let out: Option<Vec<_>> = DB.get().map(|db| {
-        db.find_states_by_substring(substr)
+pub fn search_state_substring(substr: &str) -> Vec<WasmResult> {
+    match DB.get() {
+        Some(db) => db
+            .find_states_by_substring(substr)
             .into_iter()
-            .map(|(state, country)| StateView { country, state })
-            .collect()
-    });
-    to_value(&out).unwrap_or(JsValue::NULL)
+            .map(|(state, country)| WasmResult {
+                kind: "state".into(),
+                name: DefaultBackend::str_to_string(&state.name),
+                country: DefaultBackend::str_to_string(&country.name),
+                state: DefaultBackend::str_to_string(&state.name),
+                iso2: DefaultBackend::str_to_string(&country.iso2),
+                iso3: country
+                    .iso3
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                phone: country
+                    .phone_code
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                capital: country
+                    .capital
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                region: country
+                    .region
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                emoji: country
+                    .emoji
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                lat: DefaultBackend::float_to_f64(state.lat.unwrap_or(0.0)),
+                lng: DefaultBackend::float_to_f64(state.lng.unwrap_or(0.0)),
+                pop: 0,
+                score: 50,
+            })
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -222,18 +1034,50 @@ pub fn search_state_substring(substr: &str) -> JsValue {
 /// search query. Each object includes details about the city, its state, and
 /// its country. Returns `JsValue::NULL` if the database is not initialized.
 #[wasm_bindgen]
-pub fn search_city_substring(substr: &str) -> JsValue {
-    let out: Option<Vec<_>> = DB.get().map(|db| {
-        db.find_cities_by_substring(substr)
+pub fn search_city_substring(substr: &str) -> Vec<WasmResult> {
+    match DB.get() {
+        Some(db) => db
+            .find_cities_by_substring(substr)
             .into_iter()
-            .map(|(city, state, country)| CityView {
-                country,
-                state,
-                city,
+            .map(|(city, state, country)| WasmResult {
+                kind: "city".into(),
+                name: DefaultBackend::str_to_string(&city.name),
+                country: DefaultBackend::str_to_string(&country.name),
+                state: DefaultBackend::str_to_string(&state.name),
+                iso2: DefaultBackend::str_to_string(&country.iso2),
+                iso3: country
+                    .iso3
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                phone: country
+                    .phone_code
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                capital: country
+                    .capital
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                region: country
+                    .region
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                emoji: country
+                    .emoji
+                    .as_ref()
+                    .map(DefaultBackend::str_to_string)
+                    .unwrap_or_default(),
+                lat: DefaultBackend::float_to_f64(city.lat.unwrap_or(0.0)),
+                lng: DefaultBackend::float_to_f64(city.lng.unwrap_or(0.0)),
+                pop: city.population.unwrap_or(0),
+                score: 30,
             })
-            .collect()
-    });
-    to_value(&out).unwrap_or(JsValue::NULL)
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -263,36 +1107,15 @@ pub fn search_city_substring(substr: &str) -> JsValue {
 /// Returns an empty array if the database is not initialized or if no
 /// results are found.
 #[wasm_bindgen]
-pub fn smart_search(query: &str) -> JsValue {
-    let array = match DB.get() {
-        Some(db) => {
-            let hits = db.smart_search(query);
-
-            // Map to JS serializable wrappers while preserving order
-            let array = js_sys::Array::new();
-            for hit in hits {
-                let v = match hit.item {
-                    SmartItem::Country(c) => to_value(&CountryView(c)),
-                    SmartItem::State { country, state } => to_value(&StateView { country, state }),
-                    SmartItem::City {
-                        country,
-                        state,
-                        city,
-                    } => to_value(&CityView {
-                        country,
-                        state,
-                        city,
-                    }),
-                }
-                .unwrap_or(JsValue::NULL);
-                array.push(&v);
-            }
-            array
-        }
-        None => js_sys::Array::new(),
-    };
-
-    array.into()
+pub fn smart_search(query: &str) -> Vec<WasmResult> {
+    match DB.get() {
+        Some(db) => db
+            .smart_search(query)
+            .into_iter()
+            .map(|hit| map_hit_to_wasm_result(hit))
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Retrieves statistics about the loaded database.
@@ -408,18 +1231,17 @@ pub fn get_build_info() -> JsValue {
 /// distance from the search point (closest first). Returns `JsValue::NULL` if the
 /// database is not initialized.
 #[wasm_bindgen]
-pub fn find_nearest_cities(lat: f64, lng: f64, count: usize) -> JsValue {
-    let out: Option<Vec<_>> = DB.get().map(|db| {
-        db.find_nearest(lat, lng, count)
+pub fn find_nearest_cities(lat: f64, lng: f64, count: usize) -> Vec<WasmResult> {
+    match DB.get() {
+        Some(db) => db
+            .find_nearest(lat, lng, count)
             .into_iter()
-            .map(|(city, state, country)| CityView {
-                country,
-                state,
-                city,
+            .map(|(city, state, country)| {
+                map_hit_to_wasm_result(SmartHitGeneric::city(100, country, state, city))
             })
-            .collect()
-    });
-    to_value(&out).unwrap_or(JsValue::NULL)
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Finds all cities within a specified radius from a given geographic coordinate.
@@ -439,20 +1261,17 @@ pub fn find_nearest_cities(lat: f64, lng: f64, count: usize) -> JsValue {
 /// represents a city found within the radius. Returns `JsValue::NULL` if the
 /// database is not initialized.
 #[wasm_bindgen]
-pub fn find_cities_in_radius(lat: f64, lng: f64, radius_km: f64) -> JsValue {
-    let out: Option<Vec<_>> = DB.get().map(|db| {
-        // 1. Convert inputs to GeoID (Z-Order Curve)
-        let geoid = geodb_core::spatial::generate_geoid(lat, lng);
-
-        // 2. Search
-        db.find_cities_in_radius_by_geoid(geoid, radius_km)
-            .into_iter()
-            .map(|(city, state, country)| CityView {
-                country,
-                state,
-                city,
-            })
-            .collect()
-    });
-    to_value(&out).unwrap_or(JsValue::NULL)
+pub fn find_cities_in_radius(lat: f64, lng: f64, radius_km: f64) -> Vec<WasmResult> {
+    match DB.get() {
+        Some(db) => {
+            let geoid = geodb_core::spatial::generate_geoid(lat, lng);
+            db.find_cities_in_radius_by_geoid(geoid, radius_km)
+                .into_iter()
+                .map(|(city, state, country)| {
+                    map_hit_to_wasm_result(SmartHitGeneric::city(100, country, state, city))
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    }
 }

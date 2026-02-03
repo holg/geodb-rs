@@ -99,7 +99,7 @@ packages:
       path: "../geodb_flutter"
       relative: true
     source: path
-    version: "0.1.4"
+    version: "0.1.8"
   geolocator:
     dependency: "direct main"
     description:

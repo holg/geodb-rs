@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Building a Kotlin Android App with Rust Backend - GeoDB</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --text-color: #eee;
+            --code-bg: #16213e;
+            --accent: #4ecca3;
+            --secondary: #7f8c8d;
+            --warning: #f39c12;
+            --error: #e74c3c;
+            --success: #27ae60;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.7;
+            color: var(--text-color);
+            background: var(--bg-color);
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1, h2, h3, h4 {
+            color: var(--accent);
+            margin-top: 2em;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            border-bottom: 3px solid var(--accent);
+            padding-bottom: 10px;
+        }
+
+        code {
+            background: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.9em;
+        }
+
+        pre {
+            background: var(--code-bg);
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            border-left: 4px solid var(--accent);
+        }
+
+        pre code {
+            padding: 0;
+            background: none;
+        }
+
+        blockquote {
+            border-left: 4px solid var(--warning);
+            margin: 20px 0;
+            padding: 10px 20px;
+            background: rgba(243, 156, 18, 0.1);
+            border-radius: 0 8px 8px 0;
+        }
+
+        .success {
+            border-left-color: var(--success);
+            background: rgba(39, 174, 96, 0.1);
+        }
+
+        .error {
+            border-left-color: var(--error);
+            background: rgba(231, 76, 60, 0.1);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        th, td {
+            border: 1px solid #333;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background: var(--code-bg);
+            color: var(--accent);
+        }
+
+        a {
+            color: var(--accent);
+        }
+
+        .toc {
+            background: var(--code-bg);
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .toc ul {
+            list-style: none;
+            padding-left: 20px;
+        }
+
+        .toc > ul {
+            padding-left: 0;
+        }
+
+        .file-tree {
+            font-family: monospace;
+            background: var(--code-bg);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .architecture-diagram {
+            background: var(--code-bg);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            font-family: monospace;
+            white-space: pre;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Building a Kotlin Android App with Rust Backend</h1>
+
+<p><em>How to use Mozilla UniFFI to bridge Rust and Kotlin for native Android performance</em></p>
+
+<p><strong>Date:</strong> November 2024<br>
+<strong>Author:</strong> Holger Trahe<br>
+<strong>Repository:</strong> <a href="https://github.com/user/geodb-rs">geodb-rs</a></p>
+
+<div class="toc">
+<h3>Table of Contents</h3>
+<ul>
+    <li><a href="#overview">1. Overview</a></li>
+    <li><a href="#architecture">2. Architecture</a></li>
+    <li><a href="#prerequisites">3. Prerequisites</a></li>
+    <li><a href="#rust-setup">4. Setting Up the Rust FFI Crate</a></li>
+    <li><a href="#android-targets">5. Installing Android Rust Targets</a></li>
+    <li><a href="#building-native">6. Building Native Libraries</a></li>
+    <li><a href="#kotlin-bindings">7. Generating Kotlin Bindings</a></li>
+    <li><a href="#android-project">8. Creating the Android Project</a></li>
+    <li><a href="#compose-ui">9. Building the UI with Jetpack Compose</a></li>
+    <li><a href="#testing">10. Testing and Deployment</a></li>
+    <li><a href="#performance">11. Performance and Size</a></li>
+    <li><a href="#lessons">12. Lessons Learned</a></li>
+</ul>
+</div>
+
+<h2 id="overview">1. Overview</h2>
+
+<p>This guide documents how we built a native Android app in Kotlin that uses a Rust backend for geographic data lookups. The app provides fast city search across 150,000+ cities worldwide, powered by the same Rust engine used in our iOS, watchOS, and macOS apps.</p>
+
+<p><strong>The Stack:</strong></p>
+<ul>
+    <li><strong>Backend:</strong> Rust (geodb-core library)</li>
+    <li><strong>FFI Bridge:</strong> Mozilla UniFFI</li>
+    <li><strong>Android UI:</strong> Kotlin + Jetpack Compose</li>
+    <li><strong>Build Tool:</strong> cargo-ndk</li>
+</ul>
+
+<p><strong>Why Rust for Android?</strong></p>
+<ul>
+    <li>Share business logic across iOS, Android, and other platforms</li>
+    <li>Native performance without JNI boilerplate</li>
+    <li>Memory safety guarantees</li>
+    <li>UniFFI generates idiomatic Kotlin code automatically</li>
+</ul>
+
+<h2 id="architecture">2. Architecture</h2>
+
+<div class="architecture-diagram">
+┌─────────────────────────────────────────────────────────┐
+│                    Android App                          │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           Jetpack Compose UI (Kotlin)           │   │
+│  │  - MainActivity                                  │   │
+│  │  - Search TextField                              │   │
+│  │  - LazyColumn with CityCards                     │   │
+│  └─────────────────────────────────────────────────┘   │
+│                         │                               │
+│                         ▼                               │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │        UniFFI Generated Bindings (Kotlin)       │   │
+│  │  - uniffi/geodb_ffi/geodb_ffi.kt               │   │
+│  │  - Uses JNA for native calls                    │   │
+│  └─────────────────────────────────────────────────┘   │
+│                         │                               │
+│                         ▼                               │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           Native Libraries (.so files)          │   │
+│  │  - arm64-v8a/libgeodb_ffi.so    (8.4 MB)       │   │
+│  │  - armeabi-v7a/libgeodb_ffi.so  (8.2 MB)       │   │
+│  │  - x86_64/libgeodb_ffi.so       (8.5 MB)       │   │
+│  │  - x86/libgeodb_ffi.so          (8.5 MB)       │   │
+│  └─────────────────────────────────────────────────┘   │
+│                         │                               │
+│                         ▼                               │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │              Rust Core (geodb-core)             │   │
+│  │  - 150K+ cities embedded                        │   │
+│  │  - Smart search with Unicode folding            │   │
+│  │  - Spatial queries                              │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+</div>
+
+<h2 id="prerequisites">3. Prerequisites</h2>
+
+<h3>Required Tools</h3>
+
+<pre><code># Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# cargo-ndk for Android cross-compilation
+cargo install cargo-ndk
+
+# Android SDK and NDK (via Android Studio or command line)
+# NDK r26c or later recommended
+
+# Verify installations
+rustc --version
+cargo ndk --version
+</code></pre>
+
+<h3>Environment Variables</h3>
+
+<pre><code># Add to ~/.zshrc or ~/.bashrc
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125
+export PATH=$PATH:$ANDROID_HOME/platform-tools
+</code></pre>
+
+<h2 id="android-targets">4. Installing Android Rust Targets</h2>
+
+<p>Android devices use different CPU architectures. We need to install Rust targets for each:</p>
+
+<pre><code># 64-bit ARM (most modern phones)
+rustup target add aarch64-linux-android
+
+# 32-bit ARM (older phones)
+rustup target add armv7-linux-androideabi
+
+# 64-bit x86 (emulators, Chromebooks)
+rustup target add x86_64-linux-android
+
+# 32-bit x86 (older emulators)
+rustup target add i686-linux-android
+
+# Verify installation
+rustup target list --installed | grep android
+</code></pre>
+
+<p><strong>Output:</strong></p>
+<pre><code>aarch64-linux-android
+armv7-linux-androideabi
+i686-linux-android
+x86_64-linux-android
+</code></pre>
+
+<h2 id="rust-setup">5. Setting Up the Rust FFI Crate</h2>
+
+<h3>The UDL File (Interface Definition)</h3>
+
+<p>UniFFI uses a UDL (Universal Definition Language) file to define the API exposed to Kotlin:</p>
+
+<pre><code>// crates/geodb-ffi/src/geodb.udl
+
+namespace geodb_ffi {
+    // Initialize the database (call once at app start)
+    void init_db();
+
+    // Smart search with limit
+    sequence&lt;CityResult&gt; smart_search(string query, u32 limit);
+
+    // Get database statistics
+    DbStats get_db_stats();
+
+    // Search by coordinates
+    sequence&lt;CityResult&gt; search_by_location(f64 lat, f64 lon, f64 radius_km, u32 limit);
+};
+
+dictionary CityResult {
+    string name;
+    string state_name;
+    string country_name;
+    string country_iso2;
+    f64 latitude;
+    f64 longitude;
+    u32 score;
+};
+
+dictionary DbStats {
+    u32 country_count;
+    u32 state_count;
+    u32 city_count;
+};
+</code></pre>
+
+<h3>Cargo.toml Configuration</h3>
+
+<pre><code>[package]
+name = "geodb-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+name = "geodb_ffi"
+
+[dependencies]
+uniffi = { version = "0.30", features = ["cli"] }
+geodb-core = { path = "../geodb-core", default-features = false, features = ["json", "compact", "search_blobs"] }
+once_cell = "1.19"
+
+[build-dependencies]
+uniffi = { version = "0.30", features = ["build"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+</code></pre>
+
+<blockquote>
+<strong>Important:</strong> We disable the <code>builder</code> feature in geodb-core. This removes the <code>reqwest</code> dependency which pulls in <code>ring</code> for TLS. The <code>ring</code> crate has issues with some Android ABIs (especially older 32-bit targets). Since we embed the data, we don't need HTTP anyway.
+</blockquote>
+
+<h2 id="building-native">6. Building Native Libraries</h2>
+
+<h3>Using cargo-ndk</h3>
+
+<p><code>cargo-ndk</code> simplifies cross-compilation for Android by handling all the NDK toolchain setup:</p>
+
+<pre><code># Build for all Android architectures
+cargo ndk \
+    -t arm64-v8a \
+    -t armeabi-v7a \
+    -t x86_64 \
+    -t x86 \
+    -o target/android-libs \
+    build --release -p geodb-ffi
+</code></pre>
+
+<p><strong>What this does:</strong></p>
+<ol>
+    <li>Finds the Android NDK automatically</li>
+    <li>Sets up the correct linker for each target</li>
+    <li>Cross-compiles the Rust code</li>
+    <li>Copies the <code>.so</code> files to <code>target/android-libs/</code></li>
+</ol>
+
+<p><strong>Output structure:</strong></p>
+
+<div class="file-tree">
+target/android-libs/
+├── arm64-v8a/
+│   └── libgeodb_ffi.so      (8.4 MB)
+├── armeabi-v7a/
+│   └── libgeodb_ffi.so      (8.2 MB)
+├── x86_64/
+│   └── libgeodb_ffi.so      (8.5 MB)
+└── x86/
+    └── libgeodb_ffi.so      (8.5 MB)
+</div>
+
+<h3>Build Time</h3>
+
+<table>
+    <tr>
+        <th>Target</th>
+        <th>Architecture</th>
+        <th>Build Time (Release)</th>
+        <th>Binary Size</th>
+    </tr>
+    <tr>
+        <td>arm64-v8a</td>
+        <td>64-bit ARM</td>
+        <td>~25s</td>
+        <td>8.4 MB</td>
+    </tr>
+    <tr>
+        <td>armeabi-v7a</td>
+        <td>32-bit ARM</td>
+        <td>~28s</td>
+        <td>8.2 MB</td>
+    </tr>
+    <tr>
+        <td>x86_64</td>
+        <td>64-bit Intel</td>
+        <td>~24s</td>
+        <td>8.5 MB</td>
+    </tr>
+    <tr>
+        <td>x86</td>
+        <td>32-bit Intel</td>
+        <td>~26s</td>
+        <td>8.5 MB</td>
+    </tr>
+</table>
+
+<h2 id="kotlin-bindings">7. Generating Kotlin Bindings</h2>
+
+<p>UniFFI generates idiomatic Kotlin code from the compiled library:</p>
+
+<pre><code># Generate Kotlin bindings from the Android library
+cargo run --features=uniffi/cli --bin uniffi-bindgen \
+    generate \
+    --library target/aarch64-linux-android/release/libgeodb_ffi.so \
+    --language kotlin \
+    --out-dir generated-kotlin
+</code></pre>
+
+<p><strong>Generated file:</strong> <code>generated-kotlin/uniffi/geodb_ffi/geodb_ffi.kt</code></p>
+
+<p>This generates a ~68KB Kotlin file containing:</p>
+<ul>
+    <li>Data classes (<code>CityResult</code>, <code>DbStats</code>)</li>
+    <li>Function wrappers (<code>initDb()</code>, <code>smartSearch()</code>)</li>
+    <li>JNA bindings for native calls</li>
+    <li>Error handling and type conversions</li>
+</ul>
+
+<h3>Generated Code Example</h3>
+
+<pre><code>// Auto-generated by UniFFI
+package uniffi.geodb_ffi
+
+data class CityResult(
+    val name: String,
+    val stateName: String,
+    val countryName: String,
+    val countryIso2: String,
+    val latitude: Double,
+    val longitude: Double,
+    val score: UInt
+)
+
+fun smartSearch(query: String, limit: UInt): List&lt;CityResult&gt; {
+    return uniffiRustCall { status ->
+        UniffiLib.INSTANCE.uniffi_geodb_ffi_fn_func_smart_search(
+            FfiConverterString.lower(query),
+            FfiConverterUInt.lower(limit),
+            status
+        )
+    }.let {
+        FfiConverterSequenceTypeCityResult.lift(it)
+    }
+}
+</code></pre>
+
+<h2 id="android-project">8. Creating the Android Project</h2>
+
+<h3>Project Structure</h3>
+
+<div class="file-tree">
+android-app/
+├── app/
+│   ├── build.gradle.kts
+│   ├── proguard-rules.pro
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── java/
+│       │   ├── eu/trahe/geodb/
+│       │   │   ├── MainActivity.kt
+│       │   │   └── ui/theme/Theme.kt
+│       │   └── uniffi/geodb_ffi/
+│       │       └── geodb_ffi.kt          ← Generated bindings
+│       ├── jniLibs/
+│       │   ├── arm64-v8a/libgeodb_ffi.so
+│       │   ├── armeabi-v7a/libgeodb_ffi.so
+│       │   ├── x86_64/libgeodb_ffi.so
+│       │   └── x86/libgeodb_ffi.so
+│       └── res/
+│           ├── values/
+│           │   ├── strings.xml
+│           │   ├── colors.xml
+│           │   └── themes.xml
+│           └── drawable/
+│               └── ic_launcher_foreground.xml
+├── build.gradle.kts
+├── settings.gradle.kts
+└── gradle.properties
+</div>
+
+<h3>App build.gradle.kts</h3>
+
+<pre><code>plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "eu.trahe.geodb"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "eu.trahe.geodb"
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+
+        ndk {
+            // Include all ABIs for maximum device compatibility
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+        }
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.6"
+    }
+
+    sourceSets {
+        getByName("main") {
+            // Tell Gradle where to find our native libraries
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+}
+
+dependencies {
+    // Jetpack Compose
+    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.8.2")
+
+    // JNA - Required for UniFFI bindings
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
+}
+</code></pre>
+
+<blockquote class="success">
+<strong>Key Dependency:</strong> The <code>net.java.dev.jna:jna</code> library is essential. UniFFI uses JNA (Java Native Access) to call into the Rust library. Without it, you'll get runtime crashes.
+</blockquote>
+
+<h2 id="compose-ui">9. Building the UI with Jetpack Compose</h2>
+
+<h3>MainActivity.kt</h3>
+
+<pre><code>package eu.trahe.geodb
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uniffi.geodb_ffi.*
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme {
+                GeoDBScreen()
+            }
+        }
+    }
+}
+
+@Composable
+fun GeoDBScreen() {
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf&lt;List&lt;CityResult&gt;&gt;(emptyList()) }
+    var isInitialized by remember { mutableStateOf(false) }
+    var dbStats by remember { mutableStateOf&lt;DbStats?&gt;(null) }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    // Initialize database on first composition
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            initDb()  // Call Rust function
+            isInitialized = true
+            dbStats = getDbStats()  // Get stats from Rust
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // Header with stats
+        Text("GeoDB", style = MaterialTheme.typography.headlineLarge)
+        dbStats?.let { stats ->
+            Text("${stats.countryCount} countries, ${stats.cityCount} cities")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Search field
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { newQuery ->
+                searchQuery = newQuery
+                if (newQuery.length >= 2 && isInitialized) {
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            // Call Rust search function
+                            searchResults = smartSearch(newQuery, 20u)
+                        }
+                    }
+                }
+            },
+            label = { Text("Search cities...") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isInitialized
+        )
+
+        // Results list
+        LazyColumn {
+            items(searchResults) { city ->
+                CityCard(city)
+            }
+        }
+    }
+}
+
+@Composable
+fun CityCard(city: CityResult) {
+    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(city.name, style = MaterialTheme.typography.titleMedium)
+            Text("${city.stateName}, ${city.countryName}")
+            Text("📍 ${city.latitude}, ${city.longitude}")
+        }
+    }
+}
+</code></pre>
+
+<h3>Key Points</h3>
+
+<ol>
+    <li><strong>IO Dispatcher:</strong> Always call Rust functions on <code>Dispatchers.IO</code> to avoid blocking the main thread</li>
+    <li><strong>One-time initialization:</strong> <code>initDb()</code> loads the embedded database (~50ms)</li>
+    <li><strong>Automatic type conversion:</strong> UniFFI converts Rust types to Kotlin automatically</li>
+</ol>
+
+<h2 id="testing">10. Testing and Deployment</h2>
+
+<h3>Build the APK</h3>
+
+<pre><code>cd android-app
+
+# Debug build
+./gradlew assembleDebug
+
+# Release build
+./gradlew assembleRelease
+
+# Install on connected device
+./gradlew installDebug
+</code></pre>
+
+<h3>Testing on Emulator</h3>
+
+<pre><code># List available emulators
+emulator -list-avds
+
+# Start an emulator
+emulator -avd Pixel_7_API_34
+
+# Install and run
+adb install app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n eu.trahe.geodb/.MainActivity
+</code></pre>
+
+<h3>ProGuard Rules</h3>
+
+<p>To prevent ProGuard from stripping JNA and UniFFI classes:</p>
+
+<pre><code># proguard-rules.pro
+
+# Keep JNA classes
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+
+# Keep UniFFI generated classes
+-keep class uniffi.** { *; }
+</code></pre>
+
+<h2 id="performance">11. Performance and Size</h2>
+
+<h3>APK Size</h3>
+
+<table>
+    <tr>
+        <th>Configuration</th>
+        <th>APK Size</th>
+        <th>Notes</th>
+    </tr>
+    <tr>
+        <td>Universal APK (all ABIs)</td>
+        <td>~35 MB</td>
+        <td>Contains all 4 architectures</td>
+    </tr>
+    <tr>
+        <td>arm64-v8a only</td>
+        <td>~10 MB</td>
+        <td>Most modern phones</td>
+    </tr>
+    <tr>
+        <td>App Bundle (AAB)</td>
+        <td>~10 MB per device</td>
+        <td>Play Store delivers only needed ABI</td>
+    </tr>
+</table>
+
+<h3>Runtime Performance</h3>
+
+<table>
+    <tr>
+        <th>Operation</th>
+        <th>Time (Pixel 7)</th>
+        <th>Time (Older Device)</th>
+    </tr>
+    <tr>
+        <td>Database initialization</td>
+        <td>~40ms</td>
+        <td>~80ms</td>
+    </tr>
+    <tr>
+        <td>Search "Berlin"</td>
+        <td>~3ms</td>
+        <td>~8ms</td>
+    </tr>
+    <tr>
+        <td>Search "New York"</td>
+        <td>~4ms</td>
+        <td>~10ms</td>
+    </tr>
+    <tr>
+        <td>Spatial search (10km)</td>
+        <td>~2ms</td>
+        <td>~5ms</td>
+    </tr>
+</table>
+
+<h3>Memory Usage</h3>
+
+<ul>
+    <li><strong>Heap:</strong> ~15 MB (mostly embedded city data)</li>
+    <li><strong>Native:</strong> ~8 MB (Rust runtime + data structures)</li>
+    <li><strong>Total:</strong> ~25 MB resident memory</li>
+</ul>
+
+<h2 id="lessons">12. Lessons Learned</h2>
+
+<h3>1. cargo-ndk is Essential</h3>
+
+<p>Don't try to set up Android cross-compilation manually. <code>cargo-ndk</code> handles all the complexity:</p>
+
+<pre><code># Bad: Manual NDK setup (error-prone)
+export CC_aarch64_linux_android=...
+export AR_aarch64_linux_android=...
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=...
+
+# Good: Let cargo-ndk handle it
+cargo ndk -t arm64-v8a build --release
+</code></pre>
+
+<h3>2. JNA Dependency is Critical</h3>
+
+<p>UniFFI-generated Kotlin code uses JNA. Without the <code>@aar</code> suffix, you might get the wrong artifact:</p>
+
+<pre><code>// Wrong - gets JAR without Android support
+implementation("net.java.dev.jna:jna:5.14.0")
+
+// Right - gets AAR with Android native libs
+implementation("net.java.dev.jna:jna:5.14.0@aar")
+</code></pre>
+
+<h3>3. Feature Flags Matter</h3>
+
+<p>We disabled the <code>builder</code> feature to avoid the <code>ring</code> crate. This pattern is useful:</p>
+
+<pre><code># geodb-core Cargo.toml
+[features]
+default = ["json", "builder", "compact"]
+builder = ["dep:reqwest"]  # Pulls in TLS/crypto
+
+# geodb-ffi Cargo.toml - for Android
+geodb-core = { path = "../geodb-core", default-features = false, features = ["json", "compact"] }
+</code></pre>
+
+<h3>4. Use Dispatchers.IO</h3>
+
+<p>Rust FFI calls should never run on the main thread:</p>
+
+<pre><code>// Bad - blocks UI
+val results = smartSearch(query, 20u)
+
+// Good - runs on IO thread
+withContext(Dispatchers.IO) {
+    val results = smartSearch(query, 20u)
+}
+</code></pre>
+
+<h3>5. App Bundles Reduce Size</h3>
+
+<p>Google Play Store supports App Bundles that deliver only the needed ABI to each device. A 35MB universal APK becomes ~10MB per device.</p>
+
+<h2>Quick Start Script</h2>
+
+<p>Here's a complete script to build the Android libraries from scratch:</p>
+
+<pre><code>#!/bin/bash
+set -e
+
+echo "=== Building GeoDB for Android ==="
+
+# 1. Install targets if needed
+echo "Installing Android Rust targets..."
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+# 2. Build native libraries
+echo "Building native libraries..."
+cd crates/geodb-ffi
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o ../../target/android-libs build --release
+
+# 3. Generate Kotlin bindings
+echo "Generating Kotlin bindings..."
+cargo run --features=uniffi/cli --bin uniffi-bindgen generate \
+    --library ../../target/aarch64-linux-android/release/libgeodb_ffi.so \
+    --language kotlin \
+    --out-dir ../../generated-kotlin
+
+# 4. Copy to Android project
+echo "Copying to Android project..."
+cp -r ../../target/android-libs/* ../../GeoDB-App/android-app/app/src/main/jniLibs/
+cp -r ../../generated-kotlin/uniffi ../../GeoDB-App/android-app/app/src/main/java/
+
+echo "=== Done! ==="
+echo "Open GeoDB-App/android-app in Android Studio to build the APK"
+</code></pre>
+
+<h2>Conclusion</h2>
+
+<p>Building Android apps with Rust is surprisingly smooth thanks to:</p>
+
+<ul>
+    <li><strong>cargo-ndk:</strong> Handles all cross-compilation complexity</li>
+    <li><strong>UniFFI:</strong> Generates idiomatic Kotlin bindings automatically</li>
+    <li><strong>JNA:</strong> Provides the native call infrastructure</li>
+</ul>
+
+<p>The result is a native Android app with:</p>
+<ul>
+    <li>Shared business logic with iOS/macOS/watchOS</li>
+    <li>Native performance (sub-5ms search)</li>
+    <li>Type-safe API (no manual JNI)</li>
+    <li>~10MB per-device footprint via App Bundles</li>
+</ul>
+
+<p>The same Rust core powers all our platforms, with platform-specific UIs on top. Write once, run everywhere - but actually native.</p>
+
+<hr>
+
+<p><em>Questions? Issues? Open an issue on <a href="https://github.com/user/geodb-rs">GitHub</a>.</em></p>
+
+</body>
+</html>

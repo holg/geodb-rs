@@ -20,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/holg/geodb-rs"
@@ -37,7 +37,19 @@ serde-wasm-bindgen = "0.6"
 serde_json = { version = "1" }
 thiserror = "1"
 wasm-bindgen = "=0.2.105"  # Pinned to match trunk 0.21.14's bundled wasm-bindgen-cli
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Document",
+    "Location",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Event",
+    "EventTarget",
+    "UrlSearchParams",
+    "CssStyleDeclaration"
+] }
 
 [dependencies]
 geodb-core = { path = "crates/geodb-core" }

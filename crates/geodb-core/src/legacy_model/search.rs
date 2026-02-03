@@ -495,7 +495,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         }
         None
     }
-    fn find_nearest(&self, lat: f64, lng: f64, count: usize) -> Vec<&City<B>> {
+    fn find_nearest(&self, lat: f64, lng: f64, count: usize) -> Vec<CityContext<'_, B>> {
         // Legacy: We don't have a spatial_index, so we must scan the whole world.
         // This is slower (O(N)), but correct.
 
@@ -509,7 +509,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
 
                     // Squared Euclidean for fast sorting
                     let dist = distance_squared(lat, lng, c_lat, c_lng);
-                    candidates.push((dist, city));
+                    candidates.push((dist, city, state, country));
                 }
             }
         }
@@ -518,7 +518,11 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
         // Take top N
-        candidates.into_iter().take(count).map(|(_, c)| c).collect()
+        candidates
+            .into_iter()
+            .take(count)
+            .map(|(_, c, s, co)| (c, s, co))
+            .collect()
     }
 
     // crates/geodb-core/src/model/search.rs

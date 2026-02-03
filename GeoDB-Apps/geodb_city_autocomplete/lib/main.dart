@@ -406,6 +406,11 @@ class _CityListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final location = [city.state, city.country]
+        .where((s) => s.isNotEmpty)
+        .join(', ');
+    final geoidText = city.geoid.isNotEmpty && city.geoid != '0' ? ' • ID: ${city.geoid}' : '';
+
     return ListTile(
       leading: CircleAvatar(
         backgroundColor: Colors.blue.shade100,
@@ -423,9 +428,7 @@ class _CityListTile extends StatelessWidget {
         style: const TextStyle(fontWeight: FontWeight.w500),
       ),
       subtitle: Text(
-        [city.state, city.country]
-            .where((s) => s.isNotEmpty)
-            .join(', '),
+        '$location$geoidText',
         style: TextStyle(color: Colors.grey.shade600),
       ),
       trailing: const Icon(Icons.chevron_right),
@@ -561,6 +564,13 @@ class _SelectedCityCard extends StatelessWidget {
                   icon: Icons.people,
                   label: 'Population',
                   value: _formatPopulation(city.population),
+                ),
+
+              if (city.geoid.isNotEmpty && city.geoid != '0')
+                _DetailRow(
+                  icon: Icons.tag,
+                  label: 'GeoID',
+                  value: city.geoid,
                 ),
             ],
           ),

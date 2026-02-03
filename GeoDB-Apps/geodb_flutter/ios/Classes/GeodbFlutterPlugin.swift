@@ -209,7 +209,8 @@ public class GeodbFlutterPlugin: NSObject, FlutterPlugin {
             "iso2": city.iso2,
             "lat": city.lat,
             "lng": city.lng,
-            "population": Int(city.population)
+            "population": Int(city.population),
+            "geoid": String(city.geoid)
         ]
 
         if let distanceKm = city.distanceKm {

@@ -1,6 +1,6 @@
 Pod::Spec.new do |spec|
   spec.name          = 'geodb_flutter'
-  spec.version       = '0.1.4'
+  spec.version       = '0.1.8'
   spec.summary       = 'Flutter plugin for GeoDB - geographic database powered by Rust.'
   spec.description   = <<-DESC
     Flutter plugin that provides access to GeoDB, a high-performance geographic

@@ -12,9 +12,8 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  # GeoDB Flutter plugin - path reference to local plugin
-  geodb_flutter:
-    path: ../geodb_flutter
+  # GeoDB Flutter plugin from pub.dev
+  geodb_flutter: ^0.1.8
 
   # Location services
   geolocator: ^13.0.2

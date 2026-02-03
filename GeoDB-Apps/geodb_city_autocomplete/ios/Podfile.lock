@@ -1,6 +1,6 @@
 PODS:
   - Flutter (1.0.0)
-  - geodb_flutter (0.1.4):
+  - geodb_flutter (0.1.6):
     - Flutter
   - geolocator_apple (1.2.0):
     - Flutter
@@ -21,7 +21,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  geodb_flutter: d626f48c83ad1d94a168d0459d7111d3a31a2018
+  geodb_flutter: 2a36c7163d629d289cbe53e015efc32f8439c83c
   geolocator_apple: 66b711889fd333205763b83c9dcf0a57a28c7afd
 
 PODFILE CHECKSUM: 87bc5a12856f22f370781e2e3ce8f69c42f735dd

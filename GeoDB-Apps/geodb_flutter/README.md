@@ -21,9 +21,16 @@ A Flutter plugin that provides access to the GeoDB database for searching cities
 
 ## Installation
 
-### From Local Path (Development)
+### From pub.dev (Recommended)
 
 Add to your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  geodb_flutter: ^0.1.8
+```
+
+### From Local Path (Development)
 
 ```yaml
 dependencies:
@@ -87,7 +94,7 @@ await geodb.initialize();
 
 // Get database statistics
 final stats = await geodb.getStats();
-print('Database has ${stats.cityCount} cities in ${stats.countryCount} countries');
+print('Database has ${stats.cities} cities in ${stats.countries} countries');
 ```
 
 ### Smart Search
@@ -99,9 +106,9 @@ Search across all location types with intelligent ranking:
 final results = await geodb.smartSearch('Berlin');
 
 for (final city in results) {
-  print('${city.name}, ${city.countryName}');
-  // Output: Berlin, Germany
-  //         Berlin, United States
+  print('${city.name}, ${city.country} (${city.iso2})');
+  // Output: Berlin, Germany (DE)
+  //         Berlin, United States (US)
   //         etc.
 }
 ```
@@ -150,7 +157,7 @@ final cities = await geodb.findCitiesBySubstring('New York');
 // Find country by ISO2 code
 final germany = await geodb.findCountryByCode('DE');
 if (germany != null) {
-  print('${germany.name} - ${germany.countryCode}');
+  print('${germany.name} - ${germany.iso2}');
 }
 ```
 
@@ -183,14 +190,14 @@ Represents a city, state, or country.
 
 ```dart
 class CityResult {
-  final int id;              // Unique identifier
   final String name;         // Location name
-  final String? stateName;   // State name (null for countries)
-  final String? stateCode;   // State code
-  final String countryName;  // Country name
-  final String countryCode;  // ISO2 country code
-  final double latitude;     // Latitude
-  final double longitude;    // Longitude
+  final String state;        // State name (empty for countries)
+  final String country;      // Country name
+  final String iso2;         // ISO2 country code
+  final double lat;          // Latitude
+  final double lng;          // Longitude
+  final int population;      // Population
+  final String geoid;        // Unique geographic ID (empty for countries/states)
   final double? distanceKm;  // Distance (for spatial queries)
 }
 ```
@@ -201,9 +208,9 @@ Database statistics.
 
 ```dart
 class DbStats {
-  final int countryCount;  // Number of countries
-  final int stateCount;    // Number of states/provinces
-  final int cityCount;     // Number of cities
+  final int countries;  // Number of countries
+  final int states;     // Number of states/provinces
+  final int cities;     // Number of cities
 }
 ```
 

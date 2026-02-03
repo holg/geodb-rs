@@ -7,7 +7,11 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
+#if canImport(GeodbFfi)
 import GeodbFfi
+#elseif canImport(geodb_ffiFFI)
+import geodb_ffiFFI
+#endif
 
 fileprivate extension RustBuffer {
     // Allocate a new buffer, copying the contents of a `UInt8` array.
@@ -525,6 +529,8 @@ public protocol GeoDbEngineProtocol: AnyObject, Sendable {
     
     func findStatesBySubstring(substr: String)  -> [CityResult]
     
+    func getCountryTranslation(iso2: String, langCode: String)  -> String?
+    
     func smartSearch(query: String)  -> [CityResult]
     
     func stats()  -> DbStatsDto
@@ -654,6 +660,16 @@ open func findStatesBySubstring(substr: String) -> [CityResult]  {
 })
 }
     
+open func getCountryTranslation(iso2: String, langCode: String) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_geodb_ffi_fn_method_geodbengine_get_country_translation(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(iso2),
+        FfiConverterString.lower(langCode),$0
+    )
+})
+}
+    
 open func smartSearch(query: String) -> [CityResult]  {
     return try!  FfiConverterSequenceTypeCityResult.lift(try! rustCall() {
     uniffi_geodb_ffi_fn_method_geodbengine_smart_search(
@@ -727,11 +743,13 @@ public struct CityResult: Equatable, Hashable {
     public var lat: Double
     public var lng: Double
     public var population: UInt64
+    public var geoid: UInt64
     public var distanceKm: Double?
+    public var translations: [String: String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, state: String, country: String, iso2: String, lat: Double, lng: Double, population: UInt64, distanceKm: Double?) {
+    public init(name: String, state: String, country: String, iso2: String, lat: Double, lng: Double, population: UInt64, geoid: UInt64, distanceKm: Double?, translations: [String: String]) {
         self.name = name
         self.state = state
         self.country = country
@@ -739,7 +757,9 @@ public struct CityResult: Equatable, Hashable {
         self.lat = lat
         self.lng = lng
         self.population = population
+        self.geoid = geoid
         self.distanceKm = distanceKm
+        self.translations = translations
     }
 
     
@@ -763,7 +783,9 @@ public struct FfiConverterTypeCityResult: FfiConverterRustBuffer {
                 lat: FfiConverterDouble.read(from: &buf), 
                 lng: FfiConverterDouble.read(from: &buf), 
                 population: FfiConverterUInt64.read(from: &buf), 
-                distanceKm: FfiConverterOptionDouble.read(from: &buf)
+                geoid: FfiConverterUInt64.read(from: &buf), 
+                distanceKm: FfiConverterOptionDouble.read(from: &buf), 
+                translations: FfiConverterDictionaryStringString.read(from: &buf)
         )
     }
 
@@ -775,7 +797,9 @@ public struct FfiConverterTypeCityResult: FfiConverterRustBuffer {
         FfiConverterDouble.write(value.lat, into: &buf)
         FfiConverterDouble.write(value.lng, into: &buf)
         FfiConverterUInt64.write(value.population, into: &buf)
+        FfiConverterUInt64.write(value.geoid, into: &buf)
         FfiConverterOptionDouble.write(value.distanceKm, into: &buf)
+        FfiConverterDictionaryStringString.write(value.translations, into: &buf)
     }
 }
 
@@ -969,6 +993,30 @@ fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeCityResult: FfiConverterRustBuffer {
     typealias SwiftType = CityResult?
 
@@ -1015,6 +1063,32 @@ fileprivate struct FfiConverterSequenceTypeCityResult: FfiConverterRustBuffer {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
+    public static func write(_ value: [String: String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterString.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: String] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: String]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterString.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
+    }
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1049,6 +1123,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_geodb_ffi_checksum_method_geodbengine_find_states_by_substring() != 26495) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_geodb_ffi_checksum_method_geodbengine_get_country_translation() != 49976) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_geodb_ffi_checksum_method_geodbengine_smart_search() != 33908) {

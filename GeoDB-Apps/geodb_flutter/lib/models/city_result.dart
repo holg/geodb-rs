@@ -21,6 +21,9 @@ class CityResult {
   /// Population
   final int population;
 
+  /// Unique geographic identifier (empty string for countries and states)
+  final String geoid;
+
   /// Distance in kilometers (only for spatial queries)
   final double? distanceKm;
 
@@ -32,6 +35,7 @@ class CityResult {
     required this.lat,
     required this.lng,
     required this.population,
+    required this.geoid,
     this.distanceKm,
   });
 
@@ -45,6 +49,7 @@ class CityResult {
       lat: (map['lat'] as num).toDouble(),
       lng: (map['lng'] as num).toDouble(),
       population: map['population'] as int,
+      geoid: map['geoid'] as String,
       distanceKm: map['distanceKm'] != null
           ? (map['distanceKm'] as num).toDouble()
           : null,
@@ -61,6 +66,7 @@ class CityResult {
       'lat': lat,
       'lng': lng,
       'population': population,
+      'geoid': geoid,
       if (distanceKm != null) 'distanceKm': distanceKm,
     };
   }

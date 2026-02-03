@@ -54,6 +54,7 @@
 pub mod flat;
 // pub mod region;
 pub mod convert;
+pub mod query;
 pub mod search;
 // Re-exports for convenience
 pub use super::{CityView, CountryView, StateView};
@@ -63,6 +64,7 @@ pub use crate::common::DbStats;
 pub use crate::error::{GeoDbError, GeoError, Result};
 pub use crate::text::{equals_folded, fold_ascii_lower, fold_key};
 pub use flat::{City, Country, CountryTimezone, GeoDb, State};
+pub use query::CityQuery;
 #[cfg(not(feature = "compact"))]
 pub const CACHE_SUFFIX: &str = ".flat.bin";
 #[cfg(feature = "compact")]

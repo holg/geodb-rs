@@ -20,6 +20,10 @@
 [![PyPI Downloads](https://img.shields.io/pypi/dm/geodb-rs.svg?label=downloads)](https://pypi.org/project/geodb-rs/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/geodb-rs.svg)](https://pypi.org/project/geodb-rs/)
 
+### pub.dev (Flutter)
+[![pub.dev](https://img.shields.io/pub/v/geodb_flutter.svg)](https://pub.dev/packages/geodb_flutter)
+[![pub.dev likes](https://img.shields.io/pub/likes/geodb_flutter)](https://pub.dev/packages/geodb_flutter)
+
 ### App Store
 [![iOS](https://img.shields.io/badge/iOS-App%20Store-blue?logo=apple)](https://apps.apple.com/app/geodb-rs/id6755972245)
 [![TestFlight](https://img.shields.io/badge/TestFlight-Beta-orange?logo=apple)](https://testflight.apple.com/join/TuFejJEq)
@@ -33,6 +37,7 @@ This repository is a **Cargo workspace** containing:
 - **`geodb-wasm`** — WebAssembly bindings + browser demo — docs: https://docs.rs/geodb-wasm
 - **`geodb-py`** — Python bindings (published on PyPI as "geodb-rs") — https://pypi.org/project/geodb-rs/
 - **`geodb-ffi`** — FFI bindings for mobile platforms (iOS, macOS, watchOS, Android)
+- **`geodb_flutter`** — Flutter plugin (published on pub.dev) — https://pub.dev/packages/geodb_flutter
 
 ---
 
@@ -124,7 +129,25 @@ for city in results {
 let nearest = engine.findNearest(lat: 52.52, lng: 13.405, count: 10)
 ```
 
-### For Android (Kotlin)
+### For Flutter (iOS, Android, macOS)
+
+```yaml
+# pubspec.yaml
+dependencies:
+  geodb_flutter: ^0.1.8
+```
+
+```dart
+import 'package:geodb_flutter/geodb_flutter.dart';
+
+final geodb = GeodbFlutter();
+await geodb.initialize();
+
+final results = await geodb.smartSearch('Berlin');
+final nearest = await geodb.findNearest(lat: 52.52, lng: 13.405, count: 10);
+```
+
+### For Android (Kotlin - Native)
 
 See the example app in `GeoDB-App/android-app/`. The app uses UniFFI-generated Kotlin bindings.
 
@@ -273,20 +296,45 @@ if let Some(us) = db.find_country_by_iso2("US") {
 let countries = db.find_countries_by_phone_code("+44");
 ```
 
-### Search for cities named "Springfield"
+### Filter-based city search (CityQuery API)
+
+Use the chainable `query_cities()` API to disambiguate cities with common names:
 
 ```rust
-let results: Vec<_> = db.countries()
-    .iter()
-    .flat_map(|country| {
-        country.states().iter().flat_map(move |state| {
-            state.cities().iter()
-                .filter(|c| c.name() == "Springfield")
-                .map(move |c| (country.name(), state.name(), c.name()))
-        })
-    })
+use geodb_core::prelude::*;
+
+let db = GeoDb::<DefaultBackend>::load()?;
+
+// Find Springfield in Illinois, US (not the 30+ other Springfields!)
+let results = db.query_cities()
+    .filter_country("US")
+    .filter_region("Illinois")
+    .filter_city("Springfield")
     .collect();
+
+assert_eq!(results.len(), 1);
+let (city, state, country) = &results[0];
+println!("{} - {}, {}", city.name(), state.name(), country.iso2());
+// Output: Springfield - Illinois, US
+
+// Find Lüdinghausen in NRW (accent-insensitive search)
+let city = db.query_cities()
+    .filter_country("DE")
+    .filter_region("Nordrhein-Westfalen")
+    .filter_city("Ludinghausen")  // works without umlaut too
+    .first();
+
+// Count all Springfields worldwide
+let count = db.query_cities()
+    .filter_city("Springfield")
+    .count();
+println!("Found {} cities named Springfield", count);
 ```
+
+Filters support:
+- **Country**: ISO2/ISO3 codes (`"US"`, `"DEU"`) or name substring (`"Germany"`)
+- **Region**: State code (`"CA"`, `"NW"`) or name (`"California"`, `"Nordrhein-Westfalen"`)
+- **City**: Name substring with accent-insensitive matching
 
 ---
 
@@ -326,13 +374,31 @@ Install:
 cargo install geodb-cli
 ```
 
-Examples:
+Commands:
 
 ```bash
-geodb-cli --help
-geodb-cli stats
-geodb-cli find-country US
-geodb-cli list-cities --country US --state CA
+geodb-cli --help                    # Show all commands
+geodb-cli stats                     # Database statistics
+geodb-cli countries                 # List all countries
+geodb-cli country US                # Lookup country by ISO2/ISO3 code
+geodb-cli states US                 # List all states for a country
+geodb-cli cities "Springfield"      # Search cities by substring
+geodb-cli smart "Berlin"            # Smart search (cities/states/countries)
+geodb-cli nearest --lat 52.52 --lng 13.405 -n 5   # Find 5 nearest cities
+geodb-cli radius --lat 52.52 --lng 13.405 -r 50   # Cities within 50km
+```
+
+Filter-based query (disambiguate cities):
+
+```bash
+# Find Springfield in Illinois, US (not the 30+ other Springfields!)
+geodb-cli query --city Springfield --country US --region Illinois
+
+# Find Lüdinghausen in NRW, Germany
+geodb-cli query --city "Lüdinghausen" --country DE --region "Nordrhein-Westfalen"
+
+# List all cities in Bavaria
+geodb-cli query --country Germany --region Bavaria -n 50
 ```
 
 Docs.rs: https://docs.rs/geodb-cli
@@ -372,6 +438,59 @@ import geodb_rs
 db = geodb_rs.PyGeoDb.load_default()  # tries bundled data first
 print(db.stats())  # (countries, states, cities)
 ```
+
+---
+
+# Flutter Plugin (`geodb_flutter`)
+
+Cross-platform Flutter plugin with native Rust performance.
+
+### pub.dev
+[![pub.dev](https://img.shields.io/pub/v/geodb_flutter.svg)](https://pub.dev/packages/geodb_flutter)
+
+### Installation
+
+```yaml
+dependencies:
+  geodb_flutter: ^0.1.8
+```
+
+### Platform Support
+
+| Platform | Status | Architectures |
+|----------|--------|---------------|
+| iOS | Ready | arm64 device, arm64 simulator |
+| macOS | Ready | arm64, x86_64 (Universal) |
+| Android | Ready | arm64-v8a, armeabi-v7a, x86_64, x86 |
+
+### Quick Start
+
+```dart
+import 'package:geodb_flutter/geodb_flutter.dart';
+
+final geodb = GeodbFlutter();
+
+// Initialize (required first)
+await geodb.initialize();
+
+// Get stats
+final stats = await geodb.getStats();
+print('${stats.cities} cities in ${stats.countries} countries');
+
+// Smart search
+final results = await geodb.smartSearch('Berlin');
+for (final city in results) {
+  print('${city.name}, ${city.country} (${city.iso2})');
+}
+
+// Find nearest cities
+final nearest = await geodb.findNearest(lat: 52.52, lng: 13.405, count: 10);
+
+// Search within radius
+final nearby = await geodb.findInRadius(lat: 52.52, lng: 13.405, radiusKm: 50.0);
+```
+
+For a complete example, see `GeoDB-Apps/geodb_city_autocomplete/` in the repository.
 
 ---
 

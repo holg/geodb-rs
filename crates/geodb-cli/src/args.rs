@@ -83,4 +83,28 @@ pub enum Commands {
     CityBy {
         query: String,
     },
+
+    /// Filter-based city search with optional country, region, and city filters
+    ///
+    /// Examples:
+    ///   geodb query --city Springfield --country US --region Illinois
+    ///   geodb query --city Berlin --country DE
+    ///   geodb query --country Germany --region "Nordrhein-Westfalen"
+    Query {
+        /// Filter by city name (substring, accent-insensitive)
+        #[arg(short = 'c', long)]
+        city: Option<String>,
+
+        /// Filter by region/state name or code (substring, accent-insensitive)
+        #[arg(short = 'r', long)]
+        region: Option<String>,
+
+        /// Filter by country name or ISO2/ISO3 code
+        #[arg(short = 'C', long)]
+        country: Option<String>,
+
+        /// Maximum number of results to show (default: 20)
+        #[arg(short = 'n', long, default_value = "20")]
+        limit: usize,
+    },
 }

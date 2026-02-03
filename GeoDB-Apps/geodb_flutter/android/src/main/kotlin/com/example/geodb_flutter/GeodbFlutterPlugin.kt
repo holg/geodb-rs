@@ -219,6 +219,7 @@ class GeodbFlutterPlugin : FlutterPlugin, MethodCallHandler {
             "lat" to city.lat,
             "lng" to city.lng,
             "population" to city.population.toLong(),
+            "geoid" to city.geoid.toString(),
             "distanceKm" to city.distanceKm
         )
     }

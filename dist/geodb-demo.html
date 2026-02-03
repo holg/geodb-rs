@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>GeoDB Architecture Demo</title>
+    <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+
+<h1>🌍 GeoDB Architecture Demo</h1>
+<p class="info">
+    Select a compilation variant below to load the specific WASM binary.
+</p>
+
+<div class="controls">
+    <button class="flat" onclick="loadEngine('../flat/geodb_wasm.js', 'Standard (Flat)')">
+        🚀 Standard
+    </button>
+    <button class="flat-blobs" onclick="loadEngine('../flat-blobs/geodb_wasm.js', 'Flat (Flat + Blobs)')">
+        🔥 Turbo
+    </button>
+    <button class="nested" onclick="loadEngine('../nested/geodb_wasm.js', 'Nested more like jq ')">
+        🐢 Legacy
+    </button>
+    <button class="nested-blobs" onclick="loadEngine('../nested-blobs/geodb_wasm.js', 'Nested (having Search Blobs')">
+        📦 Legacy+Blobs
+    </button>
+</div>
+
+<div id="status" class="stats-box">
+    Waiting for engine selection...
+</div>
+
+<div id="app" style="opacity: 0.5; pointer-events: none;">
+
+    <div class="section-title">🏳️ Search Country by Code</div>
+    <input id="isoInput" placeholder="Enter ISO2 or ISO3 code (e.g. US, DEU, FR)">
+    <div id="isoOut"></div>
+
+    <div class="section-title">🌍 Search Country by Name</div>
+    <input id="countryNameInput" placeholder="Enter name (e.g. Germany, United)">
+    <div id="countryNameOut"></div>
+
+    <div class="section-title">🏛️ Search State</div>
+    <input id="stateInput" placeholder="Enter state name (e.g. Bavaria, California)">
+    <div id="stateOut"></div>
+
+    <div class="section-title">🏙️ Search City</div>
+    <input id="cityInput" placeholder="Enter city name (e.g. Zürich, Tokyo)">
+    <div id="cityOut"></div>
+
+    <div class="section-title">📞 Search by Phone Code</div>
+    <input id="phoneInput" placeholder="Enter phone code (e.g. +1, +49)">
+    <div id="phoneOut"></div>
+
+    <div class="section-title">🔎 Smart Search (All-in-One)</div>
+    <input id="smartInput" placeholder="Try: 'Munich', 'California', '+86'...">
+    <div id="smartOut"></div>
+
+    <div class="section-title">📍 Spatial Search</div>
+
+    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+        <input id="latInput" placeholder="Lat (e.g. 52.52)" style="flex:1">
+        <input id="lngInput" placeholder="Lng (e.g. 13.40)" style="flex:1">
+    </div>
+
+    <div style="display: flex; gap: 10px;">
+        <button onclick="runNearest()" style="flex:1; background:#6610f2; color:white">Find Nearest (5)</button>
+        <button onclick="runRadius()" style="flex:1; background:#fd7e14; color:white">Find in 50km Radius</button>
+    </div>
+
+    <div id="spatialOut"></div>
+
+</div>
+
+</div>
+
+<script type="module" src="demo.js"></script>
+
+</body>
+</html>

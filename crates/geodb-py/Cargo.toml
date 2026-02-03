@@ -2,7 +2,7 @@
 name = "geodb-py"
 # NOTE: Maturin uses this version directly for PyPI, so we keep it explicit
 # rather than using workspace inheritance to avoid any maturin compatibility issues
-version = "0.1.5"
+version = "0.1.6"
 edition.workspace = true
 description = "Python bindings for geodb-rs"
 license.workspace = true

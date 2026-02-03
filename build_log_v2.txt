@@ -1,0 +1,109 @@
+🧹 Cleaned previous builds.
+----------------------------------------------------------------
+📦 Building Variant: flat
+   CLI Features:  builder,compact
+   WASM Features: compact,json
+----------------------------------------------------------------
+   🔨 Baking Data... builder,compact
+bin_filename: geodb.flat.comp.bin
+bin_path: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.flat.comp.bin"
+=== GeoDB Builder ===
+Source: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.flat.comp.bin"
+✓ Build complete in 1.91s
+  Countries: 250
+✓ Binary cache saved to: geodb.flat.comp.bin
+   🦀 Compiling WASM... crates/geodb-wasm --out-dir "../../dist/flat" --features "compact,json"
+[INFO]: 🎯  Checking for the Wasm target...
+[INFO]: 🌀  Compiling to Wasm...
+[INFO]: ⬇️  Installing wasm-bindgen...
+[INFO]: found wasm-opt at "/Users/htr/.cargo/bin/wasm-opt"
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: ✨   Done in 1.80s
+[INFO]: 📦   Your wasm pkg is ready to publish at dist/flat.
+   ✅ Finished: dist/flat
+----------------------------------------------------------------
+📦 Building Variant: flat-blobs
+   CLI Features:  builder,compact,search_blobs
+   WASM Features: compact,search_blobs,json
+----------------------------------------------------------------
+   🔨 Baking Data... builder,compact,search_blobs
+bin_filename: geodb.flat.comp.blobs.bin
+bin_path: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.flat.comp.blobs.bin"
+=== GeoDB Builder ===
+Source: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.flat.comp.blobs.bin"
+✓ Build complete in 2.07s
+  Countries: 250
+✓ Binary cache saved to: geodb.flat.comp.blobs.bin
+   🦀 Compiling WASM... crates/geodb-wasm --out-dir "../../dist/flat-blobs" --features "compact,search_blobs,json"
+[INFO]: 🎯  Checking for the Wasm target...
+[INFO]: 🌀  Compiling to Wasm...
+[INFO]: ⬇️  Installing wasm-bindgen...
+[INFO]: found wasm-opt at "/Users/htr/.cargo/bin/wasm-opt"
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: ✨   Done in 1.74s
+[INFO]: 📦   Your wasm pkg is ready to publish at dist/flat-blobs.
+   ✅ Finished: dist/flat-blobs
+----------------------------------------------------------------
+📦 Building Variant: nested
+   CLI Features:  legacy_model,builder,compact
+   WASM Features: legacy_model,compact,json
+----------------------------------------------------------------
+   🔨 Baking Data... legacy_model,builder,compact
+bin_filename: geodb.nested.comp.bin
+bin_path: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.nested.comp.bin"
+=== GeoDB Builder ===
+Source: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.nested.comp.bin"
+✓ Build complete in 1.64s
+  Countries: 250
+✓ Binary cache saved to: geodb.nested.comp.bin
+   🦀 Compiling WASM... crates/geodb-wasm --out-dir "../../dist/nested" --features "legacy_model,compact,json"
+[INFO]: 🎯  Checking for the Wasm target...
+[INFO]: 🌀  Compiling to Wasm...
+[INFO]: ⬇️  Installing wasm-bindgen...
+[INFO]: found wasm-opt at "/Users/htr/.cargo/bin/wasm-opt"
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: ✨   Done in 1.73s
+[INFO]: 📦   Your wasm pkg is ready to publish at dist/nested.
+   ✅ Finished: dist/nested
+----------------------------------------------------------------
+📦 Building Variant: nested-blobs
+   CLI Features:  legacy_model,builder,compact,search_blobs
+   WASM Features: legacy_model,compact,search_blobs,json
+----------------------------------------------------------------
+   🔨 Baking Data... legacy_model,builder,compact,search_blobs
+bin_filename: geodb.nested.comp.blobs.bin
+bin_path: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.nested.comp.blobs.bin"
+=== GeoDB Builder ===
+Source: "/Users/htr/Documents/develeop/rust/geodb-rs/crates/geodb-core/data/geodb.nested.comp.blobs.bin"
+✓ Build complete in 1.80s
+  Countries: 250
+✓ Binary cache saved to: geodb.nested.comp.blobs.bin
+   🦀 Compiling WASM... crates/geodb-wasm --out-dir "../../dist/nested-blobs" --features "legacy_model,compact,search_blobs,json"
+[INFO]: 🎯  Checking for the Wasm target...
+[INFO]: 🌀  Compiling to Wasm...
+[INFO]: ⬇️  Installing wasm-bindgen...
+[INFO]: found wasm-opt at "/Users/htr/.cargo/bin/wasm-opt"
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: ✨   Done in 1.73s
+[INFO]: 📦   Your wasm pkg is ready to publish at dist/nested-blobs.
+   ✅ Finished: dist/nested-blobs
+----------------------------------------------------------------
+🎉 All builds complete!
+----------------------------------------------------------------
+🎉 Copy js/cs/html from wasm-pack-helper
+total 88
+-rw-r--r--@ 1 htr  staff   973B Dec 28 18:16 bench.css
+-rw-r--r--@ 1 htr  staff   4.5K Dec 28 18:16 bench.js
+-rw-r--r--@ 1 htr  staff   3.6K Dec 28 18:16 demo.css
+-rw-r--r--@ 1 htr  staff    13K Dec 28 18:16 demo.js
+drwxr-xr-x  9 htr  staff   288B Dec 28 18:16 flat
+drwxr-xr-x  9 htr  staff   288B Dec 28 18:16 flat-blobs
+-rw-r--r--@ 1 htr  staff   1.0K Dec 28 18:16 geodb-bench.html
+-rw-r--r--@ 1 htr  staff   2.7K Dec 28 18:16 geodb-demo.html
+-rw-r--r--@ 1 htr  staff   2.6K Dec 28 18:16 geodb.html
+drwxr-xr-x  9 htr  staff   288B Dec 28 18:16 nested
+drwxr-xr-x  9 htr  staff   288B Dec 28 18:16 nested-blobs

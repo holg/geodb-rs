@@ -67,6 +67,19 @@
             margin-bottom: 20px;
             border-left: 5px solid #4a6cff;
         }
+
+        .url-params-box {
+            background: #fff8e1;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 5px solid #ffc107;
+        }
+
+        .city-marker {
+            color: #d32f2f;
+            font-weight: bold;
+        }
     </style>
 </head>
 
@@ -75,7 +88,12 @@
 <h1>GeoDB WASM Demo</h1>
 
 <div id="stats" class="stats-box">
-    Loading stats…
+    Initializing WASM...
+</div>
+
+<div id="urlParams" class="url-params-box" style="display:none">
+    <strong>URL Parameters detected:</strong>
+    <div id="urlParamsContent"></div>
 </div>
 
 <p class="info">All searches run fully offline inside WASM after initial load.</p>
@@ -96,138 +114,19 @@
 <input id="smartInput" placeholder="Try: de, germany, bayern, wuhan, tokyo, +49"/>
 <div id="smartOut"></div>
 
-<script type="module">
-    // Poll for WASM bindings to be ready
-    function waitForWasm(callback, maxAttempts = 50) {
-        let attempts = 0;
-        const interval = setInterval(() => {
-            attempts++;
-            if (window.wasmBindings && typeof window.wasmBindings.get_stats === 'function') {
-                clearInterval(interval);
-                console.log("✓ WASM bindings ready after", attempts, "attempts");
-                callback();
-            } else if (attempts >= maxAttempts) {
-                clearInterval(interval);
-                console.error("✗ WASM bindings not available after", maxAttempts, "attempts");
-                document.getElementById("stats").innerHTML =
-                    `❌ Failed to load WASM module`;
-            }
-        }, 100);
-    }
-
-    // Start polling when page loads
-    waitForWasm(initApp);
-
-    function formatResultCard(entry) {
-        const flag = entry.emoji ? `<span class="flag">${entry.emoji}</span>` : "";
-        const title = `${flag}<span class="kind">[${entry.kind}]</span> ${entry.name}`;
-        let extra = "";
-
-        if (entry.kind === "country") {
-            extra = `
-        <div class="small">
-          ISO2: <b>${entry.iso2 || "-"}</b> •
-          ISO3: <b>${entry.iso3 || "-"}</b> •
-          Phone: <b>+${entry.phonecode || "-"}</b><br>
-          Capital: ${entry.capital || "?"} • Region: ${entry.region || "?"}<br>
-          Population: ${entry.population || "?"}
-        </div>`;
-        }
-
-        if (entry.kind === "state") {
-            extra = `<div class="small">Country: ${entry.country || "?"}</div>`;
-        }
-
-        if (entry.kind === "city") {
-            extra = `<div class="small">
-              Country: ${entry.country || "?"}<br>
-              State: ${entry.state || "?"}
-            </div>`;
-        }
-
-        return `<div class="result-card">${title}${extra}</div>`;
-    }
-
-    function initApp() {
-        console.log("Initializing app with WASM bindings...");
-        const b = window.wasmBindings;
-
-        // Extract all functions from bindings
-        const {
-            get_stats,
-            search_countries_by_phone,
-            search_city_substring,
-            smart_search
-        } = b;
-
-        try {
-            const stats = get_stats();
-            console.log("Stats loaded:", stats);
-            document.getElementById("stats").innerHTML =
-                `<strong>Database Statistics (Offline in Browser)</strong><br>
-     Countries: ${stats.get("countries")}<br>
-     States/Regions: ${stats.get("states")}<br>
-     Cities: ${stats.get("cities")}`;
-        } catch (e) {
-            console.error("Failed to load stats:", e);
-            document.getElementById("stats").innerHTML =
-                `❌ Failed to load stats: ${e}`;
-        }
-
-        /* ---- UI HANDLERS ---- */
-        const outCountry = document.getElementById("countryOut");
-        const outPhone = document.getElementById("phoneOut");
-        const outCity = document.getElementById("cityOut");
-        const outSmart = document.getElementById("smartOut");
-
-        document.getElementById("countryInput").addEventListener("input", e => {
-            const v = e.target.value.trim();
-            if (v.length < 2) return;
-            const list = smart_search(v);
-            outCountry.innerHTML =
-                list.length ? formatResultCard(list[0])
-                    : `<div>No country found: ${v}</div>`;
+    <script type="module">
+        // Since we are using Trunk, run_app() can be called from Rust side
+        // or we can wait for the Trunk-injected script to finish.
+        // We'll add an event listener for the start.
+        window.addEventListener('load', () => {
+            // Wait a bit for WASM to be ready
+            setTimeout(() => {
+                if (window.wasmBindings && window.wasmBindings.run_app) {
+                    window.wasmBindings.run_app();
+                    console.log("✓ GeoDB WASM Initialized via bindings");
+                }
+            }, 100);
         });
-
-        document.getElementById("phoneInput").addEventListener("input", e => {
-            const v = e.target.value.trim();
-            if (!v) return;
-            const list = search_countries_by_phone(v);
-            outPhone.innerHTML =
-                list.length ? list.map(formatResultCard).join("")
-                    : `<div>No match for phone code: ${v}</div>`;
-        });
-
-        document.getElementById("cityInput").addEventListener("input", e => {
-            const v = e.target.value.trim();
-            if (v.length < 2) return;
-            const list = search_city_substring(v);
-            outCity.innerHTML =
-                list.length ? list.map(formatResultCard).join("")
-                    : `<div>No city found: ${v}</div>`;
-        });
-
-        document.getElementById("smartInput").addEventListener("input", e => {
-            const v = e.target.value.trim();
-            if (!v) return;
-            const list = smart_search(v);
-            outSmart.innerHTML =
-                list.length ? list.map(formatResultCard).join("")
-                    : `<div>No results for: ${v}</div>`;
-        });
-    }
-</script>
-<script type="module">
-    // import init, * as bindings from "/geodb-wasm-demo.js";
-
-    // Load the WASM module (this returns a promise)
-    await init();
-
-    // Make bindings globally available
-    window.wasmBindings = bindings;
-
-    console.log("✓ WASM loaded and bindings ready");
-    console.log("✓ WASM build info:", wasmBindings.get_build_info());
-</script>
+    </script>
 </body>
 </html>

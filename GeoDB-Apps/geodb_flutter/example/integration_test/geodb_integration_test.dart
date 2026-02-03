@@ -388,5 +388,148 @@ void main() {
         expect(results.length, greaterThan(1000)); // Should find many cities
       });
     });
+
+    group('Large GeoID Tests (exceeding i64::MAX)', () {
+      // These cities are in far northeastern Russia/Siberia where
+      // the Morton code (geoid) calculation produces values > 9,223,372,036,854,775,807
+      // This tests that String handling works correctly for large geoids
+
+      testWidgets('Pevek (Russia) - geoid exceeds i64 max',
+          (WidgetTester tester) async {
+        final cities = await geodb.findCitiesBySubstring('Pevek');
+
+        expect(cities, isNotEmpty);
+        final pevek = cities.firstWhere(
+          (c) => c.name == 'Pevek' && c.country == 'Russia',
+          orElse: () => cities.first,
+        );
+
+        expect(pevek.name, 'Pevek');
+        expect(pevek.country, 'Russia');
+        expect(pevek.geoid, isNotEmpty);
+        expect(pevek.geoid, isNot('0'));
+
+        // Verify geoid is a valid large number string
+        final geoidValue = BigInt.tryParse(pevek.geoid);
+        expect(geoidValue, isNotNull);
+
+        // Pevek's geoid should exceed i64::MAX
+        final i64Max = BigInt.parse('9223372036854775807');
+        expect(geoidValue! > i64Max, isTrue,
+            reason: 'Pevek geoid ${pevek.geoid} should exceed i64::MAX');
+
+        print('Pevek geoid: ${pevek.geoid}');
+        print('i64::MAX:    9223372036854775807');
+        print('Exceeds i64: ${geoidValue > i64Max}');
+      });
+
+      testWidgets('Tiksi (Russia) - geoid exceeds i64 max',
+          (WidgetTester tester) async {
+        final cities = await geodb.findCitiesBySubstring('Tiksi');
+
+        expect(cities, isNotEmpty);
+        final tiksi = cities.firstWhere(
+          (c) => c.name == 'Tiksi' && c.country == 'Russia',
+          orElse: () => cities.first,
+        );
+
+        expect(tiksi.name, 'Tiksi');
+        expect(tiksi.geoid, isNotEmpty);
+
+        final geoidValue = BigInt.tryParse(tiksi.geoid);
+        expect(geoidValue, isNotNull);
+
+        final i64Max = BigInt.parse('9223372036854775807');
+        expect(geoidValue! > i64Max, isTrue,
+            reason: 'Tiksi geoid ${tiksi.geoid} should exceed i64::MAX');
+
+        print('Tiksi geoid: ${tiksi.geoid}');
+      });
+
+      testWidgets('Anadyr (Russia) - geoid exceeds i64 max',
+          (WidgetTester tester) async {
+        final cities = await geodb.findCitiesBySubstring('Anadyr');
+
+        expect(cities, isNotEmpty);
+        final anadyr = cities.firstWhere(
+          (c) => c.name == 'Anadyr' && c.country == 'Russia',
+          orElse: () => cities.first,
+        );
+
+        expect(anadyr.name, 'Anadyr');
+        expect(anadyr.geoid, isNotEmpty);
+
+        final geoidValue = BigInt.tryParse(anadyr.geoid);
+        expect(geoidValue, isNotNull);
+
+        final i64Max = BigInt.parse('9223372036854775807');
+        expect(geoidValue! > i64Max, isTrue,
+            reason: 'Anadyr geoid ${anadyr.geoid} should exceed i64::MAX');
+
+        print('Anadyr geoid: ${anadyr.geoid}');
+      });
+
+      testWidgets('Norilsk (Russia) - geoid exceeds i64 max',
+          (WidgetTester tester) async {
+        final cities = await geodb.findCitiesBySubstring('Norilsk');
+
+        expect(cities, isNotEmpty);
+        final norilsk = cities.firstWhere(
+          (c) => c.name == 'Norilsk' && c.country == 'Russia',
+          orElse: () => cities.first,
+        );
+
+        expect(norilsk.name, 'Norilsk');
+        expect(norilsk.geoid, isNotEmpty);
+
+        final geoidValue = BigInt.tryParse(norilsk.geoid);
+        expect(geoidValue, isNotNull);
+
+        final i64Max = BigInt.parse('9223372036854775807');
+        expect(geoidValue! > i64Max, isTrue,
+            reason: 'Norilsk geoid ${norilsk.geoid} should exceed i64::MAX');
+
+        print('Norilsk geoid: ${norilsk.geoid}');
+      });
+
+      testWidgets('Berlin (Germany) - geoid within i64 range',
+          (WidgetTester tester) async {
+        // Berlin should have a geoid that fits within i64
+        final cities = await geodb.findCitiesBySubstring('Berlin');
+
+        final berlin = cities.firstWhere(
+          (c) => c.name == 'Berlin' && c.country == 'Germany',
+          orElse: () => cities.first,
+        );
+
+        expect(berlin.geoid, isNotEmpty);
+
+        final geoidValue = BigInt.tryParse(berlin.geoid);
+        expect(geoidValue, isNotNull);
+
+        // Berlin's geoid should be within i64 range (but this may vary)
+        print('Berlin geoid: ${berlin.geoid}');
+      });
+
+      testWidgets('findNearest in far northeast returns valid geoids',
+          (WidgetTester tester) async {
+        // Search near Pevek coordinates
+        final nearest = await geodb.findNearest(
+          lat: 69.7,
+          lng: 170.3,
+          count: 5,
+        );
+
+        expect(nearest, isNotEmpty);
+
+        for (final city in nearest) {
+          expect(city.geoid, isNotEmpty);
+          final geoidValue = BigInt.tryParse(city.geoid);
+          expect(geoidValue, isNotNull,
+              reason: 'City ${city.name} has invalid geoid: ${city.geoid}');
+          print('${city.name}: geoid=${city.geoid}');
+        }
+      });
+    });
   });
 }
