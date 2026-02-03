@@ -105,12 +105,12 @@ jobs:
         working-directory: GeoDB-Apps/android-app
         run: chmod +x gradlew
 
-      - name: Build signed AAB (Tag builds)
+      - name: Build signed AAB and APK (Tag builds)
         if: github.ref_type == 'tag'
         working-directory: GeoDB-Apps/android-app
         run: |
           ./gradlew clean
-          ./gradlew bundleRelease
+          ./gradlew bundleRelease assembleRelease
 
       - name: Build unsigned APK (Manual dispatch)
         if: github.ref_type != 'tag'

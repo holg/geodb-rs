@@ -54,21 +54,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
+          # Linux x86_64 (uses manylinux container)
           - os: ubuntu-latest
-            target: x86_64
-            manylinux: auto
+            target: x86_64-unknown-linux-gnu
+            manylinux: manylinux2014
           # macOS Intel
           - os: macos-14
-            target: x86_64
+            target: x86_64-apple-darwin
             manylinux: ""
           # macOS Apple Silicon
           - os: macos-15
-            target: aarch64
+            target: aarch64-apple-darwin
             manylinux: ""
           # Windows
           - os: windows-latest
-            target: x64
+            target: x86_64-pc-windows-msvc
             manylinux: ""
 
     runs-on: ${{ matrix.os }}
@@ -84,22 +84,31 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      # No rust-cache for maturin manylinux builds
+      - name: Install maturin
+        run: pip install "maturin>=1.7,<2.0"
 
-      - name: Build & publish wheel
-        uses: messense/maturin-action@v1
+      # Linux: use manylinux container via maturin
+      - name: Build wheel (Linux manylinux)
+        if: runner.os == 'Linux'
+        run: |
+          maturin build --release --target ${{ matrix.target }} \
+            -m crates/geodb-py/Cargo.toml -o dist \
+            --manylinux ${{ matrix.manylinux }}
+
+      # macOS/Windows: direct build
+      - name: Build wheel (macOS/Windows)
+        if: runner.os != 'Linux'
+        run: |
+          maturin build --release --target ${{ matrix.target }} -m crates/geodb-py/Cargo.toml -o dist
+
+      - name: Upload wheel to PyPI
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-          CARGO_TARGET_DIR: /tmp/maturin-target
-        with:
-          manylinux: ${{ matrix.manylinux }}
-          target: ${{ matrix.target }}
-          command: publish
-          args: >
-            --skip-existing
-            --no-sdist
-            -m crates/geodb-py/Cargo.toml
+        shell: bash
+        run: maturin upload --skip-existing dist/*.whl
 
       - name: List built wheels for debugging
         shell: bash
@@ -112,10 +121,7 @@ jobs:
         if: always()
         with:
           name: geodb-py-wheel-${{ matrix.os }}-${{ matrix.target }}
-          path: |
-            target/wheels/*.whl
-            crates/geodb-py/target/wheels/*.whl
-            dist/*.whl
+          path: dist/*.whl
 
   # =====================================================================
   # 3) Attach wheels to GitHub Release

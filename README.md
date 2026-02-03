@@ -544,14 +544,16 @@ geodb-rs/
 │   ├── geodb-wasm/        # WebAssembly bindings
 │   ├── geodb-py/          # Python bindings
 │   └── geodb-ffi/         # FFI bindings (mobile)
-├── GeoDB-App/
+├── GeoDB-Apps/
 │   ├── GeoDB/             # Xcode project (macOS/iOS/watchOS)
 │   ├── android-app/       # Android Kotlin app
-│   ├── spm/               # Swift Package (GeodbKit)
+│   ├── geodb_flutter/     # Flutter plugin (pub.dev)
+│   ├── geodb_city_autocomplete/  # Flutter example app
+│   ├── SPM-GeoDBKit/      # Swift Package (GeodbKit)
 │   │   ├── Package.swift
 │   │   ├── GeodbFfi.xcframework/
 │   │   └── Sources/
-│   └── scripts/           # Build scripts
+│   └── CocoaPods-GeoDBKit/  # CocoaPods distribution
 ├── releases/
 │   └── android/           # Pre-built APKs
 ├── Package.swift          # Root SPM package (for git URL install)
