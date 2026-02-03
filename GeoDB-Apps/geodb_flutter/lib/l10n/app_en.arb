@@ -1,0 +1,134 @@
+{
+  "@@locale": "en",
+  "appTitle": "GeoDB Flutter Example",
+  "@appTitle": {
+    "description": "The title of the application"
+  },
+  "status": "Status",
+  "@status": {
+    "description": "Status label"
+  },
+  "search": "Search",
+  "@search": {
+    "description": "Search button label"
+  },
+  "searchHint": "Enter city, state, or country name",
+  "@searchHint": {
+    "description": "Search field hint text"
+  },
+  "smartSearch": "Smart Search",
+  "@smartSearch": {
+    "description": "Smart search button label"
+  },
+  "nearestToBerlin": "Nearest to Berlin",
+  "@nearestToBerlin": {
+    "description": "Find nearest cities button label"
+  },
+  "radiusSearch": "50km Radius",
+  "@radiusSearch": {
+    "description": "Radius search button label"
+  },
+  "countries": "Countries",
+  "@countries": {
+    "description": "Countries button label"
+  },
+  "noResults": "No results yet. Try searching!",
+  "@noResults": {
+    "description": "Message when there are no search results"
+  },
+  "loading": "Loading...",
+  "@loading": {
+    "description": "Loading indicator text"
+  },
+  "initializing": "Initializing GeoDB...",
+  "@initializing": {
+    "description": "Initialization status message"
+  },
+  "initSuccess": "GeoDB initialized successfully!\nCountries: {countries}, States: {states}, Cities: {cities}",
+  "@initSuccess": {
+    "description": "Successful initialization message",
+    "placeholders": {
+      "countries": {
+        "type": "int"
+      },
+      "states": {
+        "type": "int"
+      },
+      "cities": {
+        "type": "int"
+      }
+    }
+  },
+  "initFailed": "Failed to initialize: {error}",
+  "@initFailed": {
+    "description": "Failed initialization error message",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "searchFailed": "Search failed: {error}",
+  "@searchFailed": {
+    "description": "Search error message",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "foundNearest": "Found {count} nearest cities to Berlin",
+  "@foundNearest": {
+    "description": "Message after finding nearest cities",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "foundInRadius": "Found {count} cities within 50km of Berlin",
+  "@foundInRadius": {
+    "description": "Message after finding cities in radius",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "foundCountries": "Found {count} countries with \"United\"",
+  "@foundCountries": {
+    "description": "Message after finding countries",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "failedFindNearest": "Failed to find nearest: {error}",
+  "@failedFindNearest": {
+    "description": "Error finding nearest cities",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "failedFindRadius": "Failed to find in radius: {error}",
+  "@failedFindRadius": {
+    "description": "Error finding cities in radius",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "failedFindCountries": "Failed to find countries: {error}",
+  "@failedFindCountries": {
+    "description": "Error finding countries",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  }
+}

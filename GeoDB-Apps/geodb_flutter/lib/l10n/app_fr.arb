@@ -1,0 +1,23 @@
+{
+  "@@locale": "fr",
+  "appTitle": "Exemple GeoDB Flutter",
+  "status": "Statut",
+  "search": "Rechercher",
+  "searchHint": "Entrez une ville, un état ou un pays",
+  "smartSearch": "Recherche intelligente",
+  "nearestToBerlin": "Près de Berlin",
+  "radiusSearch": "Rayon de 50km",
+  "countries": "Pays",
+  "noResults": "Aucun résultat pour le moment. Essayez de rechercher!",
+  "loading": "Chargement...",
+  "initializing": "Initialisation de GeoDB...",
+  "initSuccess": "GeoDB initialisé avec succès!\nPays: {countries}, États: {states}, Villes: {cities}",
+  "initFailed": "Échec de l'initialisation: {error}",
+  "searchFailed": "Échec de la recherche: {error}",
+  "foundNearest": "{count} villes les plus proches de Berlin trouvées",
+  "foundInRadius": "{count} villes trouvées dans un rayon de 50km autour de Berlin",
+  "foundCountries": "{count} pays contenant \"United\" trouvés",
+  "failedFindNearest": "Échec de la recherche des villes les plus proches: {error}",
+  "failedFindRadius": "Échec de la recherche dans le rayon: {error}",
+  "failedFindCountries": "Échec de la recherche de pays: {error}"
+}

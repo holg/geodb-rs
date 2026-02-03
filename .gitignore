@@ -50,8 +50,11 @@ crates/geodb-ffi/generated-kotlin/
 crates/geodb-ffi/.rustc_info.json
 crates/geodb-ffi/.swiftpm/
 
-# Flutter plugin (not included in this release)
-geodb_flutter/
+# Flutter plugin build artifacts
+GeoDB-Apps/geodb_flutter/.dart_tool/
+GeoDB-Apps/geodb_flutter/build/
+GeoDB-Apps/geodb_flutter/.flutter-plugins
+GeoDB-Apps/geodb_flutter/.flutter-plugins-dependencies
 
 # GeoDB-App build artifacts (old singular naming)
 GeoDB-App/android-app/.gradle/

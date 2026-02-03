@@ -1,0 +1,23 @@
+{
+  "@@locale": "zh",
+  "appTitle": "地理数据库 Flutter 示例",
+  "status": "状态",
+  "search": "搜索",
+  "searchHint": "输入城市、州或国家名称",
+  "smartSearch": "智能搜索",
+  "nearestToBerlin": "柏林附近",
+  "radiusSearch": "50公里范围",
+  "countries": "国家",
+  "noResults": "暂无结果。试试搜索！",
+  "loading": "加载中...",
+  "initializing": "正在初始化地理数据库...",
+  "initSuccess": "地理数据库初始化成功！\n国家：{countries}，州：{states}，城市：{cities}",
+  "initFailed": "初始化失败：{error}",
+  "searchFailed": "搜索失败：{error}",
+  "foundNearest": "找到柏林附近 {count} 个城市",
+  "foundInRadius": "在柏林50公里范围内找到 {count} 个城市",
+  "foundCountries": "找到 {count} 个包含"United"的国家",
+  "failedFindNearest": "查找附近城市失败：{error}",
+  "failedFindRadius": "查找范围内城市失败：{error}",
+  "failedFindCountries": "查找国家失败：{error}"
+}

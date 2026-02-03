@@ -1,0 +1,28 @@
+name: geodb_city_autocomplete
+description: "A simple Flutter app demonstrating city autocomplete using GeoDB."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # GeoDB Flutter plugin - path reference to local plugin
+  geodb_flutter:
+    path: ../geodb_flutter
+
+  # Location services
+  geolocator: ^13.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,38 @@
+Pod::Spec.new do |spec|
+  spec.name          = 'geodb_flutter'
+  spec.version       = '0.1.4'
+  spec.summary       = 'Flutter plugin for GeoDB - geographic database powered by Rust.'
+  spec.description   = <<-DESC
+    Flutter plugin that provides access to GeoDB, a high-performance geographic
+    database for searching cities, states, and countries. Powered by Rust via UniFFI.
+  DESC
+
+  spec.homepage      = 'https://github.com/holg/geodb-rs'
+  spec.license       = { :type => 'MIT', :file => '../LICENSE' }
+  spec.author        = { 'GeoDB Contributors' => 'https://github.com/holg/geodb-rs' }
+  spec.source        = { :path => '.' }
+
+  spec.ios.deployment_target = '13.0'
+  spec.swift_version = '5.0'
+
+  # Source files - plugin and UniFFI bindings
+  spec.source_files = 'Classes/**/*.{swift,h}'
+
+  # Public headers - exposes C types to Swift
+  spec.public_header_files = 'Classes/geodb_ffiFFI.h'
+
+  # Use XCFramework which contains both device and simulator
+  spec.vendored_frameworks = 'Frameworks/GeodbFfi.xcframework'
+
+  spec.dependency 'Flutter'
+
+  spec.pod_target_xcconfig = {
+    'DEFINES_MODULE' => 'YES',
+    'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386 x86_64',
+    'OTHER_LDFLAGS' => '$(inherited) -framework GeodbFfi'
+  }
+
+  spec.user_target_xcconfig = {
+    'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386 x86_64'
+  }
+end

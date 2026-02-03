@@ -1,0 +1,29 @@
+PODS:
+  - Flutter (1.0.0)
+  - geodb_flutter (0.1.4):
+    - Flutter
+  - geolocator_apple (1.2.0):
+    - Flutter
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - geodb_flutter (from `.symlinks/plugins/geodb_flutter/ios`)
+  - geolocator_apple (from `.symlinks/plugins/geolocator_apple/darwin`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  geodb_flutter:
+    :path: ".symlinks/plugins/geodb_flutter/ios"
+  geolocator_apple:
+    :path: ".symlinks/plugins/geolocator_apple/darwin"
+
+SPEC CHECKSUMS:
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  geodb_flutter: d626f48c83ad1d94a168d0459d7111d3a31a2018
+  geolocator_apple: 66b711889fd333205763b83c9dcf0a57a28c7afd
+
+PODFILE CHECKSUM: 87bc5a12856f22f370781e2e3ce8f69c42f735dd
+
+COCOAPODS: 1.16.2

@@ -1,0 +1,23 @@
+{
+  "@@locale": "de",
+  "appTitle": "GeoDB Flutter Beispiel",
+  "status": "Status",
+  "search": "Suchen",
+  "searchHint": "Stadt, Bundesland oder Land eingeben",
+  "smartSearch": "Intelligente Suche",
+  "nearestToBerlin": "In der Nähe von Berlin",
+  "radiusSearch": "50km Umkreis",
+  "countries": "Länder",
+  "noResults": "Noch keine Ergebnisse. Versuchen Sie eine Suche!",
+  "loading": "Lädt...",
+  "initializing": "GeoDB wird initialisiert...",
+  "initSuccess": "GeoDB erfolgreich initialisiert!\nLänder: {countries}, Bundesländer: {states}, Städte: {cities}",
+  "initFailed": "Initialisierung fehlgeschlagen: {error}",
+  "searchFailed": "Suche fehlgeschlagen: {error}",
+  "foundNearest": "{count} nächstgelegene Städte zu Berlin gefunden",
+  "foundInRadius": "{count} Städte im Umkreis von 50km um Berlin gefunden",
+  "foundCountries": "{count} Länder mit \"United\" gefunden",
+  "failedFindNearest": "Suche nach nächstgelegenen Städten fehlgeschlagen: {error}",
+  "failedFindRadius": "Suche im Umkreis fehlgeschlagen: {error}",
+  "failedFindCountries": "Ländersuche fehlgeschlagen: {error}"
+}
