@@ -1,3 +1,7 @@
+## 0.1.9
+
+* Added CFBundleShortVersionString to iOS/macOS framework Info.plist for App Store/TestFlight compliance
+
 ## 0.1.8
 
 * Fixed geoid overflow crash: geoid now passed as String instead of Int to handle values > Int64.max

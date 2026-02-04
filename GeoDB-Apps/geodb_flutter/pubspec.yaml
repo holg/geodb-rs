@@ -1,6 +1,6 @@
 name: geodb_flutter
 description: "Flutter plugin for GeoDB - search cities, states, and countries with geographic queries. Powered by Rust."
-version: 0.1.8
+version: 0.1.9
 homepage: https://github.com/holg/geodb-rs
 
 environment:
