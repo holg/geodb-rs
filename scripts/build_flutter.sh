@@ -92,7 +92,12 @@ else
     PROFILE_DIR="release"
 fi
 
-echo "  • Building for Android ABIs..."
+# Force 16 KB page alignment on the 64-bit .so segments so the plugin passes
+# Google Play's 16 KB requirement even when built with an NDK older than r28
+# (r28+ does this by default). Harmless for the 32-bit ABIs.
+export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
+
+echo "  • Building for Android ABIs (16 KB page-aligned)..."
 cargo ndk --target aarch64-linux-android --platform 21 build $CARGO_FLAG
 cargo ndk --target armv7-linux-androideabi --platform 21 build $CARGO_FLAG
 cargo ndk --target x86_64-linux-android --platform 21 build $CARGO_FLAG

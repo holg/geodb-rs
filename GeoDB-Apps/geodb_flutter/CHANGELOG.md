@@ -1,3 +1,11 @@
+## 0.2.0
+
+* Android 16 KB page size support: bumped JNA from 5.14.0 to 5.17.0, whose
+  `libjnidispatch.so` is aligned to 16 KB page boundaries. Required by Google
+  Play for new apps/updates since November 2025. Fixes #6.
+* The bundled 64-bit native `libgeodb_ffi.so` libraries (arm64-v8a, x86_64)
+  are already 16 KB-aligned (built with NDK r28); 32-bit ABIs are exempt.
+
 ## 0.1.9
 
 * Added CFBundleShortVersionString to iOS/macOS framework Info.plist for App Store/TestFlight compliance

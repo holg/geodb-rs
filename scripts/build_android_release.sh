@@ -72,6 +72,10 @@ TARGETS=(
     "i686-linux-android"      # x86
 )
 
+# Force 16 KB page alignment on the .so segments (Google Play requirement since
+# Nov 2025). NDK r28+ does this by default; this keeps older NDKs compliant too.
+export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
+
 for target in "${TARGETS[@]}"; do
     echo "Building for $target..."
     cargo ndk --target "$target" build --release

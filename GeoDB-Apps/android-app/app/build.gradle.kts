@@ -116,8 +116,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
 
-    // JNA for UniFFI
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    // JNA for UniFFI (5.17.0+ ships 16 KB-page-aligned native libs, required by Google Play)
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

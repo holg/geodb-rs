@@ -57,6 +57,10 @@ else
     CARGO_FLAG="--release"
 fi
 
+# Force 16 KB page alignment on the .so segments (Google Play requirement since
+# Nov 2025). NDK r28+ does this by default; this keeps older NDKs compliant too.
+export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
+
 echo "  • Building for arm64-v8a (aarch64)..."
 cargo ndk --target aarch64-linux-android --platform 21 build $CARGO_FLAG
 

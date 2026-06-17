@@ -52,8 +52,10 @@ android {
     }
 
     dependencies {
-        // JNA required for UniFFI bindings
-        implementation("net.java.dev.jna:jna:5.14.0@aar")
+        // JNA required for UniFFI bindings.
+        // 5.17.0+ ships 16 KB-page-aligned native libs (libjnidispatch.so),
+        // required by Google Play since Nov 2025. See JNA #1618/#1647.
+        implementation("net.java.dev.jna:jna:5.17.0@aar")
         testImplementation("org.jetbrains.kotlin:kotlin-test")
         testImplementation("org.mockito:mockito-core:5.0.0")
     }

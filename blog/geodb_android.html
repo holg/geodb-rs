@@ -547,7 +547,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.8.2")
 
     // JNA - Required for UniFFI bindings
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
 }
 </code></pre>
 
@@ -791,10 +791,10 @@ cargo ndk -t arm64-v8a build --release
 <p>UniFFI-generated Kotlin code uses JNA. Without the <code>@aar</code> suffix, you might get the wrong artifact:</p>
 
 <pre><code>// Wrong - gets JAR without Android support
-implementation("net.java.dev.jna:jna:5.14.0")
+implementation("net.java.dev.jna:jna:5.17.0")
 
 // Right - gets AAR with Android native libs
-implementation("net.java.dev.jna:jna:5.14.0@aar")
+implementation("net.java.dev.jna:jna:5.17.0@aar")
 </code></pre>
 
 <h3>3. Feature Flags Matter</h3>
