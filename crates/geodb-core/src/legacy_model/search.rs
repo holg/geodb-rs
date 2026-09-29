@@ -3,7 +3,7 @@
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::legacy_model::nested::{City, Country, GeoDb, State};
-use crate::spatial::{decode_geoid, distance_squared, haversine_distance, RadiusBounds};
+use crate::spatial::{decode_geoid, haversine_distance, RadiusBounds};
 #[allow(unused_imports)]
 use crate::text::{fold_key, match_score};
 use crate::traits::CityContext;
@@ -496,8 +496,9 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         None
     }
     fn find_nearest(&self, lat: f64, lng: f64, count: usize) -> Vec<CityContext<'_, B>> {
-        // Legacy: We don't have a spatial_index, so we must scan the whole world.
-        // This is slower (O(N)), but correct.
+        // Legacy: there is no spatial index, so scan the whole world (O(N)),
+        // by great-circle distance (degrees are not a distance: longitude
+        // shrinks with latitude and wraps at the antimeridian).
 
         let mut candidates = Vec::with_capacity(self.countries.len() * 10); // Heuristic reserve
 
@@ -507,15 +508,14 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
                     let c_lat = city.lat().unwrap_or(0.0);
                     let c_lng = city.lng().unwrap_or(0.0);
 
-                    // Squared Euclidean for fast sorting
-                    let dist = distance_squared(lat, lng, c_lat, c_lng);
+                    let dist = haversine_distance(lat, lng, c_lat, c_lng);
                     candidates.push((dist, city, state, country));
                 }
             }
         }
 
         // Sort by distance
-        candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         // Take top N
         candidates

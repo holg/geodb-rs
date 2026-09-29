@@ -86,8 +86,9 @@ pub async fn request_device(
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("geodb-globe"),
-            // The web build must also run on WebGL2; native gets compute shaders.
-            required_limits: if cfg!(target_arch = "wasm32") {
+            // WebGL2 gets its own limits (no compute); WebGPU and native get
+            // compute shaders for the GPU geoid queries.
+            required_limits: if adapter.get_info().backend == wgpu::Backend::Gl {
                 wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
             } else {
                 wgpu::Limits::default().using_resolution(adapter.limits())

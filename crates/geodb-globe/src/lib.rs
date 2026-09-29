@@ -14,17 +14,20 @@ pub mod data;
 pub mod geo;
 pub mod geoid;
 pub mod mesh;
+pub mod mini;
 pub mod places;
 pub mod render;
+pub mod source;
 pub mod texture;
 pub mod view;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "mini")))]
 mod app;
+#[cfg(all(target_arch = "wasm32", feature = "mini"))]
+mod mini_app;
 
 #[cfg(feature = "native")]
 pub mod api_bench;
 #[cfg(feature = "native")]
 pub mod globe_view;
-#[cfg(feature = "native")]
 pub mod gpu_query;

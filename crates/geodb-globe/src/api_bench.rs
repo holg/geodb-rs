@@ -276,7 +276,7 @@ pub fn run(
     );
     if let Some((g, _)) = gpu {
         push(
-            "geoid → f32 flat",
+            "geoid → f32 haversine",
             "GPU (incl. upload/readback)",
             time(runs, || g.radius(cg, radius_km)),
         );
@@ -336,7 +336,7 @@ pub fn run(
     if let Some((g, _)) = gpu {
         g.radius_counts(&q_g, batch_radius_km); // warm-up
         push_b(
-            "geoid → f32 flat",
+            "geoid → f32 haversine",
             "GPU, one dispatch",
             ms(|| g.radius_counts(&q_g, batch_radius_km)),
         );
@@ -416,8 +416,21 @@ mod tests {
         let ds = Dataset::new(db);
         let gpu = GpuGeoidIndex::new(&dev.device, &dev.queue, dev.describe(), &ds.geoids);
         let centre = generate_geoid(48.14, 11.58);
+        // The kernel is haversine on the geoids: compare with f64 haversine.
+        let truth = |radius_km: f64| -> Vec<u32> {
+            let (clat, clon) = geoid::decode_f64(centre);
+            ds.geoids
+                .iter()
+                .enumerate()
+                .filter(|(_, &g)| {
+                    let (lat, lon) = geoid::decode_f64(g);
+                    geoid::haversine_f64(clat, clon, lat, lon) <= radius_km
+                })
+                .map(|(i, _)| i as u32)
+                .collect()
+        };
         let mut got = gpu.radius(centre, 30.0);
-        let mut cpu = radius_int(&ds.geoids, 0, centre, geoid::radius_sq_steps(30.0));
+        let mut cpu = truth(30.0);
         got.sort_unstable();
         cpu.sort_unstable();
         let (a, b): (HashSet<u32>, HashSet<u32>) =
@@ -434,10 +447,50 @@ mod tests {
 
         // Large radius: more hits than the first readback holds.
         let big = gpu.radius(centre, 1500.0);
-        let cpu_big = radius_int(&ds.geoids, 0, centre, geoid::radius_sq_steps(1500.0));
+        let cpu_big = truth(1500.0);
         assert!(big.len() > 10_000, "{}", big.len());
         let (a, b): (HashSet<u32>, HashSet<u32>) =
             (big.into_iter().collect(), cpu_big.into_iter().collect());
-        assert!(a.symmetric_difference(&b).count() <= 5);
+        assert!(
+            a.symmetric_difference(&b).count() <= 5,
+            "{}",
+            a.symmetric_difference(&b).count()
+        );
+
+        // k nearest: the same cities as an exact f64 scan (ties aside).
+        let spots = [
+            centre,
+            generate_geoid(-33.87, 151.21),
+            generate_geoid(-17.7, 179.99),
+            generate_geoid(-89.0, 0.0),
+        ];
+        let knn = gpu.nearest_each(&spots, 10);
+        for (spot, got) in spots.iter().zip(&knn) {
+            let (clat, clon) = geoid::decode_f64(*spot);
+            let mut exact: Vec<(f64, u32)> = ds
+                .geoids
+                .iter()
+                .enumerate()
+                .map(|(i, &g)| {
+                    let (lat, lon) = geoid::decode_f64(g);
+                    (geoid::haversine_f64(clat, clon, lat, lon), i as u32)
+                })
+                .collect();
+            exact.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+            assert_eq!(got.len(), 10);
+            for (g, e) in got.iter().zip(&exact) {
+                // Same distance to within float noise (ties may swap cities).
+                assert!((g.1 - e.0).abs() < 0.01 + e.0 * 1e-5, "{g:?} vs {e:?}");
+            }
+            assert!(got.windows(2).all(|w| w[0].1 <= w[1].1), "sorted");
+        }
+
+        // Per-query radii in one dispatch, from 100 m to 3000 km.
+        let radii = [0.1, 1.0, 30.0, 300.0, 3000.0];
+        let each = gpu.radius_counts_each(&[centre; 5], &radii);
+        for (r, c) in radii.iter().zip(&each) {
+            let want = truth(*r).len() as i64;
+            assert!((*c as i64 - want).abs() <= 2, "{r} km: gpu {c}, cpu {want}");
+        }
     }
 }

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>GeoDB Globe Flex</title>
+    <link rel="icon" href="data:,"/>
+    <!-- trunk build flex.html --release --dist dist-flex -->
+    <link data-trunk rel="rust" data-cargo-no-default-features data-cargo-features="float,webgl" data-wasm-opt="z"/>
+    <link data-trunk rel="copy-file" href="assets/mini/cities.globe"/>
+    <link data-trunk rel="copy-file" href="assets/mini/coast.bin"/>
+    <link data-trunk rel="copy-file" href="../geodb-core/data/geodb.flat.comp.blobs.bin"/>
+    <style>
+        :root {
+            --bg: #020409;
+            --panel: rgba(12, 18, 32, 0.78);
+            --line: rgba(140, 170, 220, 0.16);
+            --text: #e6ecf5;
+            --muted: #8a97ad;
+            --accent: #ffb840;
+            --sel: #ff4fa0;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; height: 100%; overflow: hidden;
+            background: var(--bg); color: var(--text);
+            font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+        #globe {
+            position: fixed; inset: 0; width: 100%; height: 100%;
+            display: block; touch-action: none; cursor: grab;
+        }
+        #globe:active { cursor: grabbing; }
+        #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+        .label {
+            position: absolute; left: 0; top: 0; display: none;
+            margin: -22px 0 0 8px; padding: 1px 6px; border-radius: 4px;
+            background: rgba(4, 8, 16, 0.72); color: #ffe2b0;
+            font-size: 12px; white-space: nowrap; will-change: transform;
+        }
+        #crosshair {
+            position: fixed; left: 50%; top: 50%; width: 18px; height: 18px;
+            margin: -9px 0 0 -9px; pointer-events: none; opacity: 0.55;
+            background:
+                linear-gradient(#fff, #fff) center / 1px 100% no-repeat,
+                linear-gradient(#fff, #fff) center / 100% 1px no-repeat;
+        }
+        #panel {
+            position: fixed; top: 16px; right: 16px; bottom: 16px; width: 340px;
+            display: flex; flex-direction: column; gap: 10px; padding: 14px;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        }
+        h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: 0.2px; }
+        h1 span { color: var(--accent); }
+        #stats, .muted, small { color: var(--muted); }
+        #stats { font-size: 12px; }
+        .search { position: relative; }
+        #search {
+            width: 100%; padding: 9px 11px; font-size: 15px; color: var(--text);
+            background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line);
+            border-radius: 8px; outline: none;
+        }
+        #search:focus { border-color: var(--accent); }
+        ul { list-style: none; margin: 0; padding: 0; }
+        #suggest {
+            position: absolute; left: 0; right: 0; top: 100%; z-index: 2; margin-top: 4px;
+            background: #0c1322; border-radius: 8px; overflow: hidden;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+        #suggest:empty { display: none; }
+        li {
+            display: flex; align-items: center; gap: 10px; padding: 6px 8px;
+            border-radius: 6px; cursor: pointer;
+        }
+        li:hover { background: rgba(255, 255, 255, 0.07); }
+        li.sel { background: rgba(255, 79, 160, 0.18); box-shadow: inset 3px 0 var(--sel); }
+        .flag { font-size: 20px; width: 24px; text-align: center; }
+        .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .name small, .num small { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        #where { padding: 8px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+        .coord { font-variant-numeric: tabular-nums; color: var(--accent); }
+        #list { flex: 1; overflow-y: auto; margin: 0 -6px; }
+        #hud {
+            position: fixed; left: 16px; bottom: 14px; font-size: 12px;
+            color: var(--muted); font-variant-numeric: tabular-nums; pointer-events: none;
+        }
+        #status {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+            color: var(--muted); font-size: 15px; text-align: center; max-width: 80vw;
+        }
+        #status:empty { display: none; }
+        .hint { font-size: 12px; color: var(--muted); }
+        footer { font-size: 11px; color: var(--muted); }
+        footer a { color: var(--muted); }
+
+        @media (max-width: 720px) {
+            #panel {
+                top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 44vh;
+                padding: 10px;
+            }
+            #hud { top: 10px; bottom: auto; left: 12px; }
+            .hint, footer { display: none; }
+        }
+    
+        #panel { width: 400px; overflow-y: auto; }
+        #list { flex: none; max-height: 30vh; }
+        li.foot { font-size: 11px; cursor: default; }
+        li.foot:hover { background: none; }
+        .bench { border-top: 1px solid var(--line); padding-top: 8px; }
+        .bench h2 { margin: 0 0 6px; font-size: 13px; font-weight: 650; display: flex; align-items: center; gap: 6px; }
+        .bench h2 span { flex: 1; }
+        button {
+            font: inherit; font-size: 12px; color: var(--text); cursor: pointer;
+            background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line);
+            border-radius: 6px; padding: 3px 9px;
+        }
+        button:hover { border-color: var(--accent); }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+        td { padding: 2px 0; vertical-align: top; }
+        td:first-child { color: var(--muted); white-space: nowrap; padding-right: 10px; width: 1%; }
+        .bench p { margin: 0; font-size: 12px; }
+        #badge {
+            font-style: normal; font-size: 11px; font-weight: 600; vertical-align: middle;
+            padding: 2px 7px; margin-left: 4px; border-radius: 999px;
+            color: var(--bg); background: var(--accent);
+        }
+        #badge:empty { display: none; }
+        #pop {
+            position: fixed; display: none; z-index: 5; max-width: 340px; padding: 10px 12px;
+            background: rgba(10, 16, 28, 0.94); border: 1px solid var(--line); border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); pointer-events: none;
+            backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        }
+        #pop table { font-size: 12px; }
+        #pop td:first-child { padding-right: 12px; }
+        #pop td:last-child { overflow-wrap: anywhere; }
+        .pop-title { font-size: 15px; font-weight: 650; margin-bottom: 6px; }
+        .pop-foot { margin-top: 6px; font-size: 11px; color: var(--muted); }
+        .pop-foot a { color: var(--accent); pointer-events: auto; }
+        .qform { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+        .qform label { display: flex; align-items: center; gap: 4px; }
+        .qform input[type=number] {
+            width: 64px; padding: 2px 4px; font: inherit; color: var(--text);
+            background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); border-radius: 4px;
+        }
+        #q-count { width: 84px; }
+        .qform select { font: inherit; color: var(--text); background: #0c1322; border: 1px solid var(--line); border-radius: 4px; }
+        .qform .checks { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+        #qwhat, #qprog { font-size: 11px; margin-bottom: 4px; }
+        .qtab { font-size: 11px; }
+        .qtab td { text-align: right; padding-left: 6px; white-space: nowrap; }
+        .qtab td:first-child { text-align: left; padding-left: 0; width: 1%; color: var(--muted); }
+        .qtab tr.head td { color: var(--text); font-weight: 600; }
+        .qsec { margin: 8px 0 10px; }
+        .qscroll { overflow-x: auto; }
+        .qsec-title { font-size: 12px; font-weight: 650; margin-bottom: 2px; }
+        .legend { margin: 4px 0 0; padding: 0; font-size: 11px; color: var(--muted); }
+        .legend li { display: block; padding: 1px 0; cursor: default; }
+        .legend li:hover { background: none; }
+        .legend b { color: var(--text); font-weight: 600; }
+        .fast { color: #6fdc8c; }
+        .slow { color: #ff8a7a; }
+        .prec { font-size: 11px; color: var(--muted); margin-top: 2px; }
+        .sets { flex: none !important; font-size: 12px; font-weight: 400; }
+        .sets a { color: var(--accent); }
+        button:disabled { opacity: 0.4; cursor: default; }
+        .speed { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+        .speed input { flex: 1; accent-color: var(--accent); }
+        #spin-value { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+    </style>
+</head>
+<body>
+<canvas id="globe"></canvas>
+<div id="labels"></div>
+<div id="crosshair"></div>
+<div id="status">Loading…</div>
+<div id="hud"></div>
+<div id="pop"></div>
+<aside id="panel">
+    <div>
+        <h1>GeoDB <span>Globe Flex</span> <em id="badge"></em></h1>
+        <div id="stats"></div>
+    </div>
+    <div class="search">
+        <input id="search" type="search" placeholder="Search a city, region or country…" autocomplete="off"/>
+        <ul id="suggest"></ul>
+    </div>
+    <div class="hint">Drag to rotate · scroll or pinch to zoom · click to look around a spot</div>
+    <div id="where"><span class="muted">Querying the view centre…</span></div>
+    <ul id="list"></ul>
+    <section class="bench">
+        <h2><span>Data</span><span id="datasets" class="sets"></span></h2>
+        <div id="caps"><p class="muted">Loading…</p></div>
+    </section>
+    <section class="bench">
+        <h2><span>Cost</span></h2>
+        <div id="cost"><p class="muted">Measuring…</p></div>
+    </section>
+    <section class="bench">
+        <h2><span>3D frame rate</span><button id="spin">Spin</button><button id="run-fps">Run 5 s</button></h2>
+        <label class="speed">spin <input id="spin-speed" type="range" min="0" max="180" step="1" value="12"/> <span id="spin-value">12°/s</span></label>
+        <div id="fps"><p class="muted">Spins the globe and queries the view every frame.</p></div>
+    </section>
+    <section class="bench">
+        <h2><span>Queries: CPU vs GPU</span><button id="q-run">Run</button><button id="q-stop" disabled>Stop</button></h2>
+        <div class="qform">
+            <label>queries <input id="q-count" type="number" min="1" max="10000000" value="2000"/></label>
+            <label>batch <input id="q-batch" type="number" min="1" max="4096" value="1024"/></label>
+            <label>radius <input id="q-min" type="number" min="0.01" step="any" value="1"/>–<input id="q-max" type="number" min="0.01" step="any" value="1000"/> km</label>
+            <label><select id="q-where"><option value="cities">near cities</option><option value="any">anywhere</option></select></label>
+            <label>seed <input id="q-seed" type="number" min="1" value="1"/><button id="q-dice" title="new random seed">🎲</button></label>
+            <span class="checks">
+                <label><input id="q-gpu1" type="checkbox" checked/> GPU one by one</label>
+                <label><input id="q-gpub" type="checkbox" checked/> GPU batched</label>
+                <label><input id="q-knn" type="checkbox" checked/> 10 nearest</label>
+                <label><input id="q-scan" type="checkbox"/> CPU scan (slow)</label>
+            </span>
+        </div>
+        <div id="qwhat" class="muted"></div>
+        <div id="qprog"></div>
+        <div id="qres"><p class="muted">The same random queries through every engine, side by side: the CPU index first (the reference), then the GPU one query per call, then many per call. Radii are log-uniform between min and max.</p></div>
+    </section>
+    <footer>
+        Rust + wgpu + WebAssembly ·
+        cities: <a href="https://github.com/dr5hn/countries-states-cities-database">dr5hn</a> (CC-BY-4.0) ·
+        coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a>
+    </footer>
+</aside>
+</body>
+</html>

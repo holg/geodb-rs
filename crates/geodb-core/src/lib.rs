@@ -3,6 +3,7 @@ pub mod alias;
 pub mod api;
 pub mod common;
 pub mod error;
+pub mod globe_db;
 #[cfg(feature = "legacy_model")]
 pub mod legacy_model; // The old legacy model folder
 pub mod loader;

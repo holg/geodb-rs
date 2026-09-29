@@ -65,6 +65,37 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Queries on a compact globe file need nothing else.
+    if let Commands::GlobeNearest {
+        file,
+        lat,
+        lng,
+        count,
+    } = &args.command
+    {
+        let start = std::time::Instant::now();
+        let globe = CompactGlobeDb::load_from_path(file)?;
+        let loaded = start.elapsed();
+        let start = std::time::Instant::now();
+        let hits = globe.find_nearest(*lat, *lng, *count);
+        let searched = start.elapsed();
+        println!("Loaded {file} in {loaded:.2?}, searched in {searched:.2?}");
+        for (city, state, country) in hits {
+            let (clat, clng) = city.coords();
+            let km = spatial::haversine_distance(*lat, *lng, clat, clng);
+            println!(
+                "  {:>8.2} km  {} — {}, {} ({}) [{clat:.5}, {clng:.5}] {}",
+                km,
+                city.name,
+                state.name,
+                country.name,
+                country.iso2,
+                city.rank.label()
+            );
+        }
+        return Ok(());
+    }
+
     // 3. Load DB (Read Mode)
     // This uses the Unified Loader (Binary preferred, Source fallback)
     let _filter_slice = args
@@ -84,6 +115,16 @@ fn main() -> anyhow::Result<()> {
     // 4. Execute Read Commands
     match args.command {
         Commands::Build { .. } => unreachable!(), // Handled above
+        Commands::GlobeNearest { .. } => unreachable!(), // Handled above
+
+        #[cfg(not(feature = "legacy_model"))]
+        Commands::BuildGlobe { output, bits, raw } => {
+            build_globe(&db, &input_path, output.as_deref(), bits, raw)?;
+        }
+        #[cfg(feature = "legacy_model")]
+        Commands::BuildGlobe { .. } => {
+            anyhow::bail!("build-globe needs the flat model (build without legacy_model)");
+        }
 
         Commands::Stats => {
             let stats = db.stats();
@@ -334,5 +375,79 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Write the compact globe file, read it back and check it against the full DB.
+#[cfg(not(feature = "legacy_model"))]
+fn build_globe(
+    db: &GeoDb<DefaultBackend>,
+    source: &std::path::Path,
+    output: Option<&str>,
+    bits: u8,
+    raw: bool,
+) -> anyhow::Result<()> {
+    let out = PathBuf::from(output.unwrap_or("geodb.globe"));
+    let start = std::time::Instant::now();
+    let globe = CompactGlobeDb::from_db(db);
+    let bytes = if raw {
+        globe.to_bytes_raw(bits)?
+    } else {
+        globe.to_bytes(bits)?
+    };
+    std::fs::write(&out, bytes)?;
+    let built = start.elapsed();
+
+    let size = std::fs::metadata(&out)?.len();
+    let start = std::time::Instant::now();
+    let back = CompactGlobeDb::load_from_path(&out)?;
+    let loaded = start.elapsed();
+    anyhow::ensure!(
+        back.stats() == globe.stats(),
+        "read back {:?}, wrote {:?}",
+        back.stats(),
+        globe.stats()
+    );
+    // Worst position error of the quantized geoids against the exact ones.
+    let mut worst_m = 0.0f64;
+    for (a, b) in globe.cities.iter().zip(&back.cities) {
+        let (alat, alng) = a.coords();
+        let (blat, blng) = b.coords();
+        worst_m = worst_m.max(spatial::haversine_distance(alat, alng, blat, blng) * 1000.0);
+    }
+    let (cities, states, countries) = back.stats();
+    let capitals = back
+        .cities
+        .iter()
+        .filter(|c| c.rank == GlobeRank::Capital)
+        .count();
+
+    println!("=== Compact globe ===");
+    println!(
+        "✓ Wrote {} in {built:.2?} ({bits}-bit geoids, {} payload)",
+        out.display(),
+        if raw { "raw" } else { "gzip" }
+    );
+    println!("  Cities: {cities}, states: {states}, countries: {countries}, capitals: {capitals}");
+    println!(
+        "  Size: {} bytes ({:.2} MB, {:.1} bytes per city)",
+        size,
+        size as f64 / 1e6,
+        size as f64 / cities.max(1) as f64
+    );
+    for path in [
+        source.to_path_buf(),
+        source.with_file_name("countries+states+cities.json.gz"),
+    ] {
+        if let Ok(m) = std::fs::metadata(&path) {
+            println!(
+                "  vs {}: {} bytes, {:.1}x smaller",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                m.len(),
+                m.len() as f64 / size as f64
+            );
+        }
+    }
+    println!("✓ Read back in {loaded:.2?}; worst geoid quantization error {worst_m:.2} m");
     Ok(())
 }

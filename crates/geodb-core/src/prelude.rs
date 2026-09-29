@@ -14,6 +14,7 @@ pub use super::model_impl::{City, Country, GeoDb, State};
 pub use super::model_impl::CityQuery;
 
 // 2. The Types & Aliases (From the crate root/common)
+pub use crate::globe_db::{CompactGlobeDb, GlobeCity, GlobeCountry, GlobeRank, GlobeState};
 pub use crate::{
     DefaultBackend, // The Struct
     DefaultGeoDb,   // The Alias: GeoDb<DefaultBackend>

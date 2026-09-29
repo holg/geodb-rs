@@ -56,6 +56,35 @@ pub enum Commands {
         #[arg(long)]
         download: bool,
     },
+    /// Build the compact geoid-only globe file (names, ids, rank and a
+    /// quantized Morton geoid per city; no float coordinates).
+    BuildGlobe {
+        /// Output path (default: "geodb.globe" in the current directory)
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+
+        /// Geoid precision in bits (even, 32..=64): 64 exact, 48 about 1 m,
+        /// 40 about 20 m, 32 about 350 m
+        #[arg(long, default_value_t = 48)]
+        bits: u8,
+
+        /// Leave the payload uncompressed, for serving with HTTP brotli
+        /// (smaller over the wire than the gzip inside the file)
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Find the N closest cities using only a compact globe file
+    GlobeNearest {
+        /// The .globe file written by build-globe
+        #[arg(long, default_value = "geodb.globe")]
+        file: String,
+        #[arg(long)]
+        lat: f64,
+        #[arg(long)]
+        lng: f64,
+        #[arg(short = 'n', default_value = "5")]
+        count: usize,
+    },
     Smart {
         /// Smart search for cities/alias/regions/states based on various criteria
         query: String,

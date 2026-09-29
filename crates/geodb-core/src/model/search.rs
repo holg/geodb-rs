@@ -2,7 +2,7 @@
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::model::flat::{City, Country, GeoDb, State};
-use crate::spatial::{decode_geoid, generate_geoid, haversine_distance, RadiusBounds};
+use crate::spatial::{decode_geoid, haversine_distance, RadiusBounds};
 use crate::text::fold_key;
 #[cfg(not(feature = "search_blobs"))]
 use crate::text::match_score;
@@ -341,92 +341,81 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         Some((&country.iso2, &state.name, &city.name))
     }
     fn find_nearest(&self, lat: f64, lng: f64, count: usize) -> Vec<CityContext<'_, B>> {
-        // (Use the Spatial Index logic I provided in the previous turn)
-        // 1. Generate Target ID
-        let target_id = generate_geoid(lat, lng);
-
-        // 2. Binary Search
-        let idx = self.spatial_index.partition_point(|x| x.0 < target_id);
-
-        // 3. Scan Window (Heuristic: Look at 10x the requested count neighbors)
-        let scan_radius = count * 20;
-        let start = idx.saturating_sub(scan_radius);
-        let end = (idx + scan_radius).min(self.spatial_index.len());
-        // Calculate Latitude Correction Factor
-        // Longitude shrinks as we move away from equator.
-        // factor = cos(lat). squared factor = cos(lat)^2.
-        // We perform this once outside the loop.
-        let lat_rad = lat.to_radians();
-        let lng_scale = lat_rad.cos();
-        let lng_scale_sq = lng_scale * lng_scale;
-
-        let mut candidates: Vec<(f64, &City<B>)> = self.spatial_index[start..end]
-            .iter()
-            .map(|(_, city_idx)| {
-                let city = &self.cities[*city_idx as usize];
-                // Cheap distance squared for sorting
-                let d_lat = lat - city.lat().unwrap_or(0.0);
-                let d_lng = lng - city.lng().unwrap_or(0.0);
-                let dist_metric = (d_lat * d_lat) + (d_lng * d_lng * lng_scale_sq);
-                (dist_metric, city)
-            })
-            .collect();
-        candidates
-            .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        // candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        candidates
-            .into_iter()
+        if count == 0 || self.cities.is_empty() {
+            return Vec::new();
+        }
+        // Exact: widen the search circle until it holds `count` cities. Half
+        // the circumference (20 015 km) covers the whole sphere.
+        let mut radius_km = 25.0;
+        let hits = loop {
+            let hits = self.cities_within(lat, lng, radius_km);
+            if hits.len() >= count || radius_km >= 20_100.0 {
+                break hits;
+            }
+            radius_km *= 2.0;
+        };
+        hits.into_iter()
             .take(count)
-            .map(|(_, city)| {
-                let s = &self.states[city.state_id as usize];
-                let c = &self.countries[city.country_id as usize];
-                (city, s, c) // <--- The Context Tuple
-            })
+            .map(|(_, city)| self.context(city))
             .collect()
     }
-    // crates/geodb-core/src/model/search.rs
 
     fn find_cities_in_radius_by_geoid(
         &self,
         geoid: u64,
         radius_km: f64,
     ) -> Vec<CityContext<'_, B>> {
-        // 1. Decode Center
         let (center_lat, center_lng) = decode_geoid(geoid);
+        self.cities_within(center_lat, center_lng, radius_km)
+            .into_iter()
+            .map(|(_, city)| self.context(city))
+            .collect()
+    }
+}
 
-        // 2. Bounding box of the spherical cap (exact; wraps the antimeridian,
-        //    spans all longitudes when the cap contains a pole).
-        let bounds = RadiusBounds::new(center_lat, center_lng, radius_km);
+impl<B: GeoBackend> GeoDb<B> {
+    fn context<'a>(&'a self, city: &'a City<B>) -> CityContext<'a, B> {
+        (
+            city,
+            &self.states[city.state_id as usize],
+            &self.countries[city.country_id as usize],
+        )
+    }
 
-        // 3. Collect Candidates with Distance
-        let mut candidates = Vec::new();
-
-        // Linear Scan with Fast BBox Check
-        for city in &self.cities {
-            let lat = city.lat().unwrap_or(0.0);
-            let lng = city.lng().unwrap_or(0.0);
-
-            if bounds.contains(lat, lng) {
-                // Precise Distance (Expensive Trig)
-                let dist = haversine_distance(center_lat, center_lng, lat, lng);
-
-                if dist <= radius_km {
-                    // Found one! Resolve Parents.
-                    let s = &self.states[city.state_id as usize];
-                    let c = &self.countries[city.country_id as usize];
-                    candidates.push((dist, city, s, c));
+    /// Every city within `radius_km` of (lat, lng) by great-circle distance,
+    /// nearest first. The spatial index is sorted by geoid (Z-order), so the
+    /// cells covering the circle are contiguous runs of it: two binary
+    /// searches per cell instead of a scan over every city.
+    fn cities_within(&self, lat: f64, lng: f64, radius_km: f64) -> Vec<(f64, &City<B>)> {
+        let bounds = RadiusBounds::new(lat, lng, radius_km);
+        // Binaries written before the index existed load without it.
+        let ranges = if self.spatial_index.len() == self.cities.len() {
+            bounds.geoid_ranges()
+        } else {
+            Vec::new()
+        };
+        let candidates: Box<dyn Iterator<Item = &City<B>>> = if ranges.is_empty() {
+            Box::new(self.cities.iter())
+        } else {
+            Box::new(ranges.iter().flat_map(|&(start, end)| {
+                let lo = self.spatial_index.partition_point(|e| e.0 < start);
+                let hi = self.spatial_index.partition_point(|e| e.0 <= end);
+                self.spatial_index[lo..hi]
+                    .iter()
+                    .filter_map(|&(_, idx)| self.cities.get(idx as usize))
+            }))
+        };
+        let mut hits = Vec::new();
+        for city in candidates {
+            let (clat, clng) = (city.lat().unwrap_or(0.0), city.lng().unwrap_or(0.0));
+            if bounds.contains(clat, clng) {
+                let d = haversine_distance(lat, lng, clat, clng);
+                if d <= radius_km {
+                    hits.push((d, city));
                 }
             }
         }
-
-        // 4. Sort by Distance
-        candidates
-            .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-        // 5. Strip distance and return context
-        candidates
-            .into_iter()
-            .map(|(_, city, s, c)| (city, s, c))
-            .collect()
+        hits.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        hits
     }
 }

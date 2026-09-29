@@ -105,6 +105,69 @@ impl RadiusBounds {
             }
         }
     }
+
+    /// Sorted, disjoint geoid ranges (inclusive) whose Z-order cells cover
+    /// the box: every geoid of a point inside lies in one of them. On data
+    /// sorted by geoid, each range is two binary searches, which turns the
+    /// sort order into a spatial index. At most 16 cells per longitude span.
+    pub fn geoid_ranges(&self) -> Vec<(u64, u64)> {
+        const MAX: f64 = 4_294_967_295.0;
+        // Two units of slack: a point's geoid and its decoded coordinates
+        // can differ by one unit after rounding.
+        let lat_u = |v: f64| ((v + 90.0) / 180.0 * MAX) as u32;
+        let lng_u = |v: f64| ((v + 180.0) / 360.0 * MAX) as u32;
+        let lat = (
+            lat_u(self.min_lat).saturating_sub(2),
+            lat_u(self.max_lat).saturating_add(2),
+        );
+        let lngs: Vec<(u32, u32)> = match self.lng {
+            None => vec![(0, u32::MAX)],
+            Some((center, half)) => {
+                let (lo, hi) = (center - half, center + half);
+                let mut spans = Vec::new();
+                if lo < -180.0 {
+                    spans.push((lng_u(lo + 360.0), u32::MAX));
+                }
+                if hi > 180.0 {
+                    spans.push((0, lng_u(hi - 360.0)));
+                }
+                spans.push((lng_u(lo.max(-180.0)), lng_u(hi.min(180.0))));
+                spans
+                    .into_iter()
+                    .map(|(a, b)| (a.saturating_sub(2), b.saturating_add(2)))
+                    .collect()
+            }
+        };
+        let mut ranges = Vec::new();
+        for lng in lngs {
+            // The finest level at which the box needs at most 4 x 4 cells.
+            let cells = |a: (u32, u32), shift: u32| u64::from((a.1 >> shift) - (a.0 >> shift)) + 1;
+            let shift = (0..=32u32)
+                .map(|k| 32 - k)
+                .rev()
+                .find(|&s| s == 32 || cells(lat, s).saturating_mul(cells(lng, s)) <= 16)
+                .unwrap_or(32);
+            if shift == 32 {
+                return vec![(0, u64::MAX)];
+            }
+            let size = 1u64 << (2 * shift);
+            for a in (lat.0 >> shift)..=(lat.1 >> shift) {
+                for b in (lng.0 >> shift)..=(lng.1 >> shift) {
+                    let start = interleave_bits(a << shift, b << shift);
+                    ranges.push((start, start + (size - 1)));
+                }
+            }
+        }
+        ranges.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+        for (s, e) in ranges {
+            match merged.last_mut() {
+                Some(last) if s <= last.1.saturating_add(1) => last.1 = last.1.max(e),
+                _ => merged.push((s, e)),
+            }
+        }
+        merged
+    }
 }
 
 /// Fast squared Euclidean distance approximation.

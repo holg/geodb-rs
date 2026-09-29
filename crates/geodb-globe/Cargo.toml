@@ -16,6 +16,16 @@ name = "geodb-globe"
 required-features = ["native"]
 
 [features]
+default = ["webgl"]
+# WebGL2 fallback for browsers without WebGPU (pulls in naga's GLSL output
+# and glow, most of the wasm). The mini page builds without it.
+webgl = ["wgpu/webgl"]
+# The mini web demo (mini.html): the compact geoid-only database and packed
+# coastlines, fetched at start-up, plus FPS and query benchmarks.
+mini = []
+# Lets the mini web app also load the full flat database (?data=float):
+# pulls in bincode decoding and smart search.
+float = ["mini"]
 # Native binary on scopekit: the ratatui UI in a terminal (kitty, iTerm2,
 # sixel or half blocks) or a window, switchable at runtime; offscreen
 # screenshots. scopekit brings wgpu's native backends.
@@ -42,6 +52,7 @@ web-sys = { version = "0.3", features = [
     "console",
     "CssStyleDeclaration",
     "Document",
+    "DomRect",
     "DomStringMap",
     "DomTokenList",
     "Element",
@@ -51,12 +62,19 @@ web-sys = { version = "0.3", features = [
     "HtmlCollection",
     "HtmlElement",
     "HtmlInputElement",
+    "HtmlSelectElement",
     "KeyboardEvent",
     "Location",
     "MouseEvent",
     "Performance",
+    "PerformanceEntry",
+    "PerformanceResourceTiming",
+    "Request",
+    "RequestInit",
+    "Response",
+    "UrlSearchParams",
     "PointerEvent",
     "WheelEvent",
     "Window",
 ] }
-wgpu = { version = "30.0.1", default-features = false, features = ["std", "webgpu", "webgl", "wgsl"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "webgpu", "wgsl"] }

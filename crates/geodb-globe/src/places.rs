@@ -66,6 +66,9 @@ pub struct Place {
     pub dist_km: f64,
     /// The geoid stored in the database for this city.
     pub geoid: u64,
+    /// What only the full database knows (region code, timezone); empty
+    /// for the compact one.
+    pub detail: String,
 }
 
 pub struct Nearby {
@@ -93,6 +96,11 @@ fn place(ctx: CityContextRef<'_>, lat: f64, lon: f64) -> Option<Place> {
         rank: Rank::of(city, state, country),
         geoid: city.geoid,
         dist_km: geo::haversine_km(lat, lon, clat, clon),
+        detail: [state.code.as_deref(), city.timezone.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · "),
     })
 }
 
