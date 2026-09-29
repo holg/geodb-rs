@@ -2,11 +2,11 @@
 
 use geodb_globe::api_bench::{Report, Timing, BATCH};
 use geodb_globe::view::{fmt_coord, fmt_km};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Cell, Paragraph, Row, Table};
-use ratatui::Frame;
+use scopekit::ratatui::layout::{Constraint, Layout, Rect};
+use scopekit::ratatui::style::{Color, Style, Stylize};
+use scopekit::ratatui::text::{Line, Span};
+use scopekit::ratatui::widgets::{Block, BorderType, Cell, Paragraph, Row, Table};
+use scopekit::ratatui::Frame;
 
 const ACCENT: Color = Color::Rgb(255, 184, 64);
 const MUTED: Color = Color::Rgb(138, 151, 173);

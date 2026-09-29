@@ -3,28 +3,68 @@
 Interactive 3D globe for `geodb-core`, rendered with wgpu. Click, zoom or search,
 and it lists the cities around the centre of view, straight from the embedded database.
 
-One renderer, three front-ends:
+One renderer, two front-ends:
 
 | Front-end | Command |
 |---|---|
 | Web (WebGPU, WebGL2 fallback) | `cd crates/geodb-globe && trunk serve --release` |
-| Terminal UI (ratatui) | `cargo run --release -p geodb-globe --features native` |
-| Desktop window (winit) | `cargo run --release -p geodb-globe --features native -- --window` |
+| Native UI in the terminal | `cargo run --release -p geodb-globe --features native` |
+| The same UI in a window | `cargo run --release -p geodb-globe --features native -- --window` |
 | Offscreen PNG | `… --features native -- --search Tokyo --screenshot tokyo.png` |
 
-Common options for the native binary: `--search NAME`, `--at LAT,LON`, `--alt KM`, `--size WxH`.
-In the web page, append `?gl` to force WebGL2.
+The native UI is built on [scopekit](https://github.com/holg/scopekit) (private for now).
+It's one ratatui app that runs in a terminal, where the globe is a kitty, iTerm2, sixel or
+half-block image, or in a native window, where the globe is composited at full resolution
+next to the text. **`p` moves the running app between the two**, keeping the view, the
+query and the tabs.
+
+Options: `--search NAME`, `--at LAT,LON`, `--alt KM`, `--size WxH` (screenshot), plus
+scopekit's `--window`, `--protocol auto|kitty|iterm2|sixel|halfblocks`, `--backend`,
+`--font`, `--font-size`, `--switch-key`, `--config FILE`. In the web page, append `?gl` to
+force WebGL2.
+
+### Building the native UI
+
+scopekit is a git dependency over SSH (`ssh://git@github.com/holg/scopekit.git`). To work
+on both side by side, put a `[patch]` in a Cargo config outside this repository. For example,
+with `geodb-rs` and `scopekit` in the same folder, add this to that folder's
+`.cargo/config.toml`:
+
+```toml
+[patch."ssh://git@github.com/holg/scopekit.git"]
+scopekit = { path = "scopekit/crates/scopekit" }
+
+[net]
+git-fetch-with-cli = true
+```
+
+CI reads the repository with a deploy key (`SCOPEKIT_DEPLOY_KEY` secret; see scopekit's
+HOWTO §0).
 
 ## Controls
 
-- **Web / window:** drag to rotate, scroll or pinch to zoom, click to fly there.
-- **Terminal:** drag or `hjkl`/arrows to rotate, scroll or `+`/`-` to zoom, and click to fly there.
-  `/` searches, `Tab` switches to the list, `↑↓` + `Enter` jumps to a city,
-  `1`/`2`/`3` switch between the Globe, accuracy and API bench tabs, `b` re-runs the bench,
-  `w` opens the desktop window at the current view, and `q` quits.
+`?` shows every key and what the mouse, trackpad and touch do, generated from the active
+bindings.
 
-The terminal draws the wgpu frame with truecolor half-block characters, so use a
-truecolor terminal (`COLORTERM=truecolor`).
+- **Keys:** `/` search, `Tab` then `↑↓` + `Enter` for the list, `hjkl`/arrows rotate, `+`/`-`
+  zoom, `1`/`2`/`3` (or click a tab) switch tabs, `b` re-runs the bench, `y` copies the globe
+  as an image, `p` or `P` switch terminal ⇄ window, and `q` quits. While the search box is
+  focused, keys are just text.
+- **Mouse, trackpad and touch** (scopekit gestures, the same in terminal and window):
+  - drag, two-finger scroll or one finger rotates the globe;
+  - the wheel, pinch or Ctrl/Option/Cmd + scroll zooms;
+  - click or tap flies there and lists the cities around it, and a double click zooms in
+    further;
+  - right click or long press lists the cities around the spot without moving.
+
+  Change the bindings in the `[input]` section of a scopekit config file (`--config`).
+- **Copying:** `y` copies the globe image at the size it is shown at. In the window,
+  Shift + drag selects text (the list, the Compare and bench tables) and Cmd-C copies it. In a
+  terminal, use the terminal's own selection (Shift + drag).
+
+Place labels are drawn over the globe as scopekit overlays: they show in the window and
+with half blocks. With the kitty, iTerm2 and sixel protocols the terminal draws the image
+above the text, so the labels are only in the list there.
 
 ## Compare tab: geoid vs. lat/lon
 
@@ -107,7 +147,8 @@ labelled cities apart. The dataset has no city populations.
 - `geoid.rs`, `compare.rs`: geoid-only location/distance (MCU-portable) and the comparison.
 - `gpu_query.rs`, `gpu_query.wgsl`, `api_bench.rs`: GPU geoid queries and the API benchmark (feature `native`).
 - `app.rs`: browser glue.
-- `src/bin/geodb-globe/`: native TUI (with the Compare tab) and window.
+- `globe_view.rs`: the renderer as a scopekit `GpuView` (feature `native`).
+- `src/bin/geodb-globe/`: the native scopekit app (tabs, Compare, API bench).
 
 Data: cities from [dr5hn/countries-states-cities-database](https://github.com/dr5hn/countries-states-cities-database)
 (CC-BY-4.0); coastlines from [Natural Earth](https://www.naturalearthdata.com/) (public domain).

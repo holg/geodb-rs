@@ -137,7 +137,8 @@ impl GpuGeoidIndex {
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("poll");
-        let out = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        let out =
+            bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped gpu results")).to_vec();
         buffer.unmap();
         out
     }

@@ -474,9 +474,9 @@ async fn run() -> Result<(), String> {
     } else {
         wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
     };
-    let instance = wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
+    let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor {
         backends,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     })
     .await;
     let surface = instance

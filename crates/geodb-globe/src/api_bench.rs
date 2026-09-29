@@ -408,16 +408,13 @@ mod tests {
 
     #[test]
     fn gpu_matches_cpu_if_available() {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let Ok((adapter, device, queue)) =
-            pollster::block_on(crate::render::request_device(&instance, None))
-        else {
+        let Ok(dev) = scopekit::gpu::headless(scopekit::Backend::Auto) else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
         let db = data::db();
         let ds = Dataset::new(db);
-        let gpu = GpuGeoidIndex::new(&device, &queue, adapter.get_info().name, &ds.geoids);
+        let gpu = GpuGeoidIndex::new(&dev.device, &dev.queue, dev.describe(), &ds.geoids);
         let centre = generate_geoid(48.14, 11.58);
         let mut got = gpu.radius(centre, 30.0);
         let mut cpu = radius_int(&ds.geoids, 0, centre, geoid::radius_sq_steps(30.0));

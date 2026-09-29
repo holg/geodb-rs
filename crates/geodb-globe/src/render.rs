@@ -55,6 +55,19 @@ pub struct Renderer {
     marker_count: u32,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
+    /// For [`Renderer::render_region`]: the resolved image and its blit.
+    region: Option<RegionBlit>,
+}
+
+/// Resolved globe image the size of the region, and the pipeline that
+/// copies it into a shared target.
+struct RegionBlit {
+    color: wgpu::TextureView,
+    size: (u32, u32),
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    bind: wgpu::BindGroup,
 }
 
 /// Creates the adapter and device, optionally compatible with a surface.
@@ -66,7 +79,7 @@ pub async fn request_device(
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: surface,
-            force_fallback_adapter: false,
+            ..Default::default()
         })
         .await
         .map_err(|e| format!("adapter: {e}"))?;
@@ -112,6 +125,7 @@ impl Presenter {
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: if view_format != format {
                 vec![view_format]
             } else {
@@ -144,19 +158,20 @@ impl Presenter {
     pub fn present(&mut self, renderer: &mut Renderer, cam: &OrbitCamera, scene: &Scene) {
         renderer.resize(self.config.width, self.config.height);
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&renderer.device, &self.config);
                 return;
             }
-            Err(_) => return,
+            _ => return,
         };
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.view_format),
             ..Default::default()
         });
         renderer.render(&target, cam, scene);
-        frame.present();
+        renderer.queue.present(frame);
     }
 }
 
@@ -302,7 +317,7 @@ impl Renderer {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("globe"),
-            bind_group_layouts: &[&bgl],
+            bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
@@ -339,7 +354,7 @@ impl Renderer {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vs),
-                    buffers,
+                    buffers: &buffers.iter().cloned().map(Some).collect::<Vec<_>>(),
                     compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState {
@@ -348,8 +363,8 @@ impl Renderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: depth_write,
-                    depth_compare,
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(depth_compare),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -420,6 +435,7 @@ impl Renderer {
             marker_count: 0,
             msaa,
             depth,
+            region: None,
         }
     }
 
@@ -441,8 +457,75 @@ impl Renderer {
     }
 
     /// Draws the scene into `target`, which must match `view_format` and the
-    /// current size.
+    /// current size, and submits it (web canvas, window surface).
     pub fn render(&mut self, target: &wgpu::TextureView, cam: &OrbitCamera, scene: &Scene) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        self.encode_scene(&mut encoder, target, cam, scene);
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Records the scene into `encoder` and copies it into `region` (x, y,
+    /// width, height in pixels) of `target`, leaving the rest of the target
+    /// as it is (scopekit: the text UI around the view). Does not submit.
+    pub fn render_region(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        region: (u32, u32, u32, u32),
+        cam: &OrbitCamera,
+        scene: &Scene,
+    ) {
+        let (x, y, w, h) = region;
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.resize(w, h);
+        let fits = self.region.as_ref().is_some_and(|r| r.size == (w, h));
+        if !fits {
+            self.region = Some(RegionBlit::new(
+                &self.device,
+                self.view_format,
+                (w, h),
+                self.region.take(),
+            ));
+        }
+        let Some(color) = self.region.as_ref().map(|r| r.color.clone()) else {
+            return;
+        };
+        self.encode_scene(encoder, &color, cam, scene);
+        let Some(blit) = &self.region else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("globe region"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+        pass.set_scissor_rect(x, y, w, h);
+        pass.set_pipeline(&blit.pipeline);
+        pass.set_bind_group(0, &blit.bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// The globe, halo and markers into the MSAA target, resolved into `resolve`.
+    fn encode_scene(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        resolve: &wgpu::TextureView,
+        cam: &OrbitCamera,
+        scene: &Scene,
+    ) {
         let eye = cam.eye();
         let (qc, qr) = scene
             .query
@@ -458,116 +541,158 @@ impl Renderer {
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.msaa,
-                    depth_slice: None,
-                    resolve_target: Some(target),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.004,
-                            g: 0.006,
-                            b: 0.014,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Discard,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("main"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.msaa,
+                depth_slice: None,
+                resolve_target: Some(resolve),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.004,
+                        g: 0.006,
+                        b: 0.014,
+                        a: 1.0,
                     }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertices.slice(..));
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-            pass.set_pipeline(&self.globe_pipeline);
-            pass.draw_indexed(0..self.index_count, 0, 0..1);
-            pass.set_pipeline(&self.halo_pipeline);
-            pass.draw_indexed(0..self.index_count, 0, 0..1);
-
-            if self.marker_count > 0 {
-                pass.set_pipeline(&self.marker_pipeline);
-                pass.set_vertex_buffer(0, self.markers.slice(..));
-                pass.draw(0..6, 0..self.marker_count);
-            }
-        }
-        self.queue.submit([encoder.finish()]);
-    }
-
-    /// Renders offscreen and reads the frame back as tightly packed RGBA8.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn render_to_rgba(&mut self, cam: &OrbitCamera, scene: &Scene) -> Vec<u8> {
-        let (w, h) = self.size;
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.view_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        self.render(&texture.create_view(&Default::default()), cam, scene);
-
-        let row = (4 * w).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (row * h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(h),
+                    store: wgpu::StoreOp::Discard,
                 },
-            },
-            texture.size(),
-        );
-        self.queue.submit([encoder.finish()]);
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("poll");
-        let data = slice.get_mapped_range();
-        let bgra = matches!(
-            self.view_format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        );
-        let mut out = Vec::with_capacity((w * h * 4) as usize);
-        for y in 0..h as usize {
-            for px in data[y * row as usize..][..(w * 4) as usize].chunks_exact(4) {
-                if bgra {
-                    out.extend_from_slice(&[px[2], px[1], px[0], 255]);
-                } else {
-                    out.extend_from_slice(&[px[0], px[1], px[2], 255]);
-                }
-            }
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+        pass.set_pipeline(&self.globe_pipeline);
+        pass.draw_indexed(0..self.index_count, 0, 0..1);
+        pass.set_pipeline(&self.halo_pipeline);
+        pass.draw_indexed(0..self.index_count, 0, 0..1);
+
+        if self.marker_count > 0 {
+            pass.set_pipeline(&self.marker_pipeline);
+            pass.set_vertex_buffer(0, self.markers.slice(..));
+            pass.draw(0..6, 0..self.marker_count);
         }
-        out
+    }
+}
+
+impl RegionBlit {
+    /// Keeps `old`'s pipeline when only the size changed.
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        (w, h): (u32, u32),
+        old: Option<RegionBlit>,
+    ) -> RegionBlit {
+        let color = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("globe region"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let (pipeline, layout, sampler) = match old {
+            Some(o) => (o.pipeline, o.layout, o.sampler),
+            None => {
+                let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("globe blit"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                    ],
+                });
+                let shader = device.create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
+                let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("globe blit"),
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("globe blit"),
+                    layout: Some(&pl),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_blit"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_blit"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                    label: Some("globe blit"),
+                    ..Default::default()
+                });
+                (pipeline, layout, sampler)
+            }
+        };
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globe blit"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        RegionBlit {
+            color,
+            size: (w, h),
+            pipeline,
+            layout,
+            sampler,
+            bind,
+        }
     }
 }
 

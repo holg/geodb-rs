@@ -1,46 +1,72 @@
-//! Terminal UI (ratatui). The globe is rendered offscreen by wgpu and drawn
-//! with truecolor half-block characters (two pixels per cell); labels,
-//! search and the result list are regular ratatui widgets.
+//! The interactive viewer on scopekit: one ratatui UI that runs in the
+//! terminal (the globe as a kitty, iTerm2, sixel or half-block image) or in a
+//! window (globe composited at full resolution), and moves between the two
+//! with `p` (scopekit's switch key).
 
 use crate::bench_view;
 use crate::compare_view::{self, Bench};
-use crate::{initial_camera, query, summary, unix_ms, Args, QUERY_IDLE};
+use crate::{query, summary, QUERY_IDLE};
 use geodb_core::prelude::GeoSearch;
 use geodb_core::spatial::generate_geoid;
 use geodb_globe::api_bench::{self, Dataset, Report};
 use geodb_globe::camera::OrbitCamera;
 use geodb_globe::compare;
 use geodb_globe::data;
+use geodb_globe::globe_view::GlobeView;
 use geodb_globe::gpu_query::GpuGeoidIndex;
 use geodb_globe::places::{self, Nearby, Rank, Target};
-use geodb_globe::render::{self, Renderer};
 use geodb_globe::view::{self, fmt_coord, fmt_km, Query};
-use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEvent, MouseEventKind,
+use scopekit::crossterm::event::{
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use ratatui::crossterm::execute;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Tabs, Widget};
-use ratatui::{DefaultTerminal, Frame};
-use std::io::IsTerminal;
-use std::process::{Command, Stdio};
+use scopekit::ratatui::buffer::Buffer;
+use scopekit::ratatui::layout::{Constraint, Layout, Position, Rect};
+use scopekit::ratatui::style::{Color, Modifier, Style, Stylize};
+use scopekit::ratatui::text::{Line, Span};
+use scopekit::ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Tabs};
+use scopekit::ratatui::Frame;
+use scopekit::{App, Config, Flow, Gesture, GestureKind, GestureType, Help, Mode, ViewSlot, Views};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Supersampling factor per axis for the offscreen render.
-const SS: u32 = 2;
 const PANEL_WIDTH: u16 = 46;
+const TAB_LABELS: [&str; 3] = [
+    " 1 Globe (wgpu) ",
+    " 2 Compare: accuracy ",
+    " 3 Compare: API bench ",
+];
+
+/// The tab under column `x`, laid out as ratatui's `Tabs` draws them: one
+/// cell of padding on each side of a label, one-cell dividers.
+fn tab_at(area: Rect, x: u16) -> Option<usize> {
+    let mut left = area.x;
+    for (i, label) in TAB_LABELS.iter().enumerate() {
+        let w = label.chars().count() as u16 + 2;
+        if (left..left + w).contains(&x) {
+            return Some(i);
+        }
+        left += w + 1;
+    }
+    None
+}
 const ACCENT: Color = Color::Rgb(255, 184, 64);
 const MUTED: Color = Color::Rgb(138, 151, 173);
+/// Tick rate while the camera flies or a query is pending.
+const ANIMATE: Duration = Duration::from_millis(16);
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Tab {
     Globe,
     Compare,
     Bench,
+}
+
+/// What an input asks for.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Action {
+    None,
+    Quit,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -50,15 +76,8 @@ enum Focus {
     List,
 }
 
-struct Drag {
-    last: (u16, u16),
-    moved: bool,
-    started: Instant,
-}
-
-struct Tui {
-    renderer: Renderer,
-    backend: String,
+pub struct Tui {
+    globe: Rc<RefCell<GlobeView>>,
     cam: OrbitCamera,
     nearby: Option<Nearby>,
     query: Option<Query>,
@@ -69,51 +88,36 @@ struct Tui {
     suggestions: Vec<Target>,
     suggestion: usize,
     pending_query: Option<Instant>,
-    drag: Option<Drag>,
-    /// Supersampled RGBA of the last globe frame and its size in pixels.
-    pixels: Vec<u8>,
-    pixel_size: (u32, u32),
     globe_area: Rect,
     list_area: Rect,
-    dirty: bool,
+    tabs_area: Rect,
     status: String,
-    frame_ms: f64,
     stats: String,
     tab: Tab,
     /// Timings of the geoid comparison for the current query.
     bench: Option<Bench>,
     clock: Instant,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    adapter_name: String,
-    /// Built on first use of the Bench tab.
+    /// Built on first use of the Bench tab, on its own headless GPU.
     api: Option<(Dataset, GpuGeoidIndex, f64)>,
     report: Option<Report>,
     bench_requested: bool,
+    /// scopekit's status: GPU and how the view is shown.
+    describe: String,
+    /// Screen pixels per cell, for marker sizes.
+    cell_px: (f32, f32),
+    last_tick: Instant,
+    mode: Mode,
 }
 
-pub fn run(args: Args) -> Result<(), String> {
-    if !std::io::stdout().is_terminal() {
-        return Err("the terminal UI needs a TTY (use --window or --screenshot)".into());
-    }
+/// Runs the viewer with `config` (terminal or window, switch key `p`).
+pub fn run(cam: OrbitCamera, config: &Config) -> Result<(), String> {
     eprintln!("geodb-globe: loading database and baking the earth texture…");
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let (adapter, device, queue) = pollster::block_on(render::request_device(&instance, None))?;
-    let info = adapter.get_info();
-    let backend = format!("{:?}", info.backend);
-    let adapter_name = format!("{} ({:?})", info.name, info.backend);
-    let renderer = Renderer::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
-        (64, 64),
-        |w| data::bake_texture(data::db(), w.min(4096)),
-    );
+    let earth = std::sync::Arc::new(data::bake_texture(data::db(), 4096));
+    let (globe, view) = scopekit::share(GlobeView::new(earth, cam.clone()));
     let stats = data::db().stats();
     let mut app = Tui {
-        renderer,
-        backend,
-        cam: initial_camera(&args),
+        globe,
+        cam,
         nearby: None,
         query: None,
         summary: String::new(),
@@ -123,14 +127,10 @@ pub fn run(args: Args) -> Result<(), String> {
         suggestions: Vec::new(),
         suggestion: 0,
         pending_query: Some(Instant::now()),
-        drag: None,
-        pixels: Vec::new(),
-        pixel_size: (0, 0),
         globe_area: Rect::default(),
         list_area: Rect::default(),
-        dirty: true,
+        tabs_area: Rect::default(),
         status: String::new(),
-        frame_ms: 0.0,
         stats: format!(
             "{} countries · {} regions · {} cities",
             stats.countries, stats.states, stats.cities
@@ -138,70 +138,132 @@ pub fn run(args: Args) -> Result<(), String> {
         tab: Tab::Globe,
         bench: None,
         clock: Instant::now(),
-        device: device.clone(),
-        queue: queue.clone(),
-        adapter_name,
         api: None,
         report: None,
         bench_requested: false,
+        describe: String::new(),
+        cell_px: (8.0, 16.0),
+        last_tick: Instant::now(),
+        mode: config.mode,
     };
+    scopekit::run(&mut app, Views::new().with("globe", view), config)
+}
 
-    let mut terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    let result = app.run(&mut terminal);
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    result
+impl App for Tui {
+    fn draw(&mut self, f: &mut Frame, slot: &mut ViewSlot) {
+        self.describe = slot.describe().to_string();
+        if slot.cell_px() != self.cell_px {
+            self.cell_px = slot.cell_px();
+            self.upload_markers();
+        }
+        self.render(f, slot);
+    }
+
+    fn event(&mut self, ev: Event) -> Flow {
+        match self.handle_event(ev) {
+            Action::Quit => Flow::Quit,
+            Action::None => Flow::Continue,
+        }
+    }
+
+    fn tick(&mut self) -> bool {
+        let now = Instant::now();
+        let dt = (now - self.last_tick).as_secs_f64();
+        self.last_tick = now;
+        let moving = self.advance(dt);
+        let mut changed = moving;
+        if self.bench_requested {
+            // The "running…" frame is already on screen; this blocks ~1 s.
+            self.run_bench();
+            self.bench_requested = false;
+            changed = true;
+        }
+        changed
+    }
+
+    fn tick_interval(&self) -> Option<Duration> {
+        let busy = !self.cam.is_settled() || self.pending_query.is_some() || self.bench_requested;
+        busy.then_some(ANIMATE)
+    }
+
+    fn message(&mut self, text: &str) {
+        self.status = text.to_string();
+    }
+
+    fn captures_text(&self) -> bool {
+        self.focus == Focus::Search
+    }
+
+    fn gesture(&mut self, g: Gesture) -> Flow {
+        self.on_gesture(g);
+        Flow::Continue
+    }
+
+    fn help(&self) -> Option<Help> {
+        Some(
+            Help::new("GeoDB Globe")
+                .key(
+                    "/  s",
+                    "search a city, region or country; Enter flies there",
+                )
+                .key("Tab", "focus the list; ↑ ↓ select, Enter flies to the city")
+                .key("h j k l, arrows", "rotate the globe")
+                .key("+  -", "zoom in / out")
+                .key("1  2  3, click", "tabs: globe, geoid accuracy, API bench")
+                .key("b", "run the API bench at the current view")
+                .key("q  Esc, Ctrl-C", "quit")
+                .gesture(GestureType::Pan, "rotate the globe")
+                .gesture(GestureType::Zoom, "zoom")
+                .gesture(
+                    GestureType::Tap,
+                    "fly to the spot, list the cities around it",
+                )
+                .gesture(GestureType::DoubleTap, "fly there and zoom in")
+                .gesture(
+                    GestureType::LongPress,
+                    "list the cities around the spot, stay put",
+                ),
+        )
+    }
+
+    fn mode_changed(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.last_tick = Instant::now();
+    }
 }
 
 impl Tui {
-    fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), String> {
-        let mut last = Instant::now();
-        loop {
-            let now = Instant::now();
-            let moving = self.cam.update((now - last).as_secs_f64().min(0.1));
-            last = now;
-            if let Some(at) = self.pending_query {
-                if now >= at && self.cam.is_settled() && self.drag.is_none() {
-                    self.pending_query = None;
-                    self.run_query(self.cam.lat, self.cam.lon);
-                }
-            }
-            if moving || self.dirty {
-                terminal.draw(|f| self.draw(f)).map_err(|e| e.to_string())?;
-                self.dirty = false;
-            }
-            if self.bench_requested {
-                // The "running…" frame is already on screen; this blocks ~1 s.
-                self.run_bench();
-                self.bench_requested = false;
-                self.dirty = true;
-                continue;
-            }
-            let timeout = if moving || self.pending_query.is_some() {
-                Duration::from_millis(16)
-            } else {
-                Duration::from_millis(250)
-            };
-            if event::poll(timeout).map_err(|e| e.to_string())? {
-                match event::read().map_err(|e| e.to_string())? {
-                    Event::Key(k) if k.kind != KeyEventKind::Release => {
-                        if k.code == KeyCode::Char('c')
-                            && k.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            return Ok(());
-                        }
-                        if !self.key(k.code) {
-                            return Ok(());
-                        }
-                    }
-                    Event::Mouse(m) => self.mouse(m),
-                    Event::Resize(..) => {}
-                    _ => continue,
-                }
-                self.dirty = true;
+    /// Advances the camera and runs the idle query. Returns true while moving.
+    fn advance(&mut self, dt: f64) -> bool {
+        let moving = self.cam.update(dt.min(0.1));
+        if let Some(at) = self.pending_query {
+            if Instant::now() >= at && self.cam.is_settled() {
+                self.pending_query = None;
+                self.run_query(self.cam.lat, self.cam.lon);
+                return true;
             }
         }
+        moving
+    }
+
+    /// Keys and mouse, the same in terminal and window.
+    fn handle_event(&mut self, ev: Event) -> Action {
+        let action = match ev {
+            Event::Key(k) if k.kind != KeyEventKind::Release => {
+                if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
+                    return Action::Quit;
+                }
+                self.key(k.code)
+            }
+            Event::Mouse(m) => {
+                self.mouse(m);
+                Action::None
+            }
+            _ => Action::None,
+        };
+        // Wake the tick at once when this starts an animation or a query.
+        self.last_tick = Instant::now();
+        action
     }
 
     // ------------------------------------------------------------ actions
@@ -221,24 +283,30 @@ impl Tui {
         self.nearby = Some(nearby);
         self.query = Some(q);
         self.upload_markers();
-        self.dirty = true;
     }
 
     fn run_bench(&mut self) {
         let db = data::db();
-        let (ds, gpu, upload_ms) = self.api.get_or_insert_with(|| {
+        if self.api.is_none() {
+            let gpu = match scopekit::gpu::headless(scopekit::Backend::Auto) {
+                Ok(g) => g,
+                Err(e) => {
+                    self.status = format!("no GPU for the bench: {e}");
+                    return;
+                }
+            };
             let ds = Dataset::new(db);
             let t = Instant::now();
-            let gpu = GpuGeoidIndex::new(
-                &self.device,
-                &self.queue,
-                self.adapter_name.clone(),
-                &ds.geoids,
-            );
+            let index = GpuGeoidIndex::new(&gpu.device, &gpu.queue, gpu.describe(), &ds.geoids);
             // Make sure the upload has finished before stopping the clock.
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            (ds, gpu, t.elapsed().as_secs_f64() * 1e3)
-        });
+            let _ = gpu
+                .device
+                .poll(scopekit::wgpu::PollType::wait_indefinitely());
+            self.api = Some((ds, index, t.elapsed().as_secs_f64() * 1e3));
+        }
+        let Some((ds, gpu, upload_ms)) = self.api.as_ref() else {
+            return;
+        };
         let (lat, lon, radius) =
             self.query
                 .unwrap_or((self.cam.lat, self.cam.lon, self.cam.view_radius_km()));
@@ -252,13 +320,15 @@ impl Tui {
     }
 
     fn upload_markers(&mut self) {
+        // Marker radii are in pixels: scale with the cell size (Retina windows).
+        let scale = (self.cell_px.1 / 16.0).clamp(0.6, 3.0);
         let markers = view::markers(
             self.nearby.as_ref(),
             self.list.selected(),
             self.query,
-            0.3 * SS as f32,
+            scale,
         );
-        self.renderer.set_markers(&markers);
+        self.globe.borrow_mut().set_markers(markers);
     }
 
     fn fly_to(&mut self, lat: f64, lon: f64, dist: f64) {
@@ -289,34 +359,7 @@ impl Tui {
         self.suggestion = 0;
     }
 
-    fn open_window(&mut self) {
-        let exe = match std::env::current_exe() {
-            Ok(e) => e,
-            Err(e) => {
-                self.status = format!("cannot find executable: {e}");
-                return;
-            }
-        };
-        let spawned = Command::new(exe)
-            .args([
-                "--window",
-                "--at",
-                &format!("{},{}", self.cam.lat, self.cam.lon),
-                "--alt",
-                &format!("{}", self.cam.altitude_km()),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        self.status = match spawned {
-            Ok(_) => "opened a window at the current view".into(),
-            Err(e) => format!("could not open window: {e}"),
-        };
-    }
-
-    /// Returns false to quit.
-    fn key(&mut self, code: KeyCode) -> bool {
+    fn key(&mut self, code: KeyCode) -> Action {
         self.status.clear();
         if self.focus == Focus::Search {
             match code {
@@ -343,11 +386,11 @@ impl Tui {
                 }
                 _ => {}
             }
-            return true;
+            return Action::None;
         }
         let step = 12.0;
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => return false,
+            KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
             KeyCode::Char('/') | KeyCode::Char('s') => self.focus = Focus::Search,
             KeyCode::Tab => {
                 self.focus = if self.focus == Focus::List {
@@ -356,7 +399,6 @@ impl Tui {
                     Focus::List
                 }
             }
-            KeyCode::Char('w') => self.open_window(),
             KeyCode::Char('1') | KeyCode::Char('g') => self.tab = Tab::Globe,
             KeyCode::Char('2') | KeyCode::Char('c') => self.tab = Tab::Compare,
             KeyCode::Char('3') => {
@@ -415,57 +457,39 @@ impl Tui {
             }
             _ => {}
         }
-        true
+        Action::None
     }
 
+    /// Raw mouse input for the panel; the globe gets gestures instead.
     fn mouse(&mut self, m: MouseEvent) {
         let pos = Position::new(m.column, m.row);
-        let in_globe = self.globe_area.contains(pos);
-        match m.kind {
-            MouseEventKind::Down(MouseButton::Left) if in_globe => {
-                self.focus = Focus::Globe;
-                self.drag = Some(Drag {
-                    last: (m.column, m.row),
-                    moved: false,
-                    started: Instant::now(),
-                });
+        if matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) && self.tabs_area.contains(pos)
+        {
+            match tab_at(self.tabs_area, m.column) {
+                Some(0) => self.tab = Tab::Globe,
+                Some(1) => self.tab = Tab::Compare,
+                Some(2) => {
+                    self.tab = Tab::Bench;
+                    self.bench_requested |= self.report.is_none();
+                }
+                _ => {}
             }
-            MouseEventKind::Down(MouseButton::Left) if self.list_area.contains(pos) => {
+            return;
+        }
+        if !self.list_area.contains(pos) {
+            if matches!(m.kind, MouseEventKind::Down(_)) && self.globe_area.contains(pos) {
+                self.focus = Focus::Globe;
+            }
+            return;
+        }
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = Focus::List;
                 let row = (m.row - self.list_area.y) as usize + self.list.offset();
                 self.select(row);
             }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(d) = &mut self.drag {
-                    // Half-block pixels are two per row.
-                    let dx = m.column as f64 - d.last.0 as f64;
-                    let dy = (m.row as f64 - d.last.1 as f64) * 2.0;
-                    d.last = (m.column, m.row);
-                    d.moved = true;
-                    let h = self.globe_area.height as f64 * 2.0;
-                    self.cam.drag(dx, dy, h);
-                    self.after_move();
-                }
-            }
-            MouseEventKind::Up(MouseButton::Left) => {
-                if let Some(d) = self.drag.take() {
-                    if !d.moved && d.started.elapsed() < Duration::from_millis(500) && in_globe {
-                        self.click(m.column, m.row);
-                    }
-                }
-            }
-            MouseEventKind::ScrollUp if in_globe => {
-                self.cam.zoom(0.8);
-                self.after_move();
-            }
-            MouseEventKind::ScrollDown if in_globe => {
-                self.cam.zoom(1.25);
-                self.after_move();
-            }
-            MouseEventKind::ScrollDown if self.list_area.contains(pos) => {
-                *self.list.offset_mut() += 3;
-            }
-            MouseEventKind::ScrollUp if self.list_area.contains(pos) => {
+            MouseEventKind::ScrollDown => *self.list.offset_mut() += 3,
+            MouseEventKind::ScrollUp => {
                 let o = self.list.offset().saturating_sub(3);
                 *self.list.offset_mut() = o;
             }
@@ -473,19 +497,55 @@ impl Tui {
         }
     }
 
-    fn click(&mut self, col: u16, row: u16) {
-        let a = self.globe_area;
-        let nx = ((col - a.x) as f32 + 0.5) / a.width as f32 * 2.0 - 1.0;
-        let ny = 1.0 - ((row - a.y) as f32 + 0.5) / a.height as f32 * 2.0;
-        if let Some((lat, lon)) = self.cam.pick(nx, ny) {
-            let dist = 1.0 + (self.cam.target_dist() - 1.0) * 0.6;
-            self.fly_to(lat, lon, dist);
+    /// A gesture on the globe (scopekit recognises them from mouse,
+    /// trackpad and touch, in terminal and window alike).
+    fn on_gesture(&mut self, g: Gesture) {
+        if g.view != "globe" {
+            return;
         }
+        let ndc = |(x, y): (f32, f32)| {
+            (
+                x / g.size.0.max(1.0) * 2.0 - 1.0,
+                1.0 - y / g.size.1.max(1.0) * 2.0,
+            )
+        };
+        self.cam.aspect = g.size.0.max(1.0) / g.size.1.max(1.0);
+        match g.kind {
+            GestureKind::Pan { dx, dy } => {
+                self.cam
+                    .drag(dx as f64, dy as f64, g.size.1.max(1.0) as f64);
+                self.after_move();
+            }
+            GestureKind::Zoom { factor } => {
+                self.cam.zoom(1.0 / factor.max(0.01) as f64);
+                self.after_move();
+            }
+            GestureKind::Tap { count } => {
+                let (nx, ny) = ndc(g.pos);
+                if let Some((lat, lon)) = self.cam.pick(nx, ny) {
+                    // Double click / tap zooms in further.
+                    let k = if count >= 2 { 0.3 } else { 0.6 };
+                    let dist = 1.0 + (self.cam.target_dist() - 1.0) * k;
+                    self.fly_to(lat, lon, dist);
+                }
+            }
+            GestureKind::LongPress => {
+                // Look around the spot without moving the camera.
+                let (nx, ny) = ndc(g.pos);
+                if let Some((lat, lon)) = self.cam.pick(nx, ny) {
+                    self.run_query(lat, lon);
+                    self.pending_query = None;
+                }
+            }
+            GestureKind::Rotate { .. } => {}
+        }
+        self.focus = Focus::Globe;
+        self.last_tick = Instant::now();
     }
 
     // ------------------------------------------------------------ drawing
 
-    fn draw(&mut self, f: &mut Frame) {
+    fn render(&mut self, f: &mut Frame, slot: &mut ViewSlot) {
         let [main, panel] =
             Layout::horizontal([Constraint::Min(20), Constraint::Length(PANEL_WIDTH)])
                 .areas(f.area());
@@ -501,29 +561,26 @@ impl Tui {
             Tab::Bench => 2,
         };
         f.render_widget(
-            Tabs::new(vec![
-                " 1 Globe (wgpu) ",
-                " 2 Compare: accuracy ",
-                " 3 Compare: API bench ",
-            ])
-            .select(selected_tab)
-            .style(Style::new().fg(MUTED))
-            .highlight_style(Style::new().fg(ACCENT).bold())
-            .divider("│"),
+            Tabs::new(TAB_LABELS.to_vec())
+                .select(selected_tab)
+                .style(Style::new().fg(MUTED))
+                .highlight_style(Style::new().fg(ACCENT).bold())
+                .divider("│"),
             tabs,
         );
+        self.tabs_area = tabs;
         match self.tab {
             Tab::Globe => {
                 self.globe_area = content;
-                self.render_globe();
-                f.render_widget(
-                    GlobeWidget {
-                        pixels: &self.pixels,
-                        size: self.pixel_size,
-                    },
-                    content,
-                );
-                self.draw_labels(f.buffer_mut(), content);
+                {
+                    let mut g = self.globe.borrow_mut();
+                    g.set_camera(&self.cam);
+                    g.set_query(self.query);
+                }
+                slot.place("globe", content);
+                for label in self.draw_labels(f.buffer_mut(), content) {
+                    slot.overlay(label);
+                }
             }
             Tab::Compare => {
                 // No globe to click on in this tab.
@@ -546,10 +603,9 @@ impl Tui {
         let hud_text = Line::from(vec![
             Span::raw(fmt_coord(self.cam.lat, self.cam.lon)).fg(ACCENT),
             Span::raw(format!(
-                " · altitude {} · {} · {:.1} ms/frame",
+                " · altitude {} · {}",
                 fmt_km(self.cam.altitude_km()),
-                self.backend,
-                self.frame_ms
+                self.describe
             ))
             .fg(MUTED),
         ]);
@@ -557,21 +613,11 @@ impl Tui {
         self.draw_panel(f, panel);
     }
 
-    fn render_globe(&mut self) {
-        let a = self.globe_area;
-        let (w, h) = (a.width.max(1) as u32 * SS, a.height.max(1) as u32 * 2 * SS);
-        let t = Instant::now();
-        self.cam.aspect = w as f32 / h as f32;
-        self.renderer.resize(w, h);
-        let scene = view::scene(self.query, unix_ms());
-        self.pixels = self.renderer.render_to_rgba(&self.cam, &scene);
-        self.pixel_size = (w, h);
-        self.frame_ms = t.elapsed().as_secs_f64() * 1000.0;
-    }
-
-    fn draw_labels(&self, buf: &mut Buffer, area: Rect) {
+    /// Place names over the globe; returns their cells, for `slot.overlay`.
+    fn draw_labels(&self, buf: &mut Buffer, area: Rect) -> Vec<Rect> {
+        let mut drawn = Vec::new();
         let Some(n) = &self.nearby else {
-            return;
+            return drawn;
         };
         let mut shown: Vec<&geodb_globe::places::Place> = n.places[..n.highlights].iter().collect();
         if let Some(sel) = self.list.selected().and_then(|i| n.places.get(i)) {
@@ -613,7 +659,9 @@ impl Tui {
                 Color::Rgb(255, 226, 176)
             };
             buf.set_string(x0, row, name, Style::new().fg(fg).bg(Color::Rgb(8, 12, 22)));
+            drawn.push(Rect::new(x0, row, x1 - x0, 1));
         }
+        drawn
     }
 
     fn draw_panel(&mut self, f: &mut Frame, area: Rect) {
@@ -691,7 +739,7 @@ impl Tui {
         f.render_widget(
             Paragraph::new(summary_text)
                 .fg(ACCENT)
-                .wrap(ratatui::widgets::Wrap { trim: true }),
+                .wrap(scopekit::ratatui::widgets::Wrap { trim: true }),
             summary,
         );
 
@@ -742,10 +790,11 @@ impl Tui {
         );
 
         let help_text = Paragraph::new(vec![
-            Line::raw("drag/hjkl rotate · scroll/+- zoom"),
-            Line::raw("click fly · / search · Tab list"),
-            Line::raw("↑↓ Enter go · 1/2/3 tabs · b bench"),
-            Line::raw("w window · q quit"),
+            Line::raw("? keys and mouse · / search · 1 2 3 tabs"),
+            Line::raw(match self.mode {
+                Mode::Terminal => "p open in a window · q quit",
+                Mode::Window => "p back to the terminal · q quit",
+            }),
         ])
         .fg(MUTED);
         f.render_widget(help_text, help);
@@ -754,42 +803,4 @@ impl Tui {
 
 fn n_highlighted(n: Option<&Nearby>, i: usize) -> bool {
     n.is_some_and(|n| i < n.highlights)
-}
-
-/// Draws supersampled RGBA pixels with `▀` (top pixel = fg, bottom = bg).
-struct GlobeWidget<'a> {
-    pixels: &'a [u8],
-    size: (u32, u32),
-}
-
-impl Widget for GlobeWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let (w, h) = (self.size.0 as usize, self.size.1 as usize);
-        if self.pixels.len() < w * h * 4 {
-            return;
-        }
-        let ss = SS as usize;
-        // Average an ss x ss block of the supersampled image.
-        let px = |x: usize, y: usize| {
-            let mut sum = [0u32; 3];
-            for dy in 0..ss {
-                for dx in 0..ss {
-                    let i = ((y * ss + dy).min(h - 1) * w + (x * ss + dx).min(w - 1)) * 4;
-                    for (s, v) in sum.iter_mut().zip(&self.pixels[i..i + 3]) {
-                        *s += *v as u32;
-                    }
-                }
-            }
-            let n = (ss * ss) as u32;
-            Color::Rgb((sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8)
-        };
-        for row in 0..area.height {
-            for col in 0..area.width {
-                let (x, y) = (col as usize, row as usize * 2);
-                if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
-                    cell.set_symbol("▀").set_fg(px(x, y)).set_bg(px(x, y + 1));
-                }
-            }
-        }
-    }
 }

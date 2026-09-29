@@ -20,6 +20,7 @@ pub struct Seed {
     pub weight: f32,
 }
 
+#[derive(Clone)]
 pub struct EarthTexture {
     pub width: u32,
     pub height: u32,

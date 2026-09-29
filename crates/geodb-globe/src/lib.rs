@@ -25,4 +25,6 @@ mod app;
 #[cfg(feature = "native")]
 pub mod api_bench;
 #[cfg(feature = "native")]
+pub mod globe_view;
+#[cfg(feature = "native")]
 pub mod gpu_query;

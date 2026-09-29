@@ -4,11 +4,11 @@ use geodb_globe::compare::{self, Method};
 use geodb_globe::geoid;
 use geodb_globe::places::Nearby;
 use geodb_globe::view::{fmt_coord, fmt_km, Query};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Cell, Paragraph, Row, Table};
-use ratatui::Frame;
+use scopekit::ratatui::layout::{Constraint, Layout, Rect};
+use scopekit::ratatui::style::{Color, Style, Stylize};
+use scopekit::ratatui::text::{Line, Span};
+use scopekit::ratatui::widgets::{Block, BorderType, Cell, Paragraph, Row, Table};
+use scopekit::ratatui::Frame;
 
 /// Reference timing and per-method timings in ns per distance.
 pub type Bench = (f64, [f64; Method::ALL.len()]);

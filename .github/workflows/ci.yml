@@ -9,6 +9,7 @@ on:
   workflow_dispatch:
 
 env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"  # geodb-globe depends on private scopekit by git
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -18,6 +19,11 @@ jobs:
   lint-test:
     runs-on: ubuntu-latest
     steps:
+      - name: SSH key for the private scopekit dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SCOPEKIT_DEPLOY_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -84,6 +90,11 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: SSH key for the private scopekit dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SCOPEKIT_DEPLOY_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -129,6 +140,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: SSH key for the private scopekit dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SCOPEKIT_DEPLOY_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
