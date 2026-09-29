@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         .collect();
 
     // Sort by count descending
-    state_counts.sort_by(|a, b| b.2.cmp(&a.2));
+    state_counts.sort_by_key(|s| std::cmp::Reverse(s.2));
 
     for (i, (c_name, s_name, count)) in state_counts.iter().take(5).enumerate() {
         println!("{}. {:<25} ({}) : {} cities", i + 1, s_name, c_name, count);

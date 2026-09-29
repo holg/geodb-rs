@@ -2,7 +2,7 @@
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::model::flat::{City, Country, GeoDb, State};
-use crate::spatial::{decode_geoid, generate_geoid, haversine_distance};
+use crate::spatial::{decode_geoid, generate_geoid, haversine_distance, RadiusBounds};
 use crate::text::fold_key;
 #[cfg(not(feature = "search_blobs"))]
 use crate::text::match_score;
@@ -298,7 +298,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
             out.push(MySmartHit::country(20, c));
         }
 
-        out.sort_by(|a, b| b.score.cmp(&a.score));
+        out.sort_by_key(|h| std::cmp::Reverse(h.score));
         out
     }
 
@@ -394,17 +394,9 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         // 1. Decode Center
         let (center_lat, center_lng) = decode_geoid(geoid);
 
-        // 2. Calculate Bounding Box (Approximate)
-        // 1 deg lat ~= 111km. 1 deg lng varies.
-        let lat_delta = radius_km / 111.0;
-        // Avoid div by zero near poles, cap cos at 0.01
-        let lng_scale = (center_lat.to_radians().cos()).abs().max(0.01);
-        let lng_delta = radius_km / (111.0 * lng_scale);
-
-        let min_lat = center_lat - lat_delta;
-        let max_lat = center_lat + lat_delta;
-        let min_lng = center_lng - lng_delta;
-        let max_lng = center_lng + lng_delta;
+        // 2. Bounding box of the spherical cap (exact; wraps the antimeridian,
+        //    spans all longitudes when the cap contains a pole).
+        let bounds = RadiusBounds::new(center_lat, center_lng, radius_km);
 
         // 3. Collect Candidates with Distance
         let mut candidates = Vec::new();
@@ -414,8 +406,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
             let lat = city.lat().unwrap_or(0.0);
             let lng = city.lng().unwrap_or(0.0);
 
-            // BBox Filter (Fast float comparisons)
-            if lat >= min_lat && lat <= max_lat && lng >= min_lng && lng <= max_lng {
+            if bounds.contains(lat, lng) {
                 // Precise Distance (Expensive Trig)
                 let dist = haversine_distance(center_lat, center_lng, lat, lng);
 

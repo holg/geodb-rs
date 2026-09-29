@@ -1,0 +1,70 @@
+[package]
+name = "geodb-globe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Interactive wgpu 3D globe demo for geodb-core (WebAssembly)"
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "geodb-globe"
+required-features = ["native"]
+
+[features]
+# Native binary: ratatui terminal UI, desktop window (winit) and offscreen
+# screenshots, all on native wgpu backends.
+native = [
+    "dep:png",
+    "dep:pollster",
+    "dep:ratatui",
+    "dep:winit",
+    "wgpu/dx12",
+    "wgpu/metal",
+    "wgpu/parking_lot",
+    "wgpu/std",
+    "wgpu/vulkan",
+]
+
+[dependencies]
+bincode = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }
+console_error_panic_hook = "0.1"
+flate2 = { workspace = true }
+geodb-core = { path = "../geodb-core", default-features = false, features = ["compact", "search_blobs"] }
+glam = { version = "0.30", features = ["bytemuck"] }
+js-sys = { workspace = true }
+png = { version = "0.18", optional = true }
+pollster = { version = "0.4", optional = true }
+ratatui = { version = "0.30", optional = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "AddEventListenerOptions",
+    "console",
+    "CssStyleDeclaration",
+    "Document",
+    "DomStringMap",
+    "DomTokenList",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "HtmlCollection",
+    "HtmlElement",
+    "HtmlInputElement",
+    "KeyboardEvent",
+    "Location",
+    "MouseEvent",
+    "Performance",
+    "PointerEvent",
+    "WheelEvent",
+    "Window",
+] }
+wgpu = { version = "28", default-features = false, features = ["webgpu", "webgl", "wgsl"] }
+winit = { version = "0.30", optional = true }

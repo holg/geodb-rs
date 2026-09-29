@@ -1,0 +1,22 @@
+# GitHub Linguist: keep the repository language stats focused on Rust.
+# Platform glue, generated bindings, prebuilt artifacts and demo apps
+# are excluded from the language breakdown.
+
+# Demo / sample apps and platform packaging (Swift, Kotlin, Dart, Cangjie, ...)
+GeoDB-Apps/** linguist-vendored
+
+# Prebuilt release artifacts (xcframeworks, AARs, headers)
+releases/** linguist-vendored
+*.xcframework/** linguist-vendored
+*.framework/** linguist-vendored
+
+# UniFFI / wasm-bindgen generated bindings and build outputs
+**/geodb_ffi.swift linguist-generated
+**/geodb_ffi.kt linguist-generated
+**/geodb_ffiFFI.h linguist-generated
+crates/SPMHelper/generated/** linguist-generated
+crates/geodb-wasm/dist/** linguist-generated
+wasm_bench/** linguist-vendored
+
+# Build tooling scripts
+scripts/** linguist-vendored

@@ -33,55 +33,47 @@ echo ""
 echo -e "${BLUE}Downloading latest data from GitHub...${NC}"
 echo ""
 
-# Download URL (direct link to raw file)
-DATA_URL="https://github.com/dr5hn/countries-states-cities-database/raw/master/json/countries%2Bstates%2Bcities.json.gz"
+# Upstream publishes the gzipped dataset as a release asset;
+# "latest/download" always resolves to the newest release.
+DATA_URL="https://github.com/dr5hn/countries-states-cities-database/releases/latest/download/json-countries%2Bstates%2Bcities.json.gz"
 DATA_DIR="$CORE_CRATE/data"
 DATA_FILE="$DATA_DIR/countries+states+cities.json.gz"
 
 mkdir -p "$DATA_DIR"
 
-# Download with curl
-curl -L -o "$DATA_FILE" "$DATA_URL"
-
-# Check if successful
-if [ ! -f "$DATA_FILE" ]; then
-    echo -e "${YELLOW}Error: Download failed${NC}"
+# Download to a temp file first so a failed download never replaces good data
+curl -fL -o "$DATA_FILE.part" "$DATA_URL"
+if [ "$(head -c 2 "$DATA_FILE.part" | xxd -p)" != "1f8b" ]; then
+    echo -e "${YELLOW}Error: download is not gzip data${NC}"
+    rm -f "$DATA_FILE.part"
     exit 1
 fi
+mv "$DATA_FILE.part" "$DATA_FILE"
 
 DOWNLOAD_SIZE=$(du -h "$DATA_FILE" | cut -f1)
 echo ""
 echo -e "${GREEN}✓ Download complete${NC} ($DOWNLOAD_SIZE)"
 echo ""
 
-# Build optimized binary cache
-echo -e "${BLUE}Building optimized binary cache...${NC}"
+# Build the embedded binaries. `geodb-cli build` writes
+# data/geodb.<model>.comp.blobs.bin (and a copy into the working directory,
+# which is data/ here as well).
+echo -e "${BLUE}Building optimized binary caches...${NC}"
 echo ""
+cd "$DATA_DIR"
+cargo run --release --manifest-path "$ROOT_DIR/Cargo.toml" -p geodb-cli -- build
+cargo run --release --manifest-path "$ROOT_DIR/Cargo.toml" -p geodb-cli --features legacy_model -- build
 
-# Use geodb-cli to load and build the cache
-# The load process with builder feature will automatically create the binary cache
-cd "$ROOT_DIR"
-cargo run --release -p geodb-cli -- stats
+for f in geodb.flat.comp.blobs.bin geodb.nested.comp.blobs.bin; do
+    if [ ! -f "$DATA_DIR/$f" ]; then
+        echo -e "${YELLOW}Error: $f was not generated${NC}"
+        exit 1
+    fi
+done
+NEW_SIZE=$(du -h "$DATA_DIR/geodb.flat.comp.blobs.bin" | cut -f1)
 
-# The binary cache will be created in crates/geodb-core/data/
-CACHE_FILE=$(find "$DATA_DIR" -name "*.flat.comp.blobs.bin" 2>/dev/null | head -1)
-
-if [ -z "$CACHE_FILE" ]; then
-    echo -e "${YELLOW}Error: Binary cache not found${NC}"
-    echo "Expected: data/countries+states+cities.json.*.flat.comp.blobs.bin"
-    exit 1
-fi
-
-echo "Generated cache: $CACHE_FILE"
-NEW_SIZE=$(du -h "$CACHE_FILE" | cut -f1)
-echo "Size: $NEW_SIZE"
-
-# Copy to FFI data directory
-echo ""
-echo -e "${BLUE}Copying to FFI crate...${NC}"
-mkdir -p "$FFI_DATA_DIR"
-cp "$CACHE_FILE" "$FFI_DATA_DIR/geodb.flat.comp.blobs.bin"
-
+# crates/geodb-ffi/geodb_rs_data is a symlink to crates/geodb-core/data,
+# so the FFI, Python and WASM crates pick the new files up directly.
 echo -e "${GREEN}✓ Embedded data updated${NC}"
 echo ""
 
@@ -90,7 +82,7 @@ echo "======================================================================"
 echo -e "${GREEN}✅ Database Updated Successfully${NC}"
 echo "======================================================================"
 echo ""
-echo "Location: $FFI_DATA_DIR/geodb.flat.comp.blobs.bin"
+echo "Location: $DATA_DIR/geodb.{flat,nested}.comp.blobs.bin"
 echo "Size:     $NEW_SIZE"
 echo "Source:   https://github.com/dr5hn/countries-states-cities-database"
 echo ""

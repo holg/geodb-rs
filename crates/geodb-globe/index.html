@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>GeoDB Globe</title>
+    <link data-trunk rel="rust" data-wasm-opt="z"/>
+    <style>
+        :root {
+            --bg: #020409;
+            --panel: rgba(12, 18, 32, 0.78);
+            --line: rgba(140, 170, 220, 0.16);
+            --text: #e6ecf5;
+            --muted: #8a97ad;
+            --accent: #ffb840;
+            --sel: #ff4fa0;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; height: 100%; overflow: hidden;
+            background: var(--bg); color: var(--text);
+            font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+        #globe {
+            position: fixed; inset: 0; width: 100%; height: 100%;
+            display: block; touch-action: none; cursor: grab;
+        }
+        #globe:active { cursor: grabbing; }
+        #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+        .label {
+            position: absolute; left: 0; top: 0; display: none;
+            margin: -22px 0 0 8px; padding: 1px 6px; border-radius: 4px;
+            background: rgba(4, 8, 16, 0.72); color: #ffe2b0;
+            font-size: 12px; white-space: nowrap; will-change: transform;
+        }
+        #crosshair {
+            position: fixed; left: 50%; top: 50%; width: 18px; height: 18px;
+            margin: -9px 0 0 -9px; pointer-events: none; opacity: 0.55;
+            background:
+                linear-gradient(#fff, #fff) center / 1px 100% no-repeat,
+                linear-gradient(#fff, #fff) center / 100% 1px no-repeat;
+        }
+        #panel {
+            position: fixed; top: 16px; right: 16px; bottom: 16px; width: 340px;
+            display: flex; flex-direction: column; gap: 10px; padding: 14px;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+        }
+        h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: 0.2px; }
+        h1 span { color: var(--accent); }
+        #stats, .muted, small { color: var(--muted); }
+        #stats { font-size: 12px; }
+        .search { position: relative; }
+        #search {
+            width: 100%; padding: 9px 11px; font-size: 15px; color: var(--text);
+            background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line);
+            border-radius: 8px; outline: none;
+        }
+        #search:focus { border-color: var(--accent); }
+        ul { list-style: none; margin: 0; padding: 0; }
+        #suggest {
+            position: absolute; left: 0; right: 0; top: 100%; z-index: 2; margin-top: 4px;
+            background: #0c1322; border-radius: 8px; overflow: hidden;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+        #suggest:empty { display: none; }
+        li {
+            display: flex; align-items: center; gap: 10px; padding: 6px 8px;
+            border-radius: 6px; cursor: pointer;
+        }
+        li:hover { background: rgba(255, 255, 255, 0.07); }
+        li.sel { background: rgba(255, 79, 160, 0.18); box-shadow: inset 3px 0 var(--sel); }
+        .flag { font-size: 20px; width: 24px; text-align: center; }
+        .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .name small, .num small { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        #where { padding: 8px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+        .coord { font-variant-numeric: tabular-nums; color: var(--accent); }
+        #list { flex: 1; overflow-y: auto; margin: 0 -6px; }
+        #hud {
+            position: fixed; left: 16px; bottom: 14px; font-size: 12px;
+            color: var(--muted); font-variant-numeric: tabular-nums; pointer-events: none;
+        }
+        #status {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+            color: var(--muted); font-size: 15px; text-align: center; max-width: 80vw;
+        }
+        #status:empty { display: none; }
+        .hint { font-size: 12px; color: var(--muted); }
+        footer { font-size: 11px; color: var(--muted); }
+        footer a { color: var(--muted); }
+
+        @media (max-width: 720px) {
+            #panel {
+                top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 44vh;
+                padding: 10px;
+            }
+            #hud { top: 10px; bottom: auto; left: 12px; }
+            .hint, footer { display: none; }
+        }
+    </style>
+</head>
+<body>
+<canvas id="globe"></canvas>
+<div id="labels"></div>
+<div id="crosshair"></div>
+<div id="status">Loading database and baking the earth texture…</div>
+<div id="hud"></div>
+
+<aside id="panel">
+    <div>
+        <h1>GeoDB <span>Globe</span></h1>
+        <div id="stats"></div>
+    </div>
+    <div class="search">
+        <input id="search" type="search" placeholder="Search a city, region or country…" autocomplete="off"/>
+        <ul id="suggest"></ul>
+    </div>
+    <div class="hint">Drag to rotate · scroll or pinch to zoom · click to look around a spot</div>
+    <div id="where"><span class="muted">Querying the view centre…</span></div>
+    <ul id="list"></ul>
+    <footer>
+        Rust + wgpu + WebAssembly ·
+        cities: <a href="https://github.com/dr5hn/countries-states-cities-database">dr5hn</a> (CC-BY-4.0) ·
+        coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a>
+    </footer>
+</aside>
+</body>
+</html>

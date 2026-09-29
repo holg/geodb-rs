@@ -3,7 +3,7 @@
 use crate::alias::CityMetaIndex;
 use crate::common::{DbStats, SmartHitGeneric};
 use crate::legacy_model::nested::{City, Country, GeoDb, State};
-use crate::spatial::{decode_geoid, distance_squared, haversine_distance};
+use crate::spatial::{decode_geoid, distance_squared, haversine_distance, RadiusBounds};
 #[allow(unused_imports)]
 use crate::text::{fold_key, match_score};
 use crate::traits::CityContext;
@@ -464,7 +464,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
         }
 
         // 3. Sort by score descending
-        out.sort_by(|a, b| b.score.cmp(&a.score));
+        out.sort_by_key(|h| std::cmp::Reverse(h.score));
         out
     }
     fn resolve_city_alias_with_index<'a>(
@@ -536,15 +536,8 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
     ) -> Vec<CityContext<'_, B>> {
         let (center_lat, center_lng) = decode_geoid(geoid);
 
-        // BBox calc (Same as above)
-        let lat_delta = radius_km / 111.0;
-        let lng_scale = (center_lat.to_radians().cos()).abs().max(0.01);
-        let lng_delta = radius_km / (111.0 * lng_scale);
-
-        let min_lat = center_lat - lat_delta;
-        let max_lat = center_lat + lat_delta;
-        let min_lng = center_lng - lng_delta;
-        let max_lng = center_lng + lng_delta;
+        // Bounding box of the spherical cap (see `spatial::RadiusBounds`).
+        let bounds = RadiusBounds::new(center_lat, center_lng, radius_km);
 
         let mut candidates = Vec::new();
 
@@ -554,7 +547,7 @@ impl<B: GeoBackend> GeoSearch<B> for GeoDb<B> {
                     let lat = city.lat().unwrap_or(0.0);
                     let lng = city.lng().unwrap_or(0.0);
 
-                    if lat >= min_lat && lat <= max_lat && lng >= min_lng && lng <= max_lng {
+                    if bounds.contains(lat, lng) {
                         let dist = haversine_distance(center_lat, center_lng, lat, lng);
                         if dist <= radius_km {
                             candidates.push((dist, city, state, country));

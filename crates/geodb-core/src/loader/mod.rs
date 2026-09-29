@@ -11,7 +11,16 @@ pub use super::{DbStats, DefaultBackend};
 #[cfg(feature = "builder")]
 pub mod builder; // Adds load_via_builder() and load_raw_json() to GeoDb
 static GEO_DB_CACHE: OnceCell<GeoDb<DefaultBackend>> = OnceCell::new();
-pub const DATA_REPO_URL: &str = "https://github.com/dr5hn/countries-states-cities-database/blob/master/json/countries%2Bstates%2Bcities.json.gz";
+/// Upstream dataset (CC-BY-4.0). Upstream publishes the gzipped JSON as a
+/// release asset; `releases/latest/download` always points at the newest one.
+pub const DATA_REPO_URL: &str = "https://github.com/dr5hn/countries-states-cities-database/releases/latest/download/json-countries%2Bstates%2Bcities.json.gz";
+
+/// URL the builder downloads from. It must match what `common_io::open_stream`
+/// reads: gzipped JSON with the `compact` feature, plain JSON (~47 MB) without.
+#[cfg(feature = "compact")]
+pub const DATA_DOWNLOAD_URL: &str = DATA_REPO_URL;
+#[cfg(not(feature = "compact"))]
+pub const DATA_DOWNLOAD_URL: &str = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/json/countries%2Bstates%2Bcities.json";
 impl GeoDb<DefaultBackend> {
     pub fn default_data_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data")

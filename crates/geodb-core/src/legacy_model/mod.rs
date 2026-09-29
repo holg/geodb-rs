@@ -49,7 +49,7 @@
 //! At runtime, `GeoDb::<DefaultBackend>::load()` reads that file and builds a
 //! binary cache alongside it. If you replace or update the dataset, ensure the
 //! JSON structure matches the upstream file format. You can retrieve the
-//! canonical URL we rely on via `GeoDb::<DefaultBackend>::get_3rd_party_data_url()`.
+//! canonical URL we rely on via `GeoDb::<DefaultBackend>::get_data_url()`.
 //! Please keep the upstream CC‑BY‑4.0 attribution when distributing data.
 pub mod nested;
 // pub mod region;

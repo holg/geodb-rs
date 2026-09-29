@@ -174,7 +174,9 @@ pub fn from_raw<B: GeoBackend>(
                     } else {
                         None
                     },
-                    population: city_raw.id.map(|p| p as u32),
+                    // The upstream dataset has no city population (the old code stored
+                    // the source row id here by mistake).
+                    population: None,
                     timezone: city_raw.timezone.map(|s| B::str_from(&s)),
                     geoid,
                 });

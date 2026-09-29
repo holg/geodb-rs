@@ -11,12 +11,12 @@ use crate::error::{GeoError, Result};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::time::Duration;
 
 #[cfg(feature = "compact")]
 use flate2::{write::GzEncoder, Compression};
 
-// Raw download URL for the dataset (GitHub raw content)
-const DATA_DOWNLOAD_URL: &str = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/master/json/countries%2Bstates%2Bcities.json.gz";
+use super::DATA_DOWNLOAD_URL;
 
 // Extends GeoDb with Builder/Source capabilities
 impl GeoDb<DefaultBackend> {
@@ -173,31 +173,73 @@ impl GeoDb<DefaultBackend> {
 
     /// Downloads the dataset from GitHub to the specified path
     fn download_dataset(dest_path: &Path) -> Result<()> {
+        let fail =
+            |msg: String| GeoError::InvalidData(format!("Failed to download dataset: {msg}"));
+
         // Ensure parent directory exists
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent).map_err(GeoError::Io)?;
         }
 
-        // Download using reqwest (blocking)
-        let response = reqwest::blocking::get(DATA_DOWNLOAD_URL)
-            .map_err(|e| GeoError::InvalidData(format!("Failed to download dataset: {}", e)))?;
+        // Download using reqwest (blocking). The default 30 s total timeout is
+        // too short for the uncompressed dataset on slow links.
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(600))
+            .build()
+            .map_err(|e| fail(e.to_string()))?;
+        let mut response = client
+            .get(DATA_DOWNLOAD_URL)
+            .send()
+            .map_err(|e| fail(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(GeoError::InvalidData(format!(
-                "Failed to download dataset: HTTP {}",
+            return Err(fail(format!(
+                "HTTP {} from {DATA_DOWNLOAD_URL}",
                 response.status()
             )));
         }
 
-        // Write to file
-        let mut file = File::create(dest_path).map_err(GeoError::Io)?;
-        let bytes = response
-            .bytes()
-            .map_err(|e| GeoError::InvalidData(format!("Failed to read response: {}", e)))?;
+        // Stream into a temporary file and only move it into place when
+        // complete, so an interrupted download never leaves a truncated dataset.
+        let mut part_name = dest_path.as_os_str().to_owned();
+        part_name.push(".part");
+        let part_path = std::path::PathBuf::from(part_name);
+        let result = (|| -> Result<u64> {
+            let mut file = BufWriter::new(File::create(&part_path).map_err(GeoError::Io)?);
+            let bytes = response
+                .copy_to(&mut file)
+                .map_err(|e| fail(format!("reading response: {e}")))?;
+            file.flush().map_err(GeoError::Io)?;
+            Ok(bytes)
+        })();
+        let bytes = match result {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = fs::remove_file(&part_path);
+                return Err(e);
+            }
+        };
 
-        file.write_all(&bytes).map_err(GeoError::Io)?;
+        // The reader gunzips with `compact`; catch an HTML error page early.
+        #[cfg(feature = "compact")]
+        {
+            use std::io::Read;
+            let mut magic = [0u8; 2];
+            let is_gzip = File::open(&part_path)
+                .and_then(|mut f| f.read_exact(&mut magic))
+                .is_ok()
+                && magic == [0x1f, 0x8b];
+            if !is_gzip {
+                let _ = fs::remove_file(&part_path);
+                return Err(fail(format!(
+                    "{DATA_DOWNLOAD_URL} did not return gzip data"
+                )));
+            }
+        }
 
-        eprintln!("Downloaded {} bytes to {:?}", bytes.len(), dest_path);
+        fs::rename(&part_path, dest_path).map_err(GeoError::Io)?;
+        eprintln!("Downloaded {bytes} bytes to {:?}", dest_path);
         Ok(())
     }
 }

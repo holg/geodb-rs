@@ -64,7 +64,7 @@ https://github.com/dr5hn/countries-states-cities-database
 >
 > geodb-core uses the upstream dataset from the dr5hn/countries-states-cities-database repository:
 >
-> https://github.com/dr5hn/countries-states-cities-database/blob/master/json/countries%2Bstates%2Bcities.json.gz
+> https://github.com/dr5hn/countries-states-cities-database/releases/latest/download/json-countries%2Bstates%2Bcities.json.gz
 >
 > **Automatic data download and caching:**
 > - The published crate does NOT include data files (keeps package size under 1MB)

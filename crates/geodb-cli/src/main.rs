@@ -267,6 +267,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        // The query builder only exists in the flat model.
+        #[cfg(feature = "legacy_model")]
+        Commands::Query { .. } => {
+            eprintln!("`query` needs the flat model (build without the `legacy_model` feature).");
+        }
+        #[cfg(not(feature = "legacy_model"))]
         Commands::Query {
             city,
             region,

@@ -79,7 +79,9 @@ pub fn raw_to_nested<B: GeoBackend>(
                         .and_then(|s| s.parse().ok())
                         .map(B::float_from),
                     timezone: city_raw.timezone.map(|s| B::str_from(&s)),
-                    population: city_raw.id.map(|id| id as u32),
+                    // The upstream dataset has no city population (the old code stored
+                    // the source row id here by mistake).
+                    population: None,
                     aliases,
                     regions,
                 });
