@@ -9,6 +9,7 @@ mod display;
 mod net;
 mod touch;
 
+use core::fmt::Write;
 use cortex_m::peripheral::DWT;
 use defmt::{error, info, warn};
 use embassy_executor::Spawner;
@@ -249,7 +250,9 @@ async fn main(spawner: Spawner) {
     spawner.spawn(defmt::unwrap!(net::net_task(runner)));
     info!("ethernet: started, waiting for a cable and DHCP");
     let mut udp = net::open_socket(stack);
-    let mut announced = false;
+    let mut status = Buf::new();
+    let _ = status.write_str("net: no cable");
+    let mut net_state = 0u8;
 
     let mut extras = [ui::Extra::empty(); 40];
     let mut extra_next = 0usize;
@@ -283,7 +286,17 @@ async fn main(spawner: Spawner) {
     let mut spin = ui::Spin::new();
     let mut front = 0usize;
     draw_and_show(
-        &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, false, 0, &extras,
+        &mut disp,
+        &mut front,
+        &img,
+        view,
+        spin,
+        &mut lut,
+        &mut red,
+        false,
+        0,
+        status.as_str(),
+        &extras,
     )
     .await;
     green.set_high();
@@ -311,6 +324,40 @@ async fn main(spawner: Spawner) {
         }
         let dt = (stamp.elapsed().as_micros() as f32 / 1.0e6).min(0.25);
         stamp = Instant::now();
+        // the network state: no link / waiting for DHCP / up with an address
+        let state = match &iface {
+            Some(i) if i.is_config_up() => 2,
+            Some(i) if i.is_link_up() => 1,
+            _ => 0,
+        };
+        if state != net_state {
+            net_state = state;
+            status.clear();
+            match state {
+                2 => {
+                    let ip = iface
+                        .as_ref()
+                        .and_then(|i| i.ip_addrs().first().map(|a| a.cidr));
+                    match ip {
+                        Some(cidr) => {
+                            let _ = write!(status, "net: {}", cidr);
+                        }
+                        None => {
+                            let _ = status.write_str("net: up");
+                        }
+                    }
+                }
+                1 => {
+                    let _ = status.write_str("net: link, waiting for DHCP");
+                }
+                _ => {
+                    let _ = status.write_str("net: no cable");
+                }
+            }
+            info!("{}", status.as_str());
+            netlog(udp.as_mut(), state == 2, status.as_str()).await;
+            full = 2;
+        }
         let now = touch.as_mut().and_then(|t| t.read());
         let mut redraw = spin.on;
         match (grab, now) {
@@ -383,11 +430,7 @@ async fn main(spawner: Spawner) {
             let key = (view.lat.to_bits(), view.lon.to_bits(), view.zoom.to_bits());
             if key != resolved_for && Instant::now() >= host_retry {
                 resolved_for = key;
-                let net_up = iface.as_ref().is_some_and(|i| i.is_config_up());
-                if net_up && !announced {
-                    announced = true;
-                    info!("ethernet: up");
-                }
+                let net_up = net_state == 2;
                 let mut link = match (udp.as_mut(), uart.as_mut()) {
                     (Some(u), _) if net_up => Some(Link::Udp(u)),
                     (_, Some(u)) => Some(Link::Serial(u)),
@@ -415,7 +458,17 @@ async fn main(spawner: Spawner) {
             }
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
             draw_ms = draw_and_show(
-                &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, quick, fps, &extras,
+                &mut disp,
+                &mut front,
+                &img,
+                view,
+                spin,
+                &mut lut,
+                &mut red,
+                quick,
+                fps,
+                status.as_str(),
+                &extras,
             )
             .await;
             if quick {
@@ -427,6 +480,9 @@ async fn main(spawner: Spawner) {
             if frames == 30 {
                 let ms = since.elapsed().as_millis() as u32;
                 info!("moving: {} ms per frame ({} ms drawing)", ms / 30, draw_ms);
+                let mut line = Buf::new();
+                let _ = write!(line, "moving: {} fps, {} ms drawing", fps, draw_ms);
+                netlog(udp.as_mut(), net_state == 2, line.as_str()).await;
                 frames = 0;
                 since = Instant::now();
             }
@@ -457,6 +513,7 @@ async fn draw_and_show(
     red: &mut Output<'static>,
     quick: bool,
     fps: u32,
+    status: &str,
     extras: &[ui::Extra],
 ) -> u32 {
     red.set_high();
@@ -466,6 +523,7 @@ async fn draw_and_show(
         let mut fb = disp.fb[back].fb();
         ui::draw_moving(&mut fb, img, view, &mut lut.1);
         ui::draw_fps(&mut fb, fps);
+        ui::draw_status(&mut fb, status);
     } else {
         ui::draw(
             &mut disp.fb[back].fb(),
@@ -498,6 +556,17 @@ struct Buf {
 }
 
 impl Buf {
+    const fn new() -> Buf {
+        Buf {
+            bytes: [0; 40],
+            len: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
     fn as_str(&self) -> &str {
         core::str::from_utf8(&self.bytes[..self.len]).unwrap_or("")
     }
@@ -525,7 +594,6 @@ async fn resolve(
     extras: &mut [ui::Extra],
     next: &mut usize,
 ) -> Option<bool> {
-    use core::fmt::Write;
     let mut hits = [Hit { index: 0, km: 0.0 }; ui::LIST];
     let n = img.nearest(view.lat, view.lon, &mut hits);
     let mut changed = false;
@@ -601,5 +669,20 @@ impl Link<'_, '_> {
                     .ok()
             }
         }
+    }
+}
+
+/// A log line for the host (the script prints lines that start with `#`), by broadcast.
+async fn netlog(udp: Option<&mut embassy_net::udp::UdpSocket<'static>>, up: bool, text: &str) {
+    if let (Some(socket), true) = (udp, up) {
+        let mut line = [0u8; 64];
+        let n = text.len().min(62);
+        line[0] = b'#';
+        line[1..=n].copy_from_slice(&text.as_bytes()[..n]);
+        let _ = with_timeout(
+            Duration::from_millis(50),
+            socket.send_to(&line[..=n], net::BROADCAST),
+        )
+        .await;
     }
 }

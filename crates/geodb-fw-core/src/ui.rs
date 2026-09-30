@@ -172,6 +172,12 @@ pub fn draw_moving(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, lut: &mut Glo
     true
 }
 
+/// The network line, bottom of the side panel (drawn over whatever is there).
+pub fn draw_status(fb: &mut Fb<'_>, text: &str) {
+    fb.rect(500, 468, 292, 10, BG);
+    render::text(fb, 500, 469, text, 1, DIM);
+}
+
 /// The frame rate, top right (over the side panel, until the next full draw).
 pub fn draw_fps(fb: &mut Fb<'_>, fps: u32) {
     let mut line = Line::new();

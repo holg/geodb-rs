@@ -77,6 +77,9 @@ def lookup(grid, lat, lon):
 def answer(grid, line):
     """The reply line for one question line, or None when it is not a question."""
     line = line.strip()
+    if line.startswith("#"):  # a log line from the board
+        print(f"board: {line[1:]}", flush=True)
+        return None
     if not line.startswith("?"):
         return None
     try:
