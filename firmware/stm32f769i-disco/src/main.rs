@@ -283,7 +283,7 @@ async fn main(spawner: Spawner) {
     let mut spin = ui::Spin::new();
     let mut front = 0usize;
     draw_and_show(
-        &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, false, &extras,
+        &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, false, 0, &extras,
     )
     .await;
     green.set_high();
@@ -298,6 +298,8 @@ async fn main(spawner: Spawner) {
     let mut stamp = Instant::now();
     let mut frames = 0u32;
     let mut draw_ms = 0u32;
+    let mut fps = 0u32;
+    let mut last_frame = Instant::now();
     // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
     let mut full = 0u8;
     let mut dirty = false; // quick frames left the panel and the dots stale
@@ -404,9 +406,16 @@ async fn main(spawner: Spawner) {
             redraw = true;
         }
         if redraw {
+            // a smoothed frame rate from the time between frames
+            let gap = last_frame.elapsed().as_micros() as u32;
+            last_frame = Instant::now();
+            if motion && gap > 0 {
+                let now = 1_000_000 / gap;
+                fps = if fps == 0 { now } else { (fps * 3 + now) / 4 };
+            }
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
             draw_ms = draw_and_show(
-                &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, quick, &extras,
+                &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, quick, fps, &extras,
             )
             .await;
             if quick {
@@ -423,6 +432,7 @@ async fn main(spawner: Spawner) {
             }
         } else {
             frames = 0;
+            fps = 0;
             since = Instant::now();
         }
     }
@@ -446,13 +456,16 @@ async fn draw_and_show(
     lut: &mut (GlobeLut<'_>, GlobeLut<'_>),
     red: &mut Output<'static>,
     quick: bool,
+    fps: u32,
     extras: &[ui::Extra],
 ) -> u32 {
     red.set_high();
     let back = 1 - *front;
     let cycles = DWT::cycle_count();
     if quick {
-        ui::draw_moving(&mut disp.fb[back].fb(), img, view, &mut lut.1);
+        let mut fb = disp.fb[back].fb();
+        ui::draw_moving(&mut fb, img, view, &mut lut.1);
+        ui::draw_fps(&mut fb, fps);
     } else {
         ui::draw(
             &mut disp.fb[back].fb(),

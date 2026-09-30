@@ -172,6 +172,15 @@ pub fn draw_moving(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, lut: &mut Glo
     true
 }
 
+/// The frame rate, top right (over the side panel, until the next full draw).
+pub fn draw_fps(fb: &mut Fb<'_>, fps: u32) {
+    let mut line = Line::new();
+    let _ = write!(line, "{fps} fps");
+    fb.rect(700, 10, 92, 24, BG);
+    let wd = render::text_width(line.as_str(), 2);
+    render::text(fb, 792 - wd, 14, line.as_str(), 2, ACCENT);
+}
+
 /// Draws everything for the globe centred on `view`. Returns how many
 /// nearest cities are listed.
 pub fn draw(
