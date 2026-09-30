@@ -75,3 +75,18 @@ the I- and D-cache must be on; `libm`'s sinf / cosf / atan2f compute in software
 double precision on this single-precision-FPU target, so `fmath` has f32-only
 versions; the globe is computed per 2 x 2 pixel block (the texture is 256 x 128);
 and a wide view neither counts nor draws its 80,000 dots.
+
+## Names from the host
+
+Flash holds names for about a third of the cities (by population). For the
+others the board asks the host over the ST-LINK's virtual COM port (USART1,
+115200 8N1): `?LAT,LON` (degrees x 1e5) and the script answers
+`=LAT,LON|Name|State, Country` from the full dataset. Run it while the board
+runs (it needs `pyserial`):
+
+    python3 firmware/stm32f769i-disco/scripts/serve_names.py
+
+The board asks when the globe comes to rest, for the listed cities without a
+name, and shows the answers in the list (the nearest city's state and country in
+the footer). Without the script the list shows `(unnamed)` and the board asks
+again only every 5 s.

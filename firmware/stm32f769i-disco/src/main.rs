@@ -17,10 +17,11 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::ltdc::{self, Ltdc, LtdcLayer};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{bind_interrupts, peripherals, Config};
-use embassy_time::{Instant, Timer};
+use embassy_stm32::usart::{self, Uart};
+use embassy_stm32::{bind_interrupts, dma, peripherals, Config};
+use embassy_time::{with_timeout, Duration, Instant, Timer};
 use geodb_fw_core::render::{GlobeLut, LutCell, View};
-use geodb_fw_core::{ui, FwImage};
+use geodb_fw_core::{geo, ui, FwImage, Hit};
 use panic_probe as _;
 use {defmt_rtt as _, embassy_stm32 as _};
 
@@ -31,6 +32,9 @@ static IMAGE: &[u8] = include_bytes!("../geodb.fw");
 bind_interrupts!(struct Irqs {
     LTDC => ltdc::InterruptHandler<peripherals::LTDC>;
     DSI => dsihost::InterruptHandler<peripherals::DSIHOST>;
+    USART1 => usart::InterruptHandler<peripherals::USART1>;
+    DMA2_STREAM7 => dma::InterruptHandler<peripherals::DMA2_CH7>;
+    DMA2_STREAM5 => dma::InterruptHandler<peripherals::DMA2_CH5>;
 });
 
 #[embassy_executor::main]
@@ -199,6 +203,23 @@ async fn main(_spawner: Spawner) {
     i2c_cfg.frequency = Hertz(100_000);
     let mut touch = touch::Touch::new(I2c::new_blocking(p.I2C4, p.PD12, p.PB7, i2c_cfg));
 
+    // ---- the host link: the ST-LINK's virtual COM port (USART1, PA9/PA10) asks a script on the
+    // host (scripts/serve_names.py) for the names the flash does not hold ----
+    let mut uart = Uart::new(
+        p.USART1,
+        p.PA9,
+        p.PA10,
+        p.DMA2_CH7,
+        p.DMA2_CH5,
+        Irqs,
+        usart::Config::default(), // 115200 8N1
+    )
+    .ok();
+    let mut extras = [ui::Extra::empty(); 40];
+    let mut extra_next = 0usize;
+    let mut resolved_for = (0u32, 0u32, 0u32);
+    let mut host_retry = Instant::now();
+
     // ---- the globe table (per tilt/zoom, so a spin frame is only texture sampling) lives in SDRAM
     // behind the two framebuffers ----
     let cells: &'static mut [LutCell] = unsafe {
@@ -215,7 +236,7 @@ async fn main(_spawner: Spawner) {
     let mut spin = ui::Spin::new();
     let mut front = 0usize;
     draw_and_show(
-        &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, false,
+        &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, false, &extras,
     )
     .await;
     green.set_high();
@@ -309,13 +330,26 @@ async fn main(_spawner: Spawner) {
             dirty = false;
             full = 2;
         }
+        if !motion && full == 0 && grab.is_none() {
+            let key = (view.lat.to_bits(), view.lon.to_bits(), view.zoom.to_bits());
+            if key != resolved_for && Instant::now() >= host_retry {
+                resolved_for = key;
+                if let Some(uart) = uart.as_mut() {
+                    match resolve(uart, &img, view, &mut extras, &mut extra_next).await {
+                        Some(true) => full = 2,
+                        Some(false) => {}
+                        None => host_retry = Instant::now() + Duration::from_secs(5),
+                    }
+                }
+            }
+        }
         if full > 0 {
             redraw = true;
         }
         if redraw {
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
             draw_ms = draw_and_show(
-                &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, quick,
+                &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, quick, &extras,
             )
             .await;
             if quick {
@@ -345,6 +379,7 @@ struct Grab {
 }
 
 /// Draws the screen into the back buffer, then makes it the one on the panel.
+#[allow(clippy::too_many_arguments)]
 async fn draw_and_show(
     disp: &mut display::Display,
     front: &mut usize,
@@ -354,6 +389,7 @@ async fn draw_and_show(
     lut: &mut GlobeLut<'_>,
     red: &mut Output<'static>,
     quick: bool,
+    extras: &[ui::Extra],
 ) -> u32 {
     red.set_high();
     let back = 1 - *front;
@@ -361,7 +397,7 @@ async fn draw_and_show(
     if quick {
         ui::draw_moving(&mut disp.fb[back].fb(), img, view, lut);
     } else {
-        ui::draw(&mut disp.fb[back].fb(), img, view, spin, Some(lut));
+        ui::draw(&mut disp.fb[back].fb(), img, view, spin, Some(lut), extras);
     }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;
     let ok = disp
@@ -376,4 +412,85 @@ async fn draw_and_show(
     }
     red.set_low();
     ms
+}
+
+/// Small fixed text buffer for `write!`.
+struct Buf {
+    bytes: [u8; 40],
+    len: usize,
+}
+
+impl Buf {
+    fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len]).unwrap_or("")
+    }
+}
+
+impl core::fmt::Write for Buf {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let b = s.as_bytes();
+        let end = self.len + b.len();
+        if end > self.bytes.len() {
+            return Err(core::fmt::Error);
+        }
+        self.bytes[self.len..end].copy_from_slice(b);
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// Asks the host for the names of the nearest cities the flash has no name for. Returns whether
+/// anything new arrived, or `None` when the host did not answer (not running).
+async fn resolve(
+    uart: &mut Uart<'static, embassy_stm32::mode::Async>,
+    img: &FwImage<'_>,
+    view: View,
+    extras: &mut [ui::Extra],
+    next: &mut usize,
+) -> Option<bool> {
+    use core::fmt::Write;
+    let mut hits = [Hit { index: 0, km: 0.0 }; ui::LIST];
+    let n = img.nearest(view.lat, view.lon, &mut hits);
+    let mut changed = false;
+    for hit in &hits[..n] {
+        let idx = hit.index;
+        if img.name(idx as usize).is_some() || extras.iter().any(|e| e.index == idx) {
+            continue;
+        }
+        let (la, lo) = geo::to_deg(img.geoid(idx as usize));
+        let (la, lo) = ((la * 1e5) as i32, (lo * 1e5) as i32);
+        let mut key = Buf {
+            bytes: [0; 40],
+            len: 0,
+        };
+        let _ = write!(key, "{la},{lo}");
+        let mut ask = Buf {
+            bytes: [0; 40],
+            len: 0,
+        };
+        let _ = write!(ask, "?{la},{lo}\n");
+        uart.write(&ask.bytes[..ask.len]).await.ok()?;
+        let mut reply = [0u8; 96];
+        let got = with_timeout(Duration::from_millis(250), uart.read_until_idle(&mut reply))
+            .await
+            .ok()?
+            .ok()?;
+        let Ok(text) = core::str::from_utf8(&reply[..got]) else {
+            continue;
+        };
+        let text = text.trim();
+        let Some(body) = text.strip_prefix('=') else {
+            continue;
+        };
+        let mut parts = body.splitn(3, '|');
+        if parts.next() != Some(key.as_str()) {
+            continue; // a late answer to an older question
+        }
+        let (name, detail) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        extras[*next % extras.len()].set(idx, name, detail);
+        *next += 1;
+        changed = true;
+        info!("host: city {} is {}", idx, name);
+    }
+    Some(changed)
 }

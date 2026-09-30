@@ -94,6 +94,62 @@ pub fn zoom_for(km: f32) -> f32 {
     (1.0 / sinf(span)).clamp(1.0, 4000.0)
 }
 
+/// What the host told the board about a city that has no name in flash.
+#[derive(Clone, Copy)]
+pub struct Extra {
+    /// City index in the image.
+    pub index: u32,
+    pub name: [u8; 24],
+    pub name_len: u8,
+    pub detail: [u8; 40],
+    pub detail_len: u8,
+}
+
+impl Extra {
+    pub const fn empty() -> Extra {
+        Extra {
+            index: u32::MAX,
+            name: [0; 24],
+            name_len: 0,
+            detail: [0; 40],
+            detail_len: 0,
+        }
+    }
+
+    /// ASCII only: anything else is dropped.
+    pub fn set(&mut self, index: u32, name: &str, detail: &str) {
+        fn put(dst: &mut [u8], s: &str) -> u8 {
+            let mut n = 0;
+            for b in s.bytes().filter(|b| (0x20..0x7f).contains(b)).take(dst.len()) {
+                dst[n] = b;
+                n += 1;
+            }
+            n as u8
+        }
+        self.index = index;
+        self.name_len = put(&mut self.name, name);
+        self.detail_len = put(&mut self.detail, detail);
+    }
+
+    pub fn name(&self) -> &str {
+        core::str::from_utf8(&self.name[..usize::from(self.name_len)]).unwrap_or("")
+    }
+
+    pub fn detail(&self) -> &str {
+        core::str::from_utf8(&self.detail[..usize::from(self.detail_len)]).unwrap_or("")
+    }
+}
+
+/// The name of a city: from the image, else from what the host supplied.
+pub fn name_of<'a>(img: &'a FwImage<'_>, extras: &'a [Extra], idx: usize) -> Option<&'a str> {
+    img.name(idx).or_else(|| {
+        extras
+            .iter()
+            .find(|e| e.index as usize == idx && e.name_len > 0)
+            .map(Extra::name)
+    })
+}
+
 /// Redraws only the globe (from the table) over an earlier [`draw`] of the
 /// same buffer: the quick frame of a spinning or dragged globe. The side
 /// panel and the city dots keep their old state until the next full draw.
@@ -117,6 +173,7 @@ pub fn draw(
     view: View,
     spin: Spin,
     lut: Option<&mut GlobeLut<'_>>,
+    extras: &[Extra],
 ) -> usize {
     fb.fill(BG);
     let r = GLOBE_R as f32;
@@ -197,7 +254,7 @@ pub fn draw(
             let mut tag = Line::new();
             let _ = write!(tag, "{}", (i + 1) % 10);
             if scope {
-                if let Some(name) = img.name(idx) {
+                if let Some(name) = name_of(img, extras, idx) {
                     let _ = write!(tag, " {}", truncate(name, 14));
                 }
             }
@@ -252,7 +309,7 @@ pub fn draw(
         let y = 130 + i as i32 * 24;
         let idx = hit.index as usize;
         let mut name = Line::new();
-        let _ = match img.name(idx) {
+        let _ = match name_of(img, extras, idx) {
             Some(s) => write!(name, "{}", truncate(s, 11)),
             None => write!(name, "(unnamed)"),
         };
@@ -291,7 +348,12 @@ pub fn draw(
         let tw = render::text_width(label, 2);
         render::text(fb, x + (w - tw) / 2, y + (h - 16) / 2, label, 2, TEXT);
     }
-    render::text(fb, x0, 456, "km, positions within 300 m", 1, DIM);
+    // The nearest city's detail from the host (state, country), else the unit note.
+    let detail = nearest[..n]
+        .first()
+        .and_then(|h| extras.iter().find(|e| e.index == h.index && e.detail_len > 0))
+        .map_or("km, positions within 300 m", Extra::detail);
+    render::text(fb, x0, 456, detail, 1, DIM);
     n
 }
 
