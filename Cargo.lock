@@ -1200,7 +1200,6 @@ dependencies = [
  "deunicode",
  "font8x8",
  "geodb-core",
- "libm",
  "png",
 ]
 

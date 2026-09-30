@@ -1,9 +1,11 @@
 //! A software globe into an RGB565 framebuffer, and the few drawing
-//! primitives the firmware UI needs. Everything is f32 and uses `libm`, so
+//! primitives the firmware UI needs. Everything is f32 (`fmath`), so
 //! the host preview and the board draw the same pixels.
 
+use crate::fmath::{
+    asin as asinf, atan2 as atan2f, cos as cosf, floor as floorf, sin as sinf, sqrt as sqrtf,
+};
 use crate::geo::DEG_TO_RAD;
-use libm::{asinf, atan2f, cosf, floorf, sinf, sqrtf};
 
 /// Row-major RGB565 pixels (native u16).
 pub struct Fb<'a> {

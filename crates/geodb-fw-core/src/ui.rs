@@ -2,12 +2,12 @@
 //! runs on the board and in the host preview, so what the preview shows is
 //! what the LCD shows.
 
+use crate::fmath::{asin as asinf, atan2 as atan2f, cos as cosf, sin as sinf};
 use crate::geo::{DEG_TO_RAD, EARTH_RADIUS_KM};
 use crate::image::FwImage;
 use crate::query::Hit;
 use crate::render::{self, rgb565, Fb, Texture, View};
 use core::fmt::Write;
-use libm::{asinf, atan2f, cosf, sinf};
 
 pub const WIDTH: usize = 800;
 pub const HEIGHT: usize = 480;
@@ -127,11 +127,11 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
     // Every city in reach, as a dot (a pixel on the globe, larger on the scope).
     let query_km = visible_km * 0.75;
     let mut count = 0usize;
-    img.radius(view.lat, view.lon, query_km, |_| count += 1);
+    img.radius_index(view.lat, view.lon, query_km, |_, _| count += 1);
     if count <= MAX_DOTS {
         let size = if scope { 1 } else { 0 };
-        img.radius(view.lat, view.lon, query_km, |hit| {
-            let (la, lo) = crate::geo::to_deg(img.geoid(hit.index as usize));
+        img.radius_index(view.lat, view.lon, query_km, |index, _| {
+            let (la, lo) = crate::geo::to_deg(img.geoid(index as usize));
             if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
                 render::dot(fb, x, y, size, DOT);
             }

@@ -1,0 +1,9 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# The chip of the STM32F769I-DISCO as `probe-rs chip list` names it.
+runner = "probe-rs run --chip STM32F769NI"
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[env]
+DEFMT_LOG = "info"

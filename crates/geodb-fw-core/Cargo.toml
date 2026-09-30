@@ -14,7 +14,6 @@ std = []
 
 [dependencies]
 font8x8 = { version = "0.3", default-features = false }
-libm = "0.2"
 
 [dev-dependencies]
 deunicode = { workspace = true }

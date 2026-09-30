@@ -3,7 +3,7 @@
 //! 64-bit geoid. Cells are 180/65536 degrees of latitude and 360/65536 of
 //! longitude; a city sits at its cell centre.
 
-use libm::{asinf, cosf, sinf, sqrtf};
+use crate::fmath::{asin as asinf, cos as cosf, sin as sinf, sqrt as sqrtf};
 
 pub const EARTH_RADIUS_KM: f32 = 6371.0;
 pub const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
@@ -229,7 +229,7 @@ mod tests {
                 let (la, lo) = (lat * DEG_TO_RAD, lon * DEG_TO_RAD);
                 let plat = asinf(sinf(la) * cosf(dd) + cosf(la) * sinf(dd) * cosf(brg));
                 let plon = lo
-                    + libm::atan2f(
+                    + crate::fmath::atan2(
                         sinf(brg) * sinf(dd) * cosf(la),
                         cosf(dd) - sinf(la) * sinf(plat),
                     );

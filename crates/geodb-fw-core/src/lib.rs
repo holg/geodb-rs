@@ -19,6 +19,7 @@ extern crate alloc;
 
 #[cfg(any(feature = "std", test))]
 pub mod build;
+pub mod fmath;
 pub mod geo;
 pub mod image;
 pub mod query;

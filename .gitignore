@@ -175,3 +175,5 @@ crates/geodb-core/data/json-cities.json.gz
 firmware/*/geodb.fw
 firmware/*/preview*.png
 firmware/*/target/
+
+firmware/*/backup/
