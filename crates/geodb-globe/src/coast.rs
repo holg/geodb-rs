@@ -157,8 +157,8 @@ pub fn rasterize(rings: &[Ring], w: usize, h: usize) -> Vec<f32> {
     for (r, xs) in crossings.iter_mut().enumerate() {
         xs.sort_unstable_by(f32::total_cmp);
         let out = &mut cov[(r / SUB) * w..(r / SUB + 1) * w];
-        for span in xs.chunks_exact(2) {
-            let (a, b) = (span[0].clamp(0.0, w as f32), span[1].clamp(0.0, w as f32));
+        for &[a, b] in xs.as_chunks::<2>().0 {
+            let (a, b) = (a.clamp(0.0, w as f32), b.clamp(0.0, w as f32));
             if b <= a {
                 continue;
             }
