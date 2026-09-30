@@ -14,7 +14,8 @@ pub type Device = Ethernet<'static, ETH, GenericPhy<Sma<'static, ETH_SMA>>>;
 #[link_section = ".ethbuf"]
 static mut PACKETS: MaybeUninit<PacketQueue<4, 4>> = MaybeUninit::uninit();
 
-/// The stack's storage holds the packet buffers the Ethernet DMA reads and writes: same window.
+/// The stack's storage: same window. The frames themselves live in xarxa-driver's packet pool,
+/// in the DTCM (see `ethbuf.x`).
 #[link_section = ".ethbuf"]
 static mut STORAGE: MaybeUninit<StackStorage<'static>> = MaybeUninit::uninit();
 pub static DEVICE: StaticCell<Device> = StaticCell::new();

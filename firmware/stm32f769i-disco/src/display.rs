@@ -66,8 +66,9 @@ fn sdram_mpu() {
         // Region 1: the Ethernet DMA buffers (64 KB of SRAM1, see ethbuf.x), non-cacheable too.
         mpu.rnr.write(1);
         mpu.rbar.write(ETH_BUF_ADDR as u32);
-        // Not shareable: the bss lives here too, and LDREX/STREX (the executor's atomics) on
-        // shareable memory needs a global exclusive monitor the F7 does not have (it faults).
+        // Not shareable. Nothing atomic may live here all the same: LDREX/STREX on non-cacheable
+        // memory fail on the F7 (no global exclusive monitor), so .bss and the packet pool stay
+        // in the DTCM.
         mpu.rasr
             .write((1 << 28) | (0b011 << 24) | (0b001 << 19) | (15 << 1) | 1);
         mpu.ctrl.write((1 << 2) | 1); // PRIVDEFENA | ENABLE
