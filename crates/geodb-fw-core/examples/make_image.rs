@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 /// Flash left for the image on a 2 MB part, after the program and its
 /// slack: names are added by population until this is reached.
-const BUDGET: usize = 1_500_000;
+const BUDGET: usize = 1_850_000;
 const NAME_LEN: usize = 22;
 
 fn ascii(s: &str) -> String {

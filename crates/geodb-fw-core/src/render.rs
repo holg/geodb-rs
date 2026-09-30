@@ -358,6 +358,23 @@ impl<'a> GlobeLut<'a> {
                     out[k] = (((rgb[k] * shade) >> 7) + ((GLOW[k] * rim) >> 8)).min(255) as u8;
                 }
                 let color = rgb565(out[0], out[1], out[2]);
+                // A block wholly inside the disc (and the screen): whole row runs.
+                let (fx, fy) = (
+                    (bx - cx).abs().max((bx + step - 1 - cx).abs()),
+                    (by - cy).abs().max((by + step - 1 - cy).abs()),
+                );
+                if fx * fx + fy * fy <= radius * radius
+                    && bx >= 0
+                    && by >= 0
+                    && (bx + step) as usize <= fb.w
+                    && (by + step) as usize <= fb.h
+                {
+                    for y in by..by + step {
+                        let at = y as usize * fb.w + bx as usize;
+                        fb.px[at..at + step as usize].fill(color);
+                    }
+                    continue;
+                }
                 for y in by..by + step {
                     for x in bx..bx + step {
                         let (dx, dy) = (x - cx, y - cy);

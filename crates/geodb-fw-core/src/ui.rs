@@ -82,7 +82,7 @@ const RINGS_KM: [f32; 12] = [
     0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0,
 ];
 /// From this zoom on the coarse texture says nothing: the scope view.
-const SCOPE_ZOOM: f32 = 12.0;
+pub const SCOPE_ZOOM: f32 = 12.0;
 /// More dots than this would only be a blob.
 const MAX_DOTS: usize = 60_000;
 /// Wider than this (query radius, km) no dots are drawn or counted.
@@ -92,6 +92,21 @@ const DOTS_MAX_KM: f32 = 2500.0;
 pub fn zoom_for(km: f32) -> f32 {
     let span = (km / EARTH_RADIUS_KM).clamp(1e-5, 1.5);
     (1.0 / sinf(span)).clamp(1.0, 4000.0)
+}
+
+/// Redraws only the globe (from the table) over an earlier [`draw`] of the
+/// same buffer: the quick frame of a spinning or dragged globe. The side
+/// panel and the city dots keep their old state until the next full draw.
+/// Returns false (and draws nothing) on the scope view, which needs [`draw`].
+pub fn draw_moving(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, lut: &mut GlobeLut<'_>) -> bool {
+    if view.zoom >= SCOPE_ZOOM {
+        return false;
+    }
+    let (w, h, px) = img.texture();
+    let tex = Texture { w, h, px };
+    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, GLOBE_STEP);
+    render::ring(fb, GLOBE_X, GLOBE_Y, 6, TEXT);
+    true
 }
 
 /// Draws everything for the globe centred on `view`. Returns how many

@@ -214,7 +214,10 @@ async fn main(_spawner: Spawner) {
     let mut view = View::new(30.0, 10.0);
     let mut spin = ui::Spin::new();
     let mut front = 0usize;
-    draw_and_show(&mut disp, &mut front, &img, view, spin, &mut lut, &mut red).await;
+    draw_and_show(
+        &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, false,
+    )
+    .await;
     green.set_high();
 
     // ---- touch: the globe is grabbed like a heavy trackball: it follows the finger while it is
@@ -227,6 +230,9 @@ async fn main(_spawner: Spawner) {
     let mut stamp = Instant::now();
     let mut frames = 0u32;
     let mut draw_ms = 0u32;
+    // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
+    let mut full = 0u8;
+    let mut dirty = false; // quick frames left the panel and the dots stale
     let mut since = Instant::now();
     loop {
         let moving = spin.on || grab.is_some() || vel.0.abs() + vel.1.abs() > STOP_PX_S;
@@ -278,6 +284,7 @@ async fn main(_spawner: Spawner) {
                     if action != ui::Action::None {
                         ui::apply(&mut view, &mut spin, action);
                         redraw = true;
+                        full = 2;
                     }
                 }
             }
@@ -295,9 +302,27 @@ async fn main(_spawner: Spawner) {
         if spin.on {
             ui::advance(&mut view, spin, dt);
         }
+        let motion =
+            spin.on || grab.is_some_and(|g| g.dragging) || vel.0.abs() + vel.1.abs() > STOP_PX_S;
+        if !motion && dirty {
+            // Came to rest: bring the panel and the dots up to date in both buffers.
+            dirty = false;
+            full = 2;
+        }
+        if full > 0 {
+            redraw = true;
+        }
         if redraw {
-            draw_ms =
-                draw_and_show(&mut disp, &mut front, &img, view, spin, &mut lut, &mut red).await;
+            let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
+            draw_ms = draw_and_show(
+                &mut disp, &mut front, &img, view, spin, &mut lut, &mut red, quick,
+            )
+            .await;
+            if quick {
+                dirty = true;
+            } else {
+                full = full.saturating_sub(1);
+            }
             frames += 1;
             if frames == 30 {
                 let ms = since.elapsed().as_millis() as u32;
@@ -328,11 +353,16 @@ async fn draw_and_show(
     spin: ui::Spin,
     lut: &mut GlobeLut<'_>,
     red: &mut Output<'static>,
+    quick: bool,
 ) -> u32 {
     red.set_high();
     let back = 1 - *front;
     let cycles = DWT::cycle_count();
-    ui::draw(&mut disp.fb[back].fb(), img, view, spin, Some(lut));
+    if quick {
+        ui::draw_moving(&mut disp.fb[back].fb(), img, view, lut);
+    } else {
+        ui::draw(&mut disp.fb[back].fb(), img, view, spin, Some(lut));
+    }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;
     let ok = disp
         .ltdc
