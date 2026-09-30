@@ -72,6 +72,22 @@ pub enum Commands {
         /// (smaller over the wire than the gzip inside the file)
         #[arg(long)]
         raw: bool,
+
+        /// Also write the optional layers next to the output: <name>.coords
+        /// (exact lat/lng, lossless) and <name>.meta (timezones, codes,
+        /// country details)
+        #[arg(long)]
+        layers: bool,
+
+        /// The upstream per-city export (population, native names, type,
+        /// translations, Wikidata) for the layers; default:
+        /// <data dir>/json-cities.json.gz when present
+        #[arg(long)]
+        extras: Option<String>,
+
+        /// Download that export first (~25 MB)
+        #[arg(long)]
+        download_extras: bool,
     },
     /// Find the N closest cities using only a compact globe file
     GlobeNearest {

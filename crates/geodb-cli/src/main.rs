@@ -118,8 +118,46 @@ fn main() -> anyhow::Result<()> {
         Commands::GlobeNearest { .. } => unreachable!(), // Handled above
 
         #[cfg(not(feature = "legacy_model"))]
-        Commands::BuildGlobe { output, bits, raw } => {
-            build_globe(&db, &input_path, output.as_deref(), bits, raw)?;
+        Commands::BuildGlobe {
+            output,
+            bits,
+            raw,
+            layers,
+            extras,
+            download_extras,
+        } => {
+            let extras_path = extras.map(PathBuf::from).unwrap_or_else(|| {
+                GeoDb::<DefaultBackend>::default_data_dir().join("json-cities.json.gz")
+            });
+            if download_extras {
+                println!("Downloading {} …", geodb_core::loader::CITY_EXTRAS_URL);
+                geodb_core::loader::builder::download_url(
+                    geodb_core::loader::CITY_EXTRAS_URL,
+                    &extras_path,
+                )?;
+            }
+            let extras = if layers && extras_path.exists() {
+                Some(geodb_core::globe_layers::CityExtras::from_path(
+                    &extras_path,
+                )?)
+            } else {
+                if layers {
+                    println!(
+                        "  (no {}: layers without population, types and names; add --download-extras)",
+                        extras_path.display()
+                    );
+                }
+                None
+            };
+            build_globe(
+                &db,
+                &input_path,
+                output.as_deref(),
+                bits,
+                raw,
+                layers,
+                extras.as_ref(),
+            )?;
         }
         #[cfg(feature = "legacy_model")]
         Commands::BuildGlobe { .. } => {
@@ -386,16 +424,28 @@ fn build_globe(
     output: Option<&str>,
     bits: u8,
     raw: bool,
+    layers: bool,
+    extras: Option<&geodb_core::globe_layers::CityExtras>,
 ) -> anyhow::Result<()> {
     let out = PathBuf::from(output.unwrap_or("geodb.globe"));
     let start = std::time::Instant::now();
     let globe = CompactGlobeDb::from_db(db);
-    let bytes = if raw {
-        globe.to_bytes_raw(bits)?
-    } else {
-        globe.to_bytes(bits)?
-    };
-    std::fs::write(&out, bytes)?;
+    let files = geodb_core::globe_layers::build_globe_files(db, bits, !raw, extras)?;
+    std::fs::write(&out, &files.base)?;
+    if layers {
+        if let Some(x) = extras {
+            println!("  Extras: matched {} of {} cities", files.matched, x.len());
+        }
+        let mut list = vec![("coords", &files.coords), ("meta", &files.meta)];
+        if let Some(names) = &files.names {
+            list.push(("names", names));
+        }
+        for (ext, bytes) in list {
+            let path = out.with_extension(ext);
+            std::fs::write(&path, bytes)?;
+            println!("✓ Layer {} ({} bytes)", path.display(), bytes.len());
+        }
+    }
     let built = start.elapsed();
 
     let size = std::fs::metadata(&out)?.len();

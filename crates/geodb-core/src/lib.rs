@@ -4,6 +4,8 @@ pub mod api;
 pub mod common;
 pub mod error;
 pub mod globe_db;
+pub mod globe_layers;
+pub mod globe_search;
 #[cfg(feature = "legacy_model")]
 pub mod legacy_model; // The old legacy model folder
 pub mod loader;

@@ -9,6 +9,9 @@
     <link data-trunk rel="rust" data-cargo-no-default-features data-cargo-features="float,webgl" data-wasm-opt="z"/>
     <link data-trunk rel="copy-file" href="assets/mini/cities.globe"/>
     <link data-trunk rel="copy-file" href="assets/mini/coast.bin"/>
+    <link data-trunk rel="copy-file" href="assets/mini/cities.coords"/>
+    <link data-trunk rel="copy-file" href="assets/mini/cities.meta"/>
+    <link data-trunk rel="copy-file" href="assets/mini/cities.names"/>
     <link data-trunk rel="copy-file" href="../geodb-core/data/geodb.flat.comp.blobs.bin"/>
     <style>
         :root {
@@ -161,6 +164,19 @@
         .legend li:hover { background: none; }
         .legend b { color: var(--text); font-weight: 600; }
         .fast { color: #6fdc8c; }
+        .layers { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+        .layer.on { font-size: 12px; color: #6fdc8c; }
+        .posmode { display: block; font-size: 12px; color: var(--muted); margin: 4px 0; }
+        .posmode input[type=date] { font: inherit; color: var(--text); background: #0c1322; border: 1px solid var(--line); border-radius: 4px; color-scheme: dark; }
+        .posmode select { font: inherit; color: var(--text); background: #0c1322; border: 1px solid var(--line); border-radius: 4px; }
+        #layerstatus, #dlstatus { font-size: 11px; }
+        .netnote { font-size: 11px; color: var(--muted); margin: 2px 0 4px; }
+        .netnote.online { color: #ffb840; }
+        tr.addon td { color: #6fdc8c; }
+        tr.addon.unloaded td { color: var(--muted); text-decoration: line-through; }
+        button.x { padding: 0 5px; margin-left: 4px; font-size: 11px; line-height: 16px; }
+        tr.addon td:last-child { color: var(--text); }
+        .errtab td:last-child { text-align: left; white-space: normal; }
         .slow { color: #ff8a7a; }
         .prec { font-size: 11px; color: var(--muted); margin-top: 2px; }
         .sets { flex: none !important; font-size: 12px; font-weight: 400; }
@@ -193,10 +209,14 @@
     <section class="bench">
         <h2><span>Data</span><span id="datasets" class="sets"></span></h2>
         <div id="caps"><p class="muted">Loading…</p></div>
+        <div id="layers"></div>
+        <div id="surface"></div>
+        <div id="layerstatus" class="muted"></div>
     </section>
     <section class="bench">
-        <h2><span>Cost</span></h2>
+        <h2><span>Cost</span><button id="download" title="everything loaded now, and this view, in one file that opens from disk">Download as one HTML file</button></h2>
         <div id="cost"><p class="muted">Measuring…</p></div>
+        <div id="dlstatus" class="muted"></div>
     </section>
     <section class="bench">
         <h2><span>3D frame rate</span><button id="spin">Spin</button><button id="run-fps">Run 5 s</button></h2>
@@ -220,12 +240,15 @@
         </div>
         <div id="qwhat" class="muted"></div>
         <div id="qprog"></div>
+        <div id="qerr"></div>
         <div id="qres"><p class="muted">The same random queries through every engine, side by side: the CPU index first (the reference), then the GPU one query per call, then many per call. Radii are log-uniform between min and max.</p></div>
     </section>
     <footer>
         Rust + wgpu + WebAssembly ·
         cities: <a href="https://github.com/dr5hn/countries-states-cities-database">dr5hn</a> (CC-BY-4.0) ·
-        coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a>
+        coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a> ·
+        imagery: <a href="https://earthobservatory.nasa.gov/features/BlueMarble">NASA Blue Marble</a> ·
+        detail tiles: <a href="https://nasa-gibs.github.io/gibs-api-docs/">NASA GIBS</a> (Blue Marble, Landsat WELD, MODIS Terra/Aqua, VIIRS)
     </footer>
 </aside>
 </body>

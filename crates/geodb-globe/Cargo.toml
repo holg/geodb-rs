@@ -36,19 +36,21 @@ bincode = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
 console_error_panic_hook = "0.1"
 flate2 = { workspace = true }
-geodb-core = { path = "../geodb-core", default-features = false, features = ["compact", "search_blobs"] }
+geodb-core = { path = "../geodb-core", default-features = false, features = ["compact", "json", "search_blobs"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 js-sys = { workspace = true }
 png = { version = "0.18", optional = true }
 # Private for now. Locally, a [patch] in ../.cargo/config.toml (outside this
 # repository) points it at a sibling ../scopekit checkout; CI needs a deploy
 # key (see scopekit's HOWTO section 0).
-scopekit = { git = "ssh://git@github.com/holg/scopekit.git", branch = "main", optional = true }
+scopekit = { git = "ssh://git@github.com/holg/scopekit.git", rev = "2275f3459e47ad3648b2cb603258fc30aac068e9", optional = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
     "AddEventListenerOptions",
+    "Blob",
+    "BlobPropertyBag",
     "console",
     "CssStyleDeclaration",
     "Document",
@@ -58,11 +60,14 @@ web-sys = { version = "0.3", features = [
     "Element",
     "Event",
     "EventTarget",
+    "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlCollection",
     "HtmlElement",
     "HtmlInputElement",
     "HtmlSelectElement",
+    "ImageBitmap",
+    "ImageBitmapOptions",
     "KeyboardEvent",
     "Location",
     "MouseEvent",
@@ -70,8 +75,10 @@ web-sys = { version = "0.3", features = [
     "PerformanceEntry",
     "PerformanceResourceTiming",
     "Request",
+    "ResizeQuality",
     "RequestInit",
     "Response",
+    "Url",
     "UrlSearchParams",
     "PointerEvent",
     "WheelEvent",

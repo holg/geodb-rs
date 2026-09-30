@@ -13,7 +13,7 @@ use crate::gpu_query::GpuGeoidIndex;
 use crate::mini::{self, FrameStats, Query, QueryPlan, Stats};
 use crate::places::{Nearby, Target};
 use crate::render::{self, Presenter, Renderer, MAX_MARKERS};
-use crate::source::{self, GlobeSource};
+use crate::source::{self, GlobeSource, Positions};
 use crate::texture;
 use crate::view::{self, fmt_coord, fmt_km, LABELS};
 use std::cell::RefCell;
@@ -24,6 +24,56 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Document, HtmlCanvasElement, HtmlElement, HtmlInputElement};
+
+/// Counts the heap in use, so unloading a layer shows the memory coming
+/// back (WebAssembly memory itself only grows; freed blocks are reused).
+struct Counting;
+
+static HEAP_IN_USE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static HEAP_PEAK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+// SAFETY: forwards to the system allocator unchanged; only counts sizes.
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        use std::sync::atomic::Ordering::Relaxed;
+        // SAFETY: same contract as the caller's.
+        let p = unsafe { std::alloc::System.alloc(layout) };
+        if !p.is_null() {
+            let now = HEAP_IN_USE.fetch_add(layout.size(), Relaxed) + layout.size();
+            HEAP_PEAK.fetch_max(now, Relaxed);
+        }
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: same contract as the caller's.
+        unsafe { std::alloc::System.dealloc(ptr, layout) };
+        HEAP_IN_USE.fetch_sub(layout.size(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        use std::sync::atomic::Ordering::Relaxed;
+        // SAFETY: same contract as the caller's.
+        let p = unsafe { std::alloc::System.realloc(ptr, layout, new_size) };
+        if !p.is_null() {
+            HEAP_IN_USE.fetch_sub(layout.size(), Relaxed);
+            let now = HEAP_IN_USE.fetch_add(new_size, Relaxed) + new_size;
+            HEAP_PEAK.fetch_max(now, Relaxed);
+        }
+        p
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+fn heap_in_use() -> f64 {
+    HEAP_IN_USE.load(std::sync::atomic::Ordering::Relaxed) as f64
+}
+
+fn heap_peak() -> f64 {
+    HEAP_PEAK.load(std::sync::atomic::Ordering::Relaxed) as f64
+}
 
 const LIST_LIMIT: usize = 60;
 const QUERY_IDLE_MS: f64 = 250.0;
@@ -78,6 +128,14 @@ struct App {
     backend: String,
     cam: OrbitCamera,
     source: &'static dyn GlobeSource,
+    /// The dataset that was loaded (for the data panel).
+    data: Dataset,
+    /// What loading cost so far (base, then each layer).
+    cost: CostSheet,
+    /// Earth texture layers: detailed coasts, satellite imagery.
+    surface: Surface,
+    /// Detail tiles around the view (NASA GIBS).
+    tiles: Tiles,
     /// Built on first use: the geoids uploaded for compute queries.
     gpu_index: Option<Rc<GpuGeoidIndex>>,
     /// WebGPU has compute shaders; WebGL2 does not.
@@ -232,6 +290,13 @@ fn network() -> Vec<(String, f64, f64)> {
             "cities.globe"
         } else if file.ends_with("blobs.bin") {
             "geodb (float)"
+        } else if file.ends_with(".coords")
+            || file.ends_with(".meta")
+            || file.ends_with(".names")
+            || file.ends_with(".webp")
+            || file == "coast10m.bin"
+        {
+            file
         } else if file == "coast.bin" {
             "coast.bin"
         } else {
@@ -243,7 +308,12 @@ fn network() -> Vec<(String, f64, f64)> {
         } else {
             r.encoded_body_size()
         };
-        out.push((label.to_string(), wire, r.decoded_body_size()));
+        // The release loads one of two builds (web_release.py): say which.
+        let label = match global("__GEODB_BUILD").as_string() {
+            Some(build) if label == "wasm" => format!("wasm ({build} build)"),
+            _ => label.to_string(),
+        };
+        out.push((label, wire, r.decoded_body_size()));
     }
     out
 }
@@ -416,11 +486,16 @@ impl App {
             &self.doc,
             "hud",
             &format!(
-                "{} · altitude {} · {} · {}{fps} · wasm memory {}",
+                "{} · altitude {}{} · {} · {}{fps} · heap {} · wasm {}",
                 fmt_coord(self.cam.lat, self.cam.lon),
                 fmt_km(self.cam.altitude_km()),
+                self.tiles
+                    .front
+                    .map(|w| format!(" · tiles L{}", w.level))
+                    .unwrap_or_default(),
                 self.source.name(),
                 self.backend,
+                fmt_bytes(heap_in_use()),
                 fmt_bytes(wasm_memory())
             ),
         );
@@ -474,6 +549,7 @@ impl App {
                 self.run_query(lat, lon, true);
             }
         }
+        self.plan_tiles();
 
         if moving || self.dirty {
             let scene = view::scene(self.query, js_sys::Date::now());
@@ -682,6 +758,123 @@ impl App {
             )));
         }
         self.gpu_index.clone()
+    }
+
+    /// What is loaded and shown, as the query string the app starts from
+    /// (see the URL parameters in `run`).
+    fn state_query(&self) -> String {
+        let mut q: Vec<String> = Vec::new();
+        if DATASETS.len() > 1 {
+            q.push(format!("data={}", self.data.key));
+        }
+        let layers: Vec<&str> = self
+            .source
+            .layers()
+            .into_iter()
+            .filter(|l| l.2)
+            .filter_map(|l| l.0.strip_prefix("cities."))
+            .collect();
+        if !layers.is_empty() {
+            q.push(format!("layers={}", layers.join(",")));
+        }
+        if self.source.positions() == Positions::Exact && !layers.is_empty() {
+            q.push("positions=exact".into());
+        }
+        if self.surface.has("coast-4096") {
+            q.push("coast=4k".into());
+        }
+        let imagery: Vec<String> = IMAGERY
+            .iter()
+            .filter(|(px, _, _, _)| self.surface.has(&format!("imagery-{px}")))
+            .map(|(px, _, _, _)| px.to_string())
+            .collect();
+        if !imagery.is_empty() {
+            q.push(format!("imagery={}", imagery.join(",")));
+        }
+        if self.surface.lines.is_some() {
+            q.push("lines=10m".into());
+            if !self.surface.lines_on {
+                q.push("hidelines=1".into());
+            }
+        }
+        if self.surface.show != "base" {
+            q.push(format!("show={}", self.surface.show));
+        }
+        if let Some(c) = &self.surface.compare {
+            q.push(format!("compare={c}"));
+        }
+        if let Some(si) = self.tiles.source {
+            q.push(format!("tiles={}", crate::tiles::SOURCES[si].key));
+            if crate::tiles::SOURCES[si].dated {
+                q.push(format!("date={}", self.tiles.date));
+            }
+        }
+        q.push(format!(
+            "at={:.4},{:.4},{:.5}",
+            self.cam.lat,
+            self.cam.lon,
+            self.cam.target_dist()
+        ));
+        format!("?{}", q.join("&"))
+    }
+
+    /// Files a single-file copy needs for what is loaded now.
+    fn loaded_files(&self) -> Vec<String> {
+        let mut files = vec![self.data.file.to_string(), "coast.bin".to_string()];
+        files.extend(
+            self.source
+                .layers()
+                .into_iter()
+                .filter(|l| l.2)
+                .map(|l| l.0.to_string()),
+        );
+        if self.surface.has("coast-4096") || self.surface.lines.is_some() {
+            files.push("coast10m.bin".into());
+        }
+        for (px, _, file, _) in IMAGERY {
+            if self.surface.has(&format!("imagery-{px}")) {
+                files.push(file.to_string());
+            }
+        }
+        // The detail tiles of the patch shown now (by URL).
+        files.extend(self.tiles.front_urls.iter().cloned());
+        files
+    }
+
+    /// Asks for a new tile patch when the settled view needs one (another
+    /// level, or the centre moved out of the middle of the current patch).
+    fn plan_tiles(&mut self) {
+        use crate::tiles::{level_for, Window, SOURCES};
+        let Some(si) = self.tiles.source else {
+            return;
+        };
+        if self.press.is_some() || !self.cam.is_settled() || self.tiles.job.is_some() {
+            return;
+        }
+        let (_, h) = self.css_size();
+        let px = h * Self::device_pixel_ratio();
+        let ground_km = 2.0 * self.cam.altitude_km() * (f64::from(self.cam.fov_y) / 2.0).tan();
+        let deg_per_px = ground_km / 111.32 / px.max(1.0);
+        let Some(level) = level_for(deg_per_px, SOURCES[si].max_level) else {
+            // Far out: the global texture is as sharp.
+            if self.tiles.front.take().is_some() {
+                self.renderer.set_patch(None);
+                self.tiles.front_urls.clear();
+                self.dirty = true;
+            }
+            return;
+        };
+        let (lat, lon) = (self.cam.lat, self.cam.lon);
+        let fits = |w: &Window| w.level == level && w.centred_on(lat, lon);
+        if self.tiles.front.as_ref().is_some_and(fits)
+            || self.tiles.loading.as_ref().is_some_and(fits)
+        {
+            return;
+        }
+        let window = Window::around(lat, lon, level, self.tiles.n);
+        self.tiles.generation += 1;
+        self.tiles.loading = Some(window);
+        self.tiles.job = Some((window, self.tiles.generation));
     }
 
     fn toggle_spin(&mut self) {
@@ -981,6 +1174,10 @@ fn start_loop(app: Rc<RefCell<App>>) {
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |t: f64| {
         app.borrow_mut().frame(t);
+        let job = app.borrow_mut().tiles.job.take();
+        if let Some((window, generation)) = job {
+            wasm_bindgen_futures::spawn_local(load_tiles(app.clone(), window, generation));
+        }
         request_frame(f.borrow().as_ref().unwrap());
     }));
     request_frame(g.borrow().as_ref().unwrap());
@@ -1001,11 +1198,16 @@ fn on_click(doc: &Document, id: &str, app: &Rc<RefCell<App>>, f: fn(&mut App)) {
     });
 }
 
+/// A URL parameter; a downloaded single file (no query of its own) carries
+/// its state in `window.__GEODB_STATE` instead.
 fn param(name: &str) -> Option<String> {
-    let search = web_sys::window()?.location().search().ok()?;
-    web_sys::UrlSearchParams::new_with_str(&search)
-        .ok()?
-        .get(name)
+    let from = |q: &str| web_sys::UrlSearchParams::new_with_str(q).ok()?.get(name);
+    let search = web_sys::window()?
+        .location()
+        .search()
+        .ok()
+        .unwrap_or_default();
+    from(&search).or_else(|| global("__GEODB_STATE").as_string().and_then(|q| from(&q)))
 }
 
 /// A dataset this build can load: `?data=<key>` picks it.
@@ -1076,6 +1278,7 @@ fn render_data_panel(doc: &Document, data: Dataset, src: &dyn GlobeSource, compu
         },
     ));
     set_html(doc, "caps", &format!("<table>{rows}</table>"));
+    render_layers(doc, src);
     if !compute {
         for id in ["q-gpu1", "q-gpub"] {
             if let Some(b) = doc.get_element_by_id(id) {
@@ -1084,6 +1287,1187 @@ fn render_data_panel(doc: &Document, data: Dataset, src: &dyn GlobeSource, compu
             }
         }
     }
+}
+
+/// What a layer added.
+struct LayerCost {
+    /// What unloading refers to ("cities.meta", "coast", "imagery").
+    key: String,
+    file: String,
+    wire: f64,
+    unpacked: f64,
+    fetch_ms: f64,
+    /// What happened after the fetch: "attach", "bake", "decode".
+    action: &'static str,
+    attach_ms: f64,
+    heap_added: f64,
+    /// GPU memory the layer added (textures).
+    gpu_added: f64,
+    unloaded: bool,
+}
+
+/// What loading cost: the start, then each layer as an add-on.
+struct CostSheet {
+    /// (file, bytes on the wire, unpacked) at start.
+    base: Vec<(String, f64, f64)>,
+    /// one-in-all.html: the page size (everything came in it).
+    single: Option<f64>,
+    base_total: f64,
+    base_heap: usize,
+    base_wasm: f64,
+    file_len: usize,
+    startup: String,
+    layers: Vec<LayerCost>,
+    /// GPU texture bytes now (earth surfaces).
+    gpu_now: f64,
+}
+
+fn render_cost(doc: &Document, c: &CostSheet, src: &dyn GlobeSource) {
+    let muted = |s: String| format!(" <span class=\"muted\">{s}</span>");
+    let unpacked = |w: f64, d: f64| {
+        if (d - w).abs() > 1.0 {
+            muted(format!("({} unpacked)", fmt_bytes(d)))
+        } else {
+            String::new()
+        }
+    };
+    let mut html = String::from("<table>");
+    for (label, w, d) in &c.base {
+        html.push_str(&row(
+            label,
+            &format!("{}{}", fmt_bytes(*w), unpacked(*w, *d)),
+        ));
+    }
+    if let Some(bytes) = c.single {
+        html.push_str(&row(
+            "one file",
+            &format!(
+                "{}{}",
+                fmt_bytes(bytes),
+                muted("(wasm, glue and data inline as base64)".into())
+            ),
+        ));
+    }
+    let start_label = if c.layers.is_empty() {
+        "total"
+    } else {
+        "at start"
+    };
+    html.push_str(&row(
+        start_label,
+        &format!("<b>{}</b>", fmt_bytes(c.base_total)),
+    ));
+    let mut added = 0.0;
+    for l in &c.layers {
+        let wire = if c.single.is_some() {
+            format!(
+                "in the page{}",
+                muted(format!("({})", fmt_bytes(l.unpacked)))
+            )
+        } else {
+            added += l.wire;
+            format!("+{}{}", fmt_bytes(l.wire), unpacked(l.wire, l.unpacked))
+        };
+        html.push_str(&format!(
+            "<tr class=\"{}\"><td>{} {}</td><td>{wire}{}</td></tr>",
+            if l.unloaded {
+                "addon unloaded"
+            } else {
+                "addon"
+            },
+            if l.unloaded { "−" } else { "+" },
+            escape(&l.file),
+            muted(
+                format!(
+                    "· fetch {:.0} ms · {} {:.0} ms{}{}",
+                    l.fetch_ms,
+                    l.action,
+                    l.attach_ms,
+                    if l.heap_added > 0.0 {
+                        format!(" · memory +{}", fmt_bytes(l.heap_added))
+                    } else {
+                        String::new()
+                    },
+                    if l.gpu_added > 0.0 {
+                        format!(" · GPU +{}", fmt_bytes(l.gpu_added))
+                    } else {
+                        String::new()
+                    }
+                ) + if l.unloaded { " · unloaded" } else { "" }
+            )
+        ));
+    }
+    if !c.layers.is_empty() {
+        html.push_str(&row(
+            "total now",
+            &format!(
+                "<b>{}</b>{}",
+                fmt_bytes(c.base_total + added),
+                muted(format!("(+{} for layers)", fmt_bytes(added)))
+            ),
+        ));
+    }
+    let heap = src.heap_bytes();
+    let heap_delta = heap.saturating_sub(c.base_heap);
+    html.push_str(&row(
+        "database",
+        &format!(
+            "{} in memory{}",
+            fmt_bytes(heap as f64),
+            muted(if heap_delta > 0 {
+                format!(
+                    "(+{} from layers; base file {})",
+                    fmt_bytes(heap_delta as f64),
+                    fmt_bytes(c.file_len as f64)
+                )
+            } else {
+                format!("(file {})", fmt_bytes(c.file_len as f64))
+            })
+        ),
+    ));
+    html.push_str(&row(
+        "heap in use",
+        &format!(
+            "<b>{}</b>{}",
+            fmt_bytes(heap_in_use()),
+            muted(format!(
+                "(peak {}; unloading gives it back)",
+                fmt_bytes(heap_peak())
+            ))
+        ),
+    ));
+    let wasm = wasm_memory();
+    html.push_str(&row(
+        "wasm memory",
+        &format!(
+            "{}{}",
+            fmt_bytes(wasm),
+            muted(format!(
+                "(+{} since start; WebAssembly memory only grows, freed heap is reused)",
+                fmt_bytes((wasm - c.base_wasm).max(0.0))
+            ))
+        ),
+    ));
+    html.push_str(&row("GPU textures", &fmt_bytes(c.gpu_now)));
+    html.push_str(&row("start-up", &c.startup));
+    html.push_str("</table>");
+    set_html(doc, "cost", &html);
+}
+
+/// A loaded earth surface: a bake (colour + city lights) or imagery.
+struct SurfaceTex {
+    /// "base", "coast-4096", "imagery-8192", …
+    id: String,
+    label: String,
+    bake: bool,
+    view: wgpu::TextureView,
+    px: u32,
+}
+
+/// The earth surfaces loaded so far, each its own GPU texture (switching is
+/// instant, unloading frees exactly that one), what is shown, and what it
+/// is compared with (split view).
+struct Surface {
+    list: Vec<SurfaceTex>,
+    show: String,
+    compare: Option<String>,
+    /// GPU bytes of the vector coastlines, when loaded.
+    lines: Option<f64>,
+    lines_on: bool,
+}
+
+/// GPU bytes of a `w` x `w/2` RGBA8 texture with its mip chain.
+fn texture_bytes(w: u32) -> f64 {
+    f64::from(w) * f64::from(w / 2) * 4.0 * 4.0 / 3.0
+}
+
+impl Surface {
+    fn gpu_bytes(&self) -> f64 {
+        self.list.iter().map(|t| texture_bytes(t.px)).sum::<f64>() + self.lines.unwrap_or(0.0)
+    }
+
+    fn get(&self, id: &str) -> Option<&SurfaceTex> {
+        self.list.iter().find(|t| t.id == id)
+    }
+
+    fn has(&self, id: &str) -> bool {
+        self.get(id).is_some()
+    }
+
+    fn add(&mut self, tex: SurfaceTex) {
+        self.show = tex.id.clone();
+        self.list.retain(|t| t.id != tex.id);
+        self.list.push(tex);
+    }
+
+    fn remove(&mut self, id: &str) {
+        if id != "base" {
+            self.list.retain(|t| t.id != id);
+        }
+    }
+
+    /// Shows the chosen surfaces (falling back to the base bake); city
+    /// lights come from the sharpest bake.
+    fn apply(&mut self, r: &mut crate::render::Renderer) {
+        if !self.has(&self.show) {
+            self.show = "base".into();
+        }
+        if self
+            .compare
+            .as_deref()
+            .is_some_and(|c| !self.has(c) || c == self.show)
+        {
+            self.compare = None;
+        }
+        let Some(lights) = self.list.iter().filter(|t| t.bake).max_by_key(|t| t.px) else {
+            return;
+        };
+        let left = self
+            .get(&self.show)
+            .map_or(lights.view.clone(), |t| t.view.clone());
+        let right = self
+            .compare
+            .as_deref()
+            .and_then(|c| self.get(c))
+            .map(|t| (t.view.clone(), 0.5));
+        r.set_surface(lights.view.clone(), left, right);
+    }
+}
+
+/// Coast bake widths and imagery sizes: (width, file, download).
+/// (Sharper coasts beyond this are the vector lines, not a bigger bake.)
+const COAST_PX: [u32; 1] = [4096];
+const IMAGERY: [(u32, &str, &str, &str); 3] = [
+    (4096, "4K", "earth-4k.webp", "0.65 MB"),
+    (8192, "8K", "earth-8k.webp", "2.1 MB"),
+    (16380, "16K", "earth-16k.webp", "7.8 MB"),
+];
+
+fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, date: Option<&str>) {
+    let mut html = String::from("<div class=\"layers\">");
+    for t in s.list.iter().filter(|t| t.id != "base") {
+        html.push_str(&format!(
+            "<span class=\"layer on\">✓ {} <button class=\"x\" data-texture=\"unload:{}\" \
+             title=\"unload\">✕</button></span>",
+            escape(&t.label),
+            t.id
+        ));
+    }
+    match s.lines {
+        Some(_) => html.push_str(
+            "<span class=\"layer on\">✓ 1:10m coastlines (lines) <button class=\"x\" \
+             data-texture=\"unload:lines\" title=\"unload\">✕</button></span>",
+        ),
+        None => html.push_str(
+            "<button data-texture=\"lines\">Load 1:10m coastlines, lines (0.47 MB)</button>",
+        ),
+    }
+    for px in COAST_PX {
+        if px <= max && !s.has(&format!("coast-{px}")) {
+            html.push_str(&format!(
+                "<button data-texture=\"coast:{px}\">Load 1:10m coasts, {px} px</button>"
+            ));
+        }
+    }
+    for (px, name, _, size) in IMAGERY {
+        if px <= max && !s.has(&format!("imagery-{px}")) {
+            html.push_str(&format!(
+                "<button data-texture=\"imagery:{px}\">Load satellite {name} ({size})</button>"
+            ));
+        }
+    }
+    html.push_str("</div>");
+    if s.lines.is_some() {
+        html.push_str(&format!(
+            "<label class=\"posmode\"><input type=\"checkbox\" id=\"show-lines\"{}/> show \
+             coastlines</label>",
+            if s.lines_on { " checked" } else { "" }
+        ));
+    }
+    let sources: String = crate::tiles::SOURCES
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                t.key,
+                if tiles == Some(i) { " selected" } else { "" },
+                t.label
+            )
+        })
+        .collect();
+    html.push_str(&format!(
+        "<label class=\"posmode\">detail tiles when zoomed in <select id=\"tiles-source\">\
+         <option value=\"\">off: everything local, no external requests</option>{sources}\
+         </select></label>"
+    ));
+    // Say plainly where data comes from: tiles are fetched from NASA.
+    html.push_str(if tiles.is_some() {
+        "<div class=\"netnote online\">⚠ Online: detail tiles are fetched from NASA GIBS \
+         (gibs.earthdata.nasa.gov) over the network while you move. Not available offline; \
+         a downloaded single file keeps only the tiles shown when it was saved.</div>"
+    } else {
+        "<div class=\"netnote\">Offline-capable: everything shown comes from this page's own \
+         files, no external requests.</div>"
+    });
+    if let Some((i, date)) = tiles.zip(date) {
+        if crate::tiles::SOURCES[i].dated {
+            html.push_str(&format!(
+                "<label class=\"posmode\">day <input type=\"date\" id=\"tiles-date\" value=\"{date}\" \
+                 min=\"{}\"/></label>",
+                crate::tiles::SOURCES[i].first_date
+            ));
+        }
+    }
+    if s.list.len() > 1 {
+        let options = |selected: Option<&str>, skip: Option<&str>| -> String {
+            s.list
+                .iter()
+                .filter(|t| Some(t.id.as_str()) != skip)
+                .map(|t| {
+                    format!(
+                        "<option value=\"{}\"{}>{}</option>",
+                        t.id,
+                        if Some(t.id.as_str()) == selected {
+                            " selected"
+                        } else {
+                            ""
+                        },
+                        escape(&t.label)
+                    )
+                })
+                .collect()
+        };
+        html.push_str(&format!(
+            "<label class=\"posmode\">show <select id=\"surface-show\">{}</select></label>\
+             <label class=\"posmode\">compare with (right half) <select id=\"surface-compare\">\
+             <option value=\"\">nothing</option>{}</select></label>",
+            options(Some(&s.show), None),
+            options(s.compare.as_deref(), Some(&s.show))
+        ));
+    }
+    set_html(doc, "surface", &html);
+}
+
+/// Re-renders what depends on the surfaces (after a load or unload).
+fn surface_changed(a: &mut App) {
+    let max = a.renderer.max_texture_dimension();
+    let App {
+        surface, renderer, ..
+    } = a;
+    surface.apply(renderer);
+    let patch = a.tiles.front.map_or(0.0, |w| {
+        f64::from(w.n * crate::tiles::TILE_PX).powi(2) * 4.0
+    });
+    a.cost.gpu_now = a.surface.gpu_bytes() + patch;
+    render_surface(&a.doc, &a.surface, max, a.tiles.source, Some(&a.tiles.date));
+    render_cost(&a.doc, &a.cost, a.source);
+    a.dirty = true;
+}
+
+/// Natural Earth 1:10m coastlines: bake the earth texture again, sharper,
+/// at `width` px.
+async fn load_coast_detail(app: Rc<RefCell<App>>, width: u32) {
+    const FILE: &str = "coast10m.bin";
+    let (src, doc, max) = {
+        let a = app.borrow();
+        (a.source, a.doc.clone(), a.renderer.max_texture_dimension())
+    };
+    let width = width.min(max);
+    if app.borrow().surface.has(&format!("coast-{width}")) {
+        return;
+    }
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!("Loading 1:10m coasts, baking {width} px…"),
+    );
+    next_tick().await;
+    let t = now();
+    let bytes = match fetch_bytes(FILE).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let heap = heap_in_use();
+    let t = now();
+    let mut layers = match mini::unpack_coast(&bytes) {
+        Ok(l) => l.into_iter(),
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not read: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let (land, lakes) = (
+        layers.next().unwrap_or_default(),
+        layers.next().unwrap_or_default(),
+    );
+    let tex = texture::bake(&src.texture_seeds(), &land, &lakes, width);
+    drop((land, lakes));
+    let bake_ms = now() - t;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == FILE)
+        .map_or(bytes.len() as f64, |n| n.1);
+    let mut a = app.borrow_mut();
+    let view = a.renderer.earth_view(&tex);
+    drop(tex);
+    a.surface.add(SurfaceTex {
+        id: format!("coast-{width}"),
+        label: format!("baked, 1:10m coasts, {width} px"),
+        bake: true,
+        view,
+        px: width,
+    });
+    a.cost.layers.push(LayerCost {
+        key: format!("coast-{width}"),
+        file: format!("{FILE} (1:10m, {width} px)"),
+        wire,
+        unpacked: bytes.len() as f64,
+        fetch_ms,
+        action: "bake",
+        attach_ms: bake_ms,
+        heap_added: (heap_in_use() - heap).max(0.0),
+        gpu_added: texture_bytes(width),
+        unloaded: false,
+    });
+    surface_changed(&mut a);
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!("Baked {width} px from 1:10m coastlines."),
+    );
+}
+
+/// NASA Blue Marble imagery at `width` px: the browser decodes the WebP and
+/// makes each mip level (ImageBitmap resize), copied straight into a GPU
+/// texture.
+async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
+    let (doc, max, device, queue) = {
+        let a = app.borrow();
+        (
+            a.doc.clone(),
+            a.renderer.max_texture_dimension(),
+            a.device.clone(),
+            a.queue.clone(),
+        )
+    };
+    // The largest size the device takes, at most the one asked for.
+    let Some((width, name, file, _)) = IMAGERY
+        .into_iter()
+        .rev()
+        .find(|(px, _, _, _)| *px <= width.min(max))
+    else {
+        set_html(&doc, "layerstatus", "This device takes no imagery texture.");
+        return;
+    };
+    if app.borrow().surface.has(&format!("imagery-{width}")) {
+        return;
+    }
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!("Loading satellite imagery, {width} px…"),
+    );
+    let t = now();
+    let bytes = match fetch_bytes(file).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let t = now();
+    let result: Result<wgpu::TextureView, String> = async {
+        let window = web_sys::window().ok_or("no window")?;
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]));
+        let blob =
+            web_sys::Blob::new_with_u8_array_sequence(&parts).map_err(|e| format!("{e:?}"))?;
+        let decode = |p: Result<js_sys::Promise, JsValue>| async move {
+            let v = wasm_bindgen_futures::JsFuture::from(p.map_err(|e| format!("{e:?}"))?)
+                .await
+                .map_err(|e| format!("decode: {e:?}"))?;
+            v.dyn_into::<web_sys::ImageBitmap>()
+                .map_err(|_| "not an image".to_string())
+        };
+        let full = decode(window.create_image_bitmap_with_blob(&blob)).await?;
+        let height = width / 2;
+        let levels = 32 - width.leading_zeros();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("imagery"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        for level in 0..levels {
+            let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+            let bitmap = if level == 0 {
+                full.clone()
+            } else {
+                let opts = web_sys::ImageBitmapOptions::new();
+                opts.set_resize_width(w);
+                opts.set_resize_height(h);
+                opts.set_resize_quality(web_sys::ResizeQuality::High);
+                decode(
+                    window.create_image_bitmap_with_image_bitmap_and_image_bitmap_options(
+                        &full, &opts,
+                    ),
+                )
+                .await?
+            };
+            queue.copy_external_image_to_texture(
+                &wgpu::CopyExternalImageSourceInfo {
+                    source: wgpu::ExternalImageSource::ImageBitmap(bitmap.clone()),
+                    origin: wgpu::Origin2d::ZERO,
+                    flip_y: false,
+                },
+                wgpu::CopyExternalImageDestInfo {
+                    texture: &texture,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                    color_space: wgpu::PredefinedColorSpace::Srgb,
+                    premultiplied_alpha: false,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            // Free the decoded pixels now, not at the next GC.
+            if level > 0 {
+                bitmap.close();
+            }
+        }
+        full.close();
+        Ok(texture.create_view(&Default::default()))
+    }
+    .await;
+    let view = match result {
+        Ok(v) => v,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not use the imagery: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let decode_ms = now() - t;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == file)
+        .map_or(bytes.len() as f64, |n| n.1);
+    let mut a = app.borrow_mut();
+    a.surface.add(SurfaceTex {
+        id: format!("imagery-{width}"),
+        label: format!("satellite {name}, {width} px"),
+        bake: false,
+        view,
+        px: width,
+    });
+    a.cost.layers.push(LayerCost {
+        key: format!("imagery-{width}"),
+        file: format!("{file} (NASA Blue Marble)"),
+        wire,
+        unpacked: f64::from(width) * f64::from(width / 2) * 4.0,
+        fetch_ms,
+        action: "decode",
+        attach_ms: decode_ms,
+        heap_added: 0.0,
+        gpu_added: texture_bytes(width),
+        unloaded: false,
+    });
+    surface_changed(&mut a);
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!("Satellite imagery at {width} px."),
+    );
+}
+
+/// Natural Earth 1:10m coastlines drawn as lines: sharp at every zoom.
+async fn load_lines(app: Rc<RefCell<App>>) {
+    const FILE: &str = "coast10m.bin";
+    if app.borrow().surface.lines.is_some() {
+        return;
+    }
+    let doc = app.borrow().doc.clone();
+    set_html(&doc, "layerstatus", "Loading 1:10m coastlines…");
+    let t = now();
+    let bytes = match fetch_bytes(FILE).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let t = now();
+    let layers = match mini::unpack_coast(&bytes) {
+        Ok(l) => l,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not read: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let refs: Vec<&[crate::coast::Ring]> = layers.iter().map(Vec::as_slice).collect();
+    let mut a = app.borrow_mut();
+    let gpu = a.renderer.set_coastlines(&refs) as f64;
+    drop(refs);
+    drop(layers);
+    let upload_ms = now() - t;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == FILE)
+        .map_or(bytes.len() as f64, |n| n.1);
+    a.surface.lines = Some(gpu);
+    a.surface.lines_on = true;
+    a.cost.layers.push(LayerCost {
+        key: "lines".into(),
+        file: format!("{FILE} (1:10m coastlines, lines)"),
+        wire,
+        unpacked: bytes.len() as f64,
+        fetch_ms,
+        action: "upload",
+        attach_ms: upload_ms,
+        heap_added: 0.0,
+        gpu_added: gpu,
+        unloaded: false,
+    });
+    surface_changed(&mut a);
+    set_html(&doc, "layerstatus", "1:10m coastlines drawn as lines.");
+}
+
+/// The running build's glue and wasm: named by the release loader (or a
+/// single file), else found in the Resource Timing entries (trunk pages).
+fn build_files() -> Option<(String, String)> {
+    let files = global("__GEODB_FILES");
+    let get = |k: &str| js_sys::Reflect::get(&files, &k.into()).ok()?.as_string();
+    if let (Some(js), Some(wasm)) = (get("js"), get("wasm")) {
+        return Some((js, wasm));
+    }
+    let perf = web_sys::window()?.performance()?;
+    let names: Vec<String> = perf
+        .get_entries_by_type("resource")
+        .iter()
+        .filter_map(|e| e.dyn_into::<web_sys::PerformanceEntry>().ok())
+        .map(|e| e.name())
+        .collect();
+    let wasm = names.iter().find(|n| n.ends_with("_bg.wasm"))?.clone();
+    let js = wasm.strip_suffix("_bg.wasm")?.to_string() + ".js";
+    Some((js, wasm))
+}
+
+/// Saves one HTML file with everything loaded now and the current view:
+/// it opens from file:// and shows the same.
+async fn download_page(app: Rc<RefCell<App>>) {
+    let (doc, state, files) = {
+        let a = app.borrow();
+        (a.doc.clone(), a.state_query(), a.loaded_files())
+    };
+    let status = |msg: &str| set_html(&doc, "dlstatus", msg);
+    let result: Result<(String, usize), String> = async {
+        let (js, wasm) = build_files().ok_or("cannot tell which build is running")?;
+        status("Collecting the page…");
+        let page = match embedded("page.html") {
+            Some(p) => p,
+            None => {
+                let href = web_sys::window()
+                    .ok_or("no window")?
+                    .location()
+                    .href()
+                    .map_err(|e| format!("{e:?}"))?;
+                fetch_bytes(&href).await?
+            }
+        };
+        let page = String::from_utf8(page).map_err(|_| "the page is not UTF-8")?;
+        let skeleton = crate::single_file::strip_page(&page);
+        let glue =
+            String::from_utf8(fetch_bytes(&js).await?).map_err(|_| "the glue is not UTF-8")?;
+        let wasm = fetch_bytes(&wasm).await?;
+        let mut packed = Vec::new();
+        for name in &files {
+            status(&format!("Packing {}…", escape(name)));
+            next_tick().await;
+            let bytes = fetch_bytes(name).await?;
+            packed.push((name.clone(), crate::single_file::gzip_inside(name, &bytes)));
+        }
+        status("Writing the file…");
+        next_tick().await;
+        let build = global("__GEODB_BUILD")
+            .as_string()
+            .unwrap_or_else(|| "webgpu".into());
+        let html = crate::single_file::build_html(&crate::single_file::Bundle {
+            skeleton: &skeleton,
+            glue: &glue,
+            wasm: &wasm,
+            files: &packed,
+            state: &state,
+            build: &build,
+        })?;
+        let size = html.len();
+        let parts = js_sys::Array::of1(&JsValue::from_str(&html));
+        drop(html);
+        let opts = web_sys::BlobPropertyBag::new();
+        opts.set_type("text/html");
+        let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts)
+            .map_err(|e| format!("{e:?}"))?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(|e| format!("{e:?}"))?;
+        let a: web_sys::HtmlAnchorElement = doc
+            .create_element("a")
+            .map_err(|e| format!("{e:?}"))?
+            .unchecked_into();
+        a.set_href(&url);
+        a.set_download("geodb-globe.html");
+        a.click();
+        let _ = web_sys::Url::revoke_object_url(&url);
+        Ok((state.clone(), size))
+    }
+    .await;
+    match result {
+        Ok((state, size)) => status(&format!(
+            "Saved geodb-globe.html: {} with {} files, opens from disk with <code>{}</code>",
+            fmt_bytes(size as f64),
+            files.len(),
+            escape(&state)
+        )),
+        Err(e) => status(&format!("Could not build the file: {}", escape(&e))),
+    }
+}
+
+/// Detail tiles (see [`crate::tiles`]): the source, the patch shown, the one
+/// loading, and totals for the cost table.
+#[derive(Default)]
+struct Tiles {
+    /// Index into `tiles::SOURCES`; `None` = off.
+    source: Option<usize>,
+    front: Option<crate::tiles::Window>,
+    /// URLs of the tiles in the shown patch (for the single-file download).
+    front_urls: Vec<String>,
+    loading: Option<crate::tiles::Window>,
+    /// A patch to fetch (taken by the frame loop).
+    job: Option<(crate::tiles::Window, u32)>,
+    /// Bumped per request; older loads stop.
+    generation: u32,
+    fetched: usize,
+    bytes: f64,
+    /// Tiles per patch side.
+    n: u32,
+    /// Day of daily sources (MODIS), YYYY-MM-DD.
+    date: String,
+}
+
+/// Yesterday in UTC (today's daily swaths may still be incomplete).
+fn yesterday() -> String {
+    let d = js_sys::Date::new(&JsValue::from_f64(js_sys::Date::now() - 86_400_000.0));
+    d.to_iso_string()
+        .as_string()
+        .unwrap_or_default()
+        .chars()
+        .take(10)
+        .collect()
+}
+
+/// One tile: its URL and size, or `None` when it failed.
+type TileFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<(String, usize)>>>>;
+
+/// Decodes an image (JPEG, WebP) with the browser.
+async fn bitmap(bytes: &[u8]) -> Result<web_sys::ImageBitmap, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts).map_err(|e| format!("{e:?}"))?;
+    let promise = window
+        .create_image_bitmap_with_blob(&blob)
+        .map_err(|e| format!("{e:?}"))?;
+    wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .map_err(|e| format!("decode: {e:?}"))?
+        .dyn_into::<web_sys::ImageBitmap>()
+        .map_err(|_| "not an image".to_string())
+}
+
+/// Awaits all futures concurrently, results in order.
+async fn join_all<T>(
+    futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T>>>>,
+) -> Vec<T> {
+    use std::task::Poll;
+    let mut futures: Vec<Option<_>> = futures.into_iter().map(Some).collect();
+    let mut out: Vec<Option<T>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(move |cx| {
+        for (f, o) in futures.iter_mut().zip(out.iter_mut()) {
+            if let Some(fut) = f {
+                if let Poll::Ready(v) = fut.as_mut().poll(cx) {
+                    *o = Some(v);
+                    *f = None;
+                }
+            }
+        }
+        if futures.iter().all(Option::is_none) {
+            Poll::Ready(out.iter_mut().filter_map(Option::take).collect())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+/// Fetches the tiles of `window` into a new patch texture (8 at a time)
+/// and shows it when complete, unless a newer request replaced it.
+async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generation: u32) {
+    use crate::tiles::{tile_span, url, SOURCES, TILE_PX};
+    let (device, queue, doc, source, date) = {
+        let a = app.borrow();
+        let Some(si) = a.tiles.source else {
+            return;
+        };
+        (
+            a.device.clone(),
+            a.queue.clone(),
+            a.doc.clone(),
+            SOURCES[si],
+            a.tiles.date.clone(),
+        )
+    };
+    let size = window.n * TILE_PX;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("detail tiles"),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let list = window.tiles();
+    let total = list.len();
+    let metres = tile_span(window.level) / f64::from(TILE_PX) * 111_320.0;
+    let (mut done, mut bytes, mut urls) = (0usize, 0f64, Vec::new());
+    let t = now();
+    for chunk in list.chunks(8) {
+        if app.borrow().tiles.generation != generation {
+            return; // superseded by a newer view
+        }
+        let futures: Vec<TileFuture> = chunk
+            .iter()
+            .map(|&(x, y, row, col)| {
+                let (texture, queue, u) = (
+                    texture.clone(),
+                    queue.clone(),
+                    url(&source, window.level, row, col, &date),
+                );
+                Box::pin(async move {
+                    let b = fetch_bytes(&u).await.ok()?;
+                    let image = bitmap(&b).await.ok()?;
+                    queue.copy_external_image_to_texture(
+                        &wgpu::CopyExternalImageSourceInfo {
+                            source: wgpu::ExternalImageSource::ImageBitmap(image.clone()),
+                            origin: wgpu::Origin2d::ZERO,
+                            flip_y: false,
+                        },
+                        wgpu::CopyExternalImageDestInfo {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: x * TILE_PX,
+                                y: y * TILE_PX,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                            color_space: wgpu::PredefinedColorSpace::Srgb,
+                            premultiplied_alpha: false,
+                        },
+                        wgpu::Extent3d {
+                            width: TILE_PX.min(image.width()),
+                            height: TILE_PX.min(image.height()),
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    image.close();
+                    Some((u, b.len()))
+                }) as TileFuture
+            })
+            .collect();
+        for (u, n) in join_all(futures).await.into_iter().flatten() {
+            done += 1;
+            bytes += n as f64;
+            urls.push(u);
+        }
+        set_html(
+            &doc,
+            "layerstatus",
+            &format!(
+                "Detail tiles: level {} ({metres:.0} m/px), {done}/{total}…",
+                window.level
+            ),
+        );
+    }
+    let mut a = app.borrow_mut();
+    if a.tiles.generation != generation {
+        return;
+    }
+    let (west, north, span) = window.bounds();
+    a.renderer.set_patch(Some((
+        texture.create_view(&Default::default()),
+        west as f32,
+        north as f32,
+        span as f32,
+    )));
+    a.tiles.front = Some(window);
+    a.tiles.loading = None;
+    a.tiles.front_urls = urls;
+    a.tiles.fetched += done;
+    a.tiles.bytes += bytes;
+    let (fetched, total_bytes) = (a.tiles.fetched, a.tiles.bytes);
+    if let Some(row) = a
+        .cost
+        .layers
+        .iter_mut()
+        .rev()
+        .find(|l| l.key == "tiles" && !l.unloaded)
+    {
+        row.file = format!(
+            "detail tiles: {}{} ({fetched} tiles so far)",
+            source.label,
+            if source.dated {
+                format!(" of {date}")
+            } else {
+                String::new()
+            }
+        );
+        row.wire = total_bytes;
+        row.unpacked = total_bytes;
+        row.gpu_added = f64::from(size) * f64::from(size) * 4.0;
+        row.attach_ms = now() - t;
+    }
+    a.cost.gpu_now = a.surface.gpu_bytes() + f64::from(size) * f64::from(size) * 4.0;
+    render_cost(&a.doc, &a.cost, a.source);
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!(
+            "Detail tiles: {}{}, level {} ({metres:.0} m/px), {done} tiles, {} in {:.0} ms.",
+            source.label,
+            if source.dated {
+                format!(" of {date}")
+            } else {
+                String::new()
+            },
+            window.level,
+            fmt_bytes(bytes),
+            now() - t
+        ),
+    );
+    a.dirty = true;
+}
+
+/// Switches detail tiles to source `si` (or off).
+fn set_tiles(a: &mut App, si: Option<usize>) {
+    a.tiles.generation += 1; // stops a load in flight
+    a.tiles.source = si;
+    a.tiles.front = None;
+    a.tiles.loading = None;
+    a.tiles.job = None;
+    a.tiles.front_urls.clear();
+    a.renderer.set_patch(None);
+    mark_unloaded(&mut a.cost, "tiles");
+    if let Some(si) = si {
+        a.tiles.fetched = 0;
+        a.tiles.bytes = 0.0;
+        a.cost.layers.push(LayerCost {
+            key: "tiles".into(),
+            file: format!(
+                "detail tiles: {}{}",
+                crate::tiles::SOURCES[si].label,
+                if crate::tiles::SOURCES[si].dated {
+                    format!(" of {}", a.tiles.date)
+                } else {
+                    String::new()
+                }
+            ),
+            wire: 0.0,
+            unpacked: 0.0,
+            fetch_ms: 0.0,
+            action: "last patch",
+            attach_ms: 0.0,
+            heap_added: 0.0,
+            gpu_added: 0.0,
+            unloaded: false,
+        });
+        set_html(
+            &a.doc,
+            "layerstatus",
+            "Detail tiles: zoom in (below ~1500 km) to load them.",
+        );
+    }
+    surface_changed(a);
+}
+
+/// Marks the last loaded row of `key` as unloaded.
+fn mark_unloaded(cost: &mut CostSheet, key: &str) {
+    if let Some(l) = cost
+        .layers
+        .iter_mut()
+        .rev()
+        .find(|l| l.key == key && !l.unloaded)
+    {
+        l.unloaded = true;
+    }
+}
+
+/// The optional layers: a load button each (or what was loaded), and the
+/// geoid | exact switch once exact coordinates are there.
+fn render_layers(doc: &Document, src: &dyn GlobeSource) {
+    let layers = src.layers();
+    if layers.is_empty() {
+        set_html(doc, "layers", "");
+        return;
+    }
+    let mut html = String::from("<div class=\"layers\">");
+    for (file, what, loaded) in &layers {
+        if *loaded {
+            html.push_str(&format!(
+                "<span class=\"layer on\">✓ {what} <button class=\"x\" data-unload=\"{file}\" \
+                 title=\"unload\">✕</button></span>"
+            ));
+        } else {
+            html.push_str(&format!(
+                "<button data-layer=\"{file}\">Load {what}</button>"
+            ));
+        }
+    }
+    html.push_str("</div>");
+    if src.has_exact() {
+        let (g, e) = match src.positions() {
+            Positions::Geoid => (" selected", ""),
+            Positions::Exact => ("", " selected"),
+        };
+        html.push_str(&format!(
+            "<label class=\"posmode\">queries use <select id=\"positions\">\
+             <option value=\"geoid\"{g}>geoid positions</option>\
+             <option value=\"exact\"{e}>exact coordinates</option></select></label>"
+        ));
+    }
+    set_html(doc, "layers", &html);
+}
+
+/// Fetches and attaches one layer, then refreshes what depends on it.
+async fn load_layer(app: Rc<RefCell<App>>, file: String) {
+    let (src, doc) = {
+        let a = app.borrow();
+        (a.source, a.doc.clone())
+    };
+    set_html(&doc, "layerstatus", &format!("Loading {}…", escape(&file)));
+    let t = now();
+    let bytes = match fetch_bytes(&file).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let t = now();
+    let what = match src.attach_layer(&bytes) {
+        Ok(w) => w,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not attach: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let attach_ms = now() - t;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == &file)
+        .map_or(bytes.len() as f64, |n| n.1);
+    {
+        let mut a = app.borrow_mut();
+        let before: usize = a.cost.base_heap
+            + a.cost
+                .layers
+                .iter()
+                .map(|l| l.heap_added as usize)
+                .sum::<usize>();
+        let heap_added = src.heap_bytes().saturating_sub(before) as f64;
+        a.cost.layers.push(LayerCost {
+            key: file.clone(),
+            unloaded: false,
+            file: file.clone(),
+            wire,
+            unpacked: bytes.len() as f64,
+            fetch_ms,
+            action: "attach",
+            attach_ms,
+            heap_added,
+            gpu_added: 0.0,
+        });
+        render_cost(&a.doc, &a.cost, src);
+    }
+    set_html(&doc, "layerstatus", &format!("Loaded {what}."));
+    let mut a = app.borrow_mut();
+    let data = a.data;
+    render_data_panel(&a.doc, data, src, a.compute);
+    a.hide_popover();
+    a.pending_query = Some(0.0);
+    a.dirty = true;
+    web_sys::console::log_1(
+        &format!(
+            "layer {file}: {} bytes, attach {attach_ms:.1} ms",
+            bytes.len()
+        )
+        .into(),
+    );
 }
 
 // ------------------------------------------------------------ query bench
@@ -1150,6 +2534,108 @@ struct Engine {
     queries: usize,
     /// Agreement with the CPU column, as text.
     agrees: String,
+}
+
+/// How the geoid results differ from the exact ones over a run (exact
+/// positions are the truth).
+#[derive(Default)]
+struct GeoidErrors {
+    radius_queries: usize,
+    radius_same: usize,
+    missed: usize,
+    missed_max: usize,
+    extra: usize,
+    extra_max: usize,
+    nearest_queries: usize,
+    nearest_same_set: usize,
+    nearest_same_order: usize,
+    /// Largest amount (km) by which the geoid's k nearest reach farther
+    /// than the true k nearest.
+    kth_err_max_km: f64,
+}
+
+/// (only in `a`, only in `b`) for two id lists.
+fn set_diff(a: &[u32], b: &[u32]) -> (usize, usize) {
+    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+    a.sort_unstable();
+    b.sort_unstable();
+    let (mut i, mut j, mut only_a, mut only_b) = (0, 0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => {
+                only_a += 1;
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                only_b += 1;
+                j += 1;
+            }
+        }
+    }
+    (only_a + a.len() - i, only_b + b.len() - j)
+}
+
+fn render_errors(doc: &Document, e: &GeoidErrors, positions_m: &[f64], bits: &str) {
+    let pct = |a: usize, n: usize| {
+        format!(
+            "{a}/{n} <span class=\"muted\">({:.2}%)</span>",
+            a as f64 * 100.0 / n.max(1) as f64
+        )
+    };
+    let mut sorted = positions_m.to_vec();
+    sorted.sort_unstable_by(f64::total_cmp);
+    let at = |q: f64| {
+        sorted
+            .get(((sorted.len().max(1) - 1) as f64 * q) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let mut rows = format!(
+        "<tr><td>position error</td><td colspan=\"2\">median {:.0} m · 99% {:.0} m · max {:.0} m \
+         <span class=\"muted\">({} cities, {bits})</span></td></tr>",
+        at(0.5),
+        at(0.99),
+        at(1.0),
+        sorted.len()
+    );
+    if e.radius_queries > 0 {
+        rows.push_str(&format!(
+            "<tr><td>radius: same cities</td><td colspan=\"2\">{}</td></tr>\
+             <tr><td>missed by geoid</td><td colspan=\"2\">{} cities · {:.2} per query · worst query {}</td></tr>\
+             <tr><td>wrongly included</td><td colspan=\"2\">{} cities · {:.2} per query · worst query {}</td></tr>",
+            pct(e.radius_same, e.radius_queries),
+            e.missed,
+            e.missed as f64 / e.radius_queries as f64,
+            e.missed_max,
+            e.extra,
+            e.extra as f64 / e.radius_queries as f64,
+            e.extra_max
+        ));
+    }
+    if e.nearest_queries > 0 {
+        rows.push_str(&format!(
+            "<tr><td>10 nearest: same cities</td><td colspan=\"2\">{}</td></tr>\
+             <tr><td>same order</td><td colspan=\"2\">{}</td></tr>\
+             <tr><td>worst reach</td><td colspan=\"2\">{:.0} m farther than the true 10 nearest</td></tr>",
+            pct(e.nearest_same_set, e.nearest_queries),
+            pct(e.nearest_same_order, e.nearest_queries),
+            e.kth_err_max_km * 1000.0
+        ));
+    }
+    set_html(
+        doc,
+        "qerr",
+        &format!(
+            "<div class=\"qsec\"><div class=\"qsec-title\">Geoid vs exact · errors of the geoid index</div>\
+             <table class=\"qtab errtab\">{rows}</table><p class=\"muted\">The same queries on the \
+             exact source coordinates (coords layer) are the truth. A city near the edge of a \
+             circle can fall on the other side when its position is rounded to its geoid cell.</p></div>"
+        ),
+    );
 }
 
 /// One query type: its engines side by side, the CPU first.
@@ -1361,6 +2847,57 @@ async fn run_bench(
     });
     render_sections(&doc, &sections, group, isolated);
     let done = cpu.len();
+
+    // With exact coordinates: the same queries on them, and how the geoid
+    // results differ (the error monitor).
+    let position_errors = src.position_errors_m();
+    let bits_label = format!("{} geoids", src.name());
+    let mut errors = GeoidErrors::default();
+    if position_errors.is_some() {
+        set_html(&doc, "qerr", "");
+    }
+    if position_errors.is_some() && !stop.get() {
+        let mut samples = Vec::new();
+        let mut work_ms = 0.0;
+        let mut same_count = 0usize;
+        for (k, q) in queries[..done].iter().enumerate() {
+            let t = now();
+            let exact = src.radius_ids(q.lat, q.lon, q.radius_km, Positions::Exact);
+            let dt = now() - t;
+            work_ms += dt;
+            samples.push(dt * 1000.0);
+            // Untimed: the geoid answer to compare with.
+            let geoid = src.radius_ids(q.lat, q.lon, q.radius_km, Positions::Geoid);
+            let (missed, extra) = set_diff(&exact, &geoid);
+            errors.radius_queries += 1;
+            errors.radius_same += usize::from(missed == 0 && extra == 0);
+            errors.missed += missed;
+            errors.missed_max = errors.missed_max.max(missed);
+            errors.extra += extra;
+            errors.extra_max = errors.extra_max.max(extra);
+            same_count += usize::from(exact.len() == cpu[k]);
+            if !slicer.tick("radius · CPU exact", k + 1, done).await {
+                break;
+            }
+        }
+        sections[0].engines.push(Engine {
+            name: "CPU exact",
+            what: "CompactGlobeDb::radius_at(Exact): the same Z-order cells, widened by the geoid \
+                   error; f64 haversine on the exact source coordinates (coords layer)"
+                .into(),
+            stats: Stats::of(&samples),
+            work_ms,
+            queries: errors.radius_queries,
+            agrees: format!("{same_count}/{}", errors.radius_queries),
+        });
+        render_sections(&doc, &sections, group, isolated);
+        render_errors(
+            &doc,
+            &errors,
+            position_errors.as_deref().unwrap_or_default(),
+            &bits_label,
+        );
+    }
     let agree = |got: &[usize], reference: &[usize]| {
         let (eq, total, worst) = mini::agreement(got, reference);
         if worst == 0 {
@@ -1468,6 +3005,51 @@ async fn run_bench(
             agrees: "reference".into(),
         });
         render_sections(&doc, &sections, group, isolated);
+
+        if position_errors.is_some() && !stop.get() {
+            let mut samples = Vec::new();
+            let mut work_ms = 0.0;
+            for (k, q) in queries[..done].iter().enumerate() {
+                let t = now();
+                let exact = src.nearest_ids(q.lat, q.lon, K, Positions::Exact);
+                let dt = now() - t;
+                work_ms += dt;
+                samples.push(dt * 1000.0);
+                let geoid = src.nearest_ids(q.lat, q.lon, K, Positions::Geoid);
+                errors.nearest_queries += 1;
+                errors.nearest_same_order += usize::from(exact == geoid);
+                errors.nearest_same_set += usize::from(set_diff(&exact, &geoid) == (0, 0));
+                let reach = |ids: &[u32]| {
+                    ids.iter()
+                        .map(|&id| src.distance_exact_km(q.lat, q.lon, id))
+                        .fold(0.0, f64::max)
+                };
+                errors.kth_err_max_km = errors.kth_err_max_km.max(reach(&geoid) - reach(&exact));
+                if !slicer.tick("nearest · CPU exact", k + 1, done).await {
+                    break;
+                }
+            }
+            sections[s].engines.push(Engine {
+                name: "CPU exact",
+                what: "CompactGlobeDb::nearest_at(Exact): the same doubling radius search on the \
+                       exact source coordinates (coords layer)"
+                    .into(),
+                stats: Stats::of(&samples),
+                work_ms,
+                queries: errors.nearest_queries,
+                agrees: format!(
+                    "{}/{} <span class=\"muted\">(same cities)</span>",
+                    errors.nearest_same_set, errors.nearest_queries
+                ),
+            });
+            render_sections(&doc, &sections, group, isolated);
+            render_errors(
+                &doc,
+                &errors,
+                position_errors.as_deref().unwrap_or_default(),
+                &bits_label,
+            );
+        }
         // Same set of cities as the CPU (order within ties may differ).
         let same = |got: &[Vec<u64>]| {
             let eq = got
@@ -1636,13 +3218,14 @@ async fn run() -> Result<(), String> {
     canvas.set_width((canvas.client_width() as f64 * dpr) as u32);
     canvas.set_height((canvas.client_height() as f64 * dpr) as u32);
 
-    let backends = if cfg!(feature = "webgl") && param("gl").is_some() {
-        wgpu::Backends::GL
-    } else if cfg!(feature = "webgl") {
-        wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
-    } else {
-        wgpu::Backends::BROWSER_WEBGPU
-    };
+    let backends =
+        if cfg!(feature = "webgl") && (param("gl").is_some() || param("webgl2").is_some()) {
+            wgpu::Backends::GL
+        } else if cfg!(feature = "webgl") {
+            wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
+        } else {
+            wgpu::Backends::BROWSER_WEBGPU
+        };
     let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor {
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -1682,67 +3265,32 @@ async fn run() -> Result<(), String> {
     let ready_ms = now() - boot;
     status("");
 
-    // Cost table: network, memory, start-up.
+    // Cost table: network, memory, start-up; layers add rows later.
     let net = network();
-    let wire: f64 = net.iter().map(|n| n.1).sum();
-    let mut html = String::from("<table>");
-    for (label, w, d) in &net {
-        let dec = if (d - w).abs() > 1.0 {
-            format!(" <span class=\"muted\">({} unpacked)</span>", fmt_bytes(*d))
-        } else {
-            String::new()
-        };
-        html.push_str(&row(label, &format!("{}{dec}", fmt_bytes(*w))));
-    }
-    // one-in-all.html: everything came in the page itself.
     let single = global("__GEODB_FILE_BYTES").as_f64();
-    if let Some(bytes) = single {
-        html.push_str(&row(
-            "one file",
-            &format!(
-                "{} <span class=\"muted\">(wasm, glue and data inline as base64)</span>",
-                fmt_bytes(bytes)
-            ),
+    let mut base = net;
+    if base.is_empty() && single.is_none() {
+        base.push((
+            "data".into(),
+            (globe_len + coast_len) as f64,
+            (globe_len + coast_len) as f64,
         ));
     }
-    if net.is_empty() {
-        html.push_str(&row(
-            "data",
-            &format!(
-                "{} + {}",
-                fmt_bytes(globe_len as f64),
-                fmt_bytes(coast_len as f64)
-            ),
-        ));
-    }
-    html.push_str(&row(
-        "total",
-        &format!("<b>{}</b>", fmt_bytes(single.unwrap_or(wire))),
-    ));
-    html.push_str(&row(
-        "database",
-        &format!(
-            "{} in memory <span class=\"muted\">(file {})</span>",
-            fmt_bytes(globe.heap_bytes() as f64),
-            fmt_bytes(globe_len as f64)
-        ),
-    ));
-    html.push_str(&row(
-        "wasm memory",
-        &format!(
-            "{} <span class=\"muted\">(incl. texture bake)</span>",
-            fmt_bytes(wasm_memory())
-        ),
-    ));
-    html.push_str(&row(
-        "start-up",
-        &format!(
+    let cost = CostSheet {
+        base_total: single.unwrap_or_else(|| base.iter().map(|n| n.1).sum()),
+        base,
+        single,
+        base_heap: globe.heap_bytes(),
+        base_wasm: wasm_memory(),
+        file_len: globe_len,
+        startup: format!(
             "fetch {fetch_ms:.0} · decode {decode_ms:.0} + {coast_ms:.0} · \
              texture {tex_px} px {bake_ms:.0} · <b>{ready_ms:.0} ms</b>"
         ),
-    ));
-    html.push_str("</table>");
-    set_html(&doc, "cost", &html);
+        layers: Vec::new(),
+        gpu_now: 0.0,
+    };
+    render_cost(&doc, &cost, globe);
     render_data_panel(&doc, data, globe, compute);
     web_sys::console::log_1(
         &format!(
@@ -1766,6 +3314,7 @@ async fn run() -> Result<(), String> {
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(SPIN_DEG_S)
         .clamp(0.0, SPIN_MAX_DEG_S);
+    let renderer_base_view = renderer.primary_view();
     let app = Rc::new(RefCell::new(App {
         doc: doc.clone(),
         canvas: canvas.clone(),
@@ -1775,6 +3324,33 @@ async fn run() -> Result<(), String> {
         backend,
         cam: OrbitCamera::default(),
         source: globe,
+        data,
+        cost,
+        tiles: Tiles {
+            // 8 x 8 tiles (4096 px) with WebGPU, 4 x 4 on the WebGL2 build.
+            n: if global("__GEODB_BUILD").as_string().as_deref() == Some("webgl2") {
+                4
+            } else {
+                8
+            },
+            date: param("date")
+                .filter(|d| d.len() == 10 && d.as_str() >= crate::tiles::FIRST_DATE)
+                .unwrap_or_else(yesterday),
+            ..Tiles::default()
+        },
+        surface: Surface {
+            list: vec![SurfaceTex {
+                id: "base".into(),
+                label: format!("baked, 1:50m coasts, {tex_px} px"),
+                bake: true,
+                view: renderer_base_view,
+                px: tex_px,
+            }],
+            show: "base".into(),
+            compare: None,
+            lines: None,
+            lines_on: true,
+        },
         gpu_index: None,
         compute,
         pointers: HashMap::new(),
@@ -1798,6 +3374,26 @@ async fn run() -> Result<(), String> {
         hovered: None,
     }));
 
+    // ?tiles=bluemarble|landsat|modis|modis-aqua|viirs (&date=YYYY-MM-DD):
+    // detail tiles when zoomed in, fetched from NASA GIBS (network).
+    if let Some(key) = param("tiles") {
+        if let Some(si) = crate::tiles::SOURCES.iter().position(|t| t.key == key) {
+            set_tiles(&mut app.borrow_mut(), Some(si));
+        }
+    }
+    // ?at=lat,lon,dist: start the camera there (a saved view).
+    if let Some(at) = param("at") {
+        let v: Vec<f64> = at
+            .split(',')
+            .filter_map(|x| x.trim().parse().ok())
+            .collect();
+        if let [lat, lon, dist] = v[..] {
+            let mut a = app.borrow_mut();
+            a.cam.fly_to(lat, lon, dist);
+            (a.cam.lat, a.cam.lon, a.cam.dist) = (lat, lon, dist);
+            a.pending_query = Some(0.0);
+        }
+    }
     let target: &web_sys::EventTarget = canvas.as_ref();
     {
         let app = app.clone();
@@ -1881,6 +3477,13 @@ async fn run() -> Result<(), String> {
         });
     }
     on_click(&doc, "spin", &app, App::toggle_spin);
+    {
+        let a = app.clone();
+        let button: web_sys::EventTarget = el::<web_sys::Element>(&doc, "download").into();
+        listen(&button, "click", true, move |_: web_sys::MouseEvent| {
+            wasm_bindgen_futures::spawn_local(download_page(a.clone()));
+        });
+    }
     {
         let speed: HtmlInputElement = el(&doc, "spin-speed");
         speed.set_value(&format!("{spin_deg_s}"));
@@ -1988,6 +3591,255 @@ async fn run() -> Result<(), String> {
                 inp.set_value(&t.label);
             }
         });
+    }
+
+    {
+        // Optional layers: load buttons and the geoid | exact switch.
+        let layers: web_sys::EventTarget = el::<web_sys::Element>(&doc, "layers").into();
+        let a = app.clone();
+        listen(&layers, "click", true, move |e: web_sys::MouseEvent| {
+            let target = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+            if let Some(file) = target.as_ref().and_then(|t| t.get_attribute("data-layer")) {
+                wasm_bindgen_futures::spawn_local(load_layer(a.clone(), file));
+            } else if let Some(file) = target.as_ref().and_then(|t| t.get_attribute("data-unload"))
+            {
+                let mut app = a.borrow_mut();
+                let src = app.source;
+                match src.detach_layer(&file) {
+                    Ok(()) => {
+                        mark_unloaded(&mut app.cost, &file);
+                        let data = app.data;
+                        render_data_panel(&app.doc, data, src, app.compute);
+                        render_cost(&app.doc, &app.cost, src);
+                        set_html(
+                            &app.doc,
+                            "layerstatus",
+                            &format!("Unloaded {}.", escape(&file)),
+                        );
+                        app.hide_popover();
+                        app.pending_query = Some(0.0);
+                        app.dirty = true;
+                    }
+                    Err(e) => set_html(&app.doc, "layerstatus", &escape(&e)),
+                }
+            }
+        });
+        let a = app.clone();
+        listen(&layers, "change", true, move |e: web_sys::Event| {
+            let value = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                .map(|s| s.value());
+            if let Some(v) = value {
+                let mut app = a.borrow_mut();
+                app.source.set_positions(if v == "exact" {
+                    Positions::Exact
+                } else {
+                    Positions::Geoid
+                });
+                let data = app.data;
+                render_data_panel(&app.doc, data, app.source, app.compute);
+                app.hide_popover();
+                app.pending_query = Some(0.0);
+                app.dirty = true;
+            }
+        });
+    }
+    {
+        // Earth surfaces: load buttons per size, unload, and the view switch.
+        let surface: web_sys::EventTarget = el::<web_sys::Element>(&doc, "surface").into();
+        let a = app.clone();
+        listen(&surface, "click", true, move |e: web_sys::MouseEvent| {
+            let which = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                .and_then(|t| t.get_attribute("data-texture"));
+            let Some(which) = which else {
+                return;
+            };
+            let px = |w: &str| w.split(':').nth(1).and_then(|p| p.parse::<u32>().ok());
+            if which.starts_with("coast:") {
+                wasm_bindgen_futures::spawn_local(load_coast_detail(
+                    a.clone(),
+                    px(&which).unwrap_or(4096),
+                ));
+            } else if which.starts_with("imagery:") {
+                wasm_bindgen_futures::spawn_local(load_imagery(
+                    a.clone(),
+                    px(&which).unwrap_or(4096),
+                ));
+            } else if which == "lines" {
+                wasm_bindgen_futures::spawn_local(load_lines(a.clone()));
+            } else if which == "unload:lines" {
+                let mut app = a.borrow_mut();
+                app.renderer.clear_coastlines();
+                app.surface.lines = None;
+                mark_unloaded(&mut app.cost, "lines");
+                surface_changed(&mut app);
+                set_html(&app.doc, "layerstatus", "Unloaded the coastlines.");
+            } else if let Some(id) = which.strip_prefix("unload:") {
+                let mut app = a.borrow_mut();
+                app.surface.remove(id);
+                mark_unloaded(&mut app.cost, id);
+                surface_changed(&mut app);
+                set_html(
+                    &app.doc,
+                    "layerstatus",
+                    &format!("Unloaded {}.", escape(id)),
+                );
+            }
+        });
+        let a = app.clone();
+        listen(&surface, "change", true, move |e: web_sys::Event| {
+            if let Some(check) = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .filter(|i| i.id() == "show-lines" || i.id() == "tiles-date")
+            {
+                if check.id() == "tiles-date" {
+                    let v = check.value();
+                    let mut app = a.borrow_mut();
+                    if v.len() == 10 && v != app.tiles.date {
+                        app.tiles.date = v;
+                        let si = app.tiles.source;
+                        set_tiles(&mut app, si);
+                    }
+                    return;
+                }
+                let mut app = a.borrow_mut();
+                app.surface.lines_on = check.checked();
+                let on = app.surface.lines_on;
+                app.renderer.show_coastlines(on);
+                app.dirty = true;
+                return;
+            }
+            let select = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
+            if let Some(select) = select {
+                let mut app = a.borrow_mut();
+                match select.id().as_str() {
+                    "tiles-source" => {
+                        let v = select.value();
+                        let si = crate::tiles::SOURCES.iter().position(|t| t.key == v);
+                        set_tiles(&mut app, si);
+                        return;
+                    }
+                    "surface-show" => app.surface.show = select.value(),
+                    "surface-compare" => {
+                        let v = select.value();
+                        app.surface.compare = (!v.is_empty()).then_some(v);
+                    }
+                    _ => return,
+                }
+                surface_changed(&mut app);
+            }
+        });
+        let mut app = app.borrow_mut();
+        app.cost.gpu_now = app.surface.gpu_bytes();
+        let max = app.renderer.max_texture_dimension();
+        render_surface(
+            &doc,
+            &app.surface,
+            max,
+            app.tiles.source,
+            Some(&app.tiles.date),
+        );
+        render_cost(&doc, &app.cost, app.source);
+    }
+    // URLs: ?layers=coords,meta,names ?positions=exact ?coast=4k ?lines=10m
+    // ?imagery=4k,8k,16k ?show=<id> ?compare=<id> (ids: base, coast-4096,
+    // coast-8192, imagery-4096, imagery-8192, imagery-16380), or ?detail=max
+    // for everything at the deepest level this device takes.
+    {
+        let max = app.borrow().renderer.max_texture_dimension();
+        let deepest = param("detail").as_deref() == Some("max");
+        let list = |name: &str| -> Vec<String> {
+            param(name)
+                .map(|l| {
+                    l.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let layers: Vec<String> = if deepest {
+            vec!["coords".into(), "meta".into(), "names".into()]
+        } else {
+            list("layers")
+        }
+        .into_iter()
+        .filter_map(|l| match l.as_str() {
+            "coords" | "meta" | "names" => Some(format!("cities.{l}")),
+            _ => None,
+        })
+        .collect();
+        let size = |v: &String| match v.as_str() {
+            "4k" => Some(4096u32),
+            "8k" => Some(8192),
+            "16k" => Some(16380),
+            other => other.parse().ok(),
+        };
+        let coasts: Vec<u32> = if deepest {
+            vec![4096]
+        } else {
+            list("coast").iter().filter_map(size).collect()
+        };
+        let imagery: Vec<u32> = if deepest {
+            vec![16380]
+        } else {
+            list("imagery").iter().filter_map(size).collect()
+        };
+        let exact = deepest || param("positions").as_deref() == Some("exact");
+        let lines = deepest || param("lines").is_some();
+        let (show, compare) = (param("show"), param("compare"));
+        let any = !layers.is_empty()
+            || !coasts.is_empty()
+            || !imagery.is_empty()
+            || show.is_some()
+            || compare.is_some()
+            || lines;
+        if any {
+            let a = app.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                for f in layers {
+                    load_layer(a.clone(), f).await;
+                }
+                if exact && a.borrow().source.has_exact() {
+                    let mut app = a.borrow_mut();
+                    app.source.set_positions(Positions::Exact);
+                    let data = app.data;
+                    render_data_panel(&app.doc, data, app.source, app.compute);
+                    app.pending_query = Some(0.0);
+                }
+                for px in coasts {
+                    load_coast_detail(a.clone(), px.min(max)).await;
+                }
+                for px in imagery {
+                    load_imagery(a.clone(), px.min(max)).await;
+                }
+                if lines {
+                    load_lines(a.clone()).await;
+                    if param("hidelines").is_some() {
+                        let mut app = a.borrow_mut();
+                        app.surface.lines_on = false;
+                        app.renderer.show_coastlines(false);
+                        surface_changed(&mut app);
+                    }
+                }
+                if show.is_some() || compare.is_some() {
+                    let mut app = a.borrow_mut();
+                    if let Some(s) = show {
+                        app.surface.show = s;
+                    }
+                    app.surface.compare = compare;
+                    surface_changed(&mut app);
+                }
+            });
+        }
     }
 
     start_loop(app);

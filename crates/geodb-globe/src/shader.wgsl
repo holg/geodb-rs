@@ -4,15 +4,24 @@ struct Globals {
     camera: vec4<f32>,
     // xyz: direction to the sun
     sun: vec4<f32>,
-    // x, y: viewport size in physical pixels
+    // x, y: viewport size in physical pixels; z: 1 = compare (split);
+    // w: split position as a fraction of the width
     viewport: vec4<f32>,
     // xyz: query centre on the unit sphere, w: cos(query radius) (> 1 = none)
     query: vec4<f32>,
+    // Detail patch ("patch" is reserved in WGSL): x west longitude, y north latitude, z span (degrees),
+    // w 1 = on
+    detail: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var earth: texture_2d<f32>;
 @group(0) @binding(2) var earth_sampler: sampler;
+// Surface colour (a bake or imagery), and the one right of a split.
+@group(0) @binding(3) var surface_left: texture_2d<f32>;
+@group(0) @binding(4) var surface_right: texture_2d<f32>;
+// Detail patch (tiles around the view), transparent where not loaded.
+@group(0) @binding(5) var patch_tex: texture_2d<f32>;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -39,13 +48,27 @@ fn vs_globe(v: VsIn) -> VsOut {
 @fragment
 fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(earth, earth_sampler, i.uv);
+    let left = textureSample(surface_left, earth_sampler, i.uv).rgb;
+    let right = textureSample(surface_right, earth_sampler, i.uv).rgb;
+    let split_x = g.viewport.w * g.viewport.x;
+    let use_right = select(0.0, 1.0, g.viewport.z > 0.5 && i.clip.x >= split_x);
     let n = normalize(i.world);
     let view = normalize(g.camera.xyz - i.world);
     let sun = normalize(g.sun.xyz);
 
     let ndl = dot(n, sun);
     let day = smoothstep(-0.15, 0.25, ndl);
-    let albedo = tex.rgb;
+    var albedo = mix(left, right, use_right);
+
+    // Detail tiles on the shown (left) side: where the patch has pixels.
+    let lon = i.uv.x * 360.0 - 180.0;
+    let lat = 90.0 - i.uv.y * 180.0;
+    let dl = lon - g.detail.x;
+    let pu = (dl - 360.0 * floor(dl / 360.0)) / g.detail.z;
+    let pv = (g.detail.y - lat) / g.detail.z;
+    let pc = textureSampleLevel(patch_tex, earth_sampler, clamp(vec2<f32>(pu, pv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
+    let inside = g.detail.w > 0.5 && pu >= 0.0 && pu <= 1.0 && pv >= 0.0 && pv <= 1.0;
+    albedo = mix(albedo, pc.rgb, select(0.0, pc.a, inside) * (1.0 - use_right));
     var col = albedo * (0.16 + 1.05 * max(ndl, 0.0) + 0.12 * day);
 
     // Ocean glint: water is the only strongly blue surface in the texture.
@@ -60,6 +83,10 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     // Atmospheric rim.
     let fres = pow(1.0 - max(dot(n, view), 0.0), 3.0);
     col += vec3<f32>(0.35, 0.6, 1.0) * fres * (0.15 + 0.6 * day);
+
+    // Split view: a thin divider.
+    let divider = select(0.0, 1.0, g.viewport.z > 0.5 && abs(i.clip.x - split_x) < 1.0);
+    col = mix(col, vec3<f32>(1.0, 0.85, 0.4), divider * 0.8);
 
     // Graticule every 15 degrees.
     let grid = vec2<f32>(i.uv.x * 24.0, i.uv.y * 12.0);
@@ -148,4 +175,33 @@ fn fs_marker(i: MarkerOut) -> @location(0) vec4<f32> {
     let rgb = mix(vec3<f32>(0.03, 0.05, 0.1), i.color.rgb, core);
     let a = disc * i.color.a;
     return vec4<f32>(rgb * a, a);
+}
+
+// ---------------------------------------------------------------- coastlines
+
+struct CoastIn {
+    // lon, lat in degrees; z: layer (0 land, 1 lakes)
+    @location(0) ll: vec3<f32>,
+};
+
+struct CoastOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_coast(v: CoastIn) -> CoastOut {
+    let la = radians(v.ll.y);
+    let lo = radians(v.ll.x);
+    // Same convention as geo::to_vec, slightly above the surface.
+    let p = vec3<f32>(cos(la) * sin(lo), sin(la), cos(la) * cos(lo)) * 1.0002;
+    var o: CoastOut;
+    o.clip = g.view_proj * vec4<f32>(p, 1.0);
+    o.color = select(vec4<f32>(1.0, 0.86, 0.45, 0.85), vec4<f32>(0.55, 0.82, 1.0, 0.8), v.ll.z > 0.5);
+    return o;
+}
+
+@fragment
+fn fs_coast(i: CoastOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(i.color.rgb * i.color.a, i.color.a);
 }

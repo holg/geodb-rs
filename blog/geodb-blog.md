@@ -658,3 +658,169 @@ If any of that sounds fun, contributions and issue discussions are very welcome:
 👉 Repo: `https://github.com/holg/geodb-rs`
 
 This is very much a “real” project: it scrapes enough of the Rust, CI, packaging, and profiling surface area that you can learn a lot by poking around – exactly how I like it.
+
+---
+
+## Addendum: A 1.3 MB Globe — Geoid-Only Data, WebGPU and the Browser
+
+The WASM demo from section 7 embeds the whole flat database: the `.wasm` is **11.3 MB**. That is fine for a desktop, but I wanted a showcase for the other end of the scale:
+
+> **The real globe, all 153,312 cities, search and spatial queries — in about 1 MB over the network, with low memory, running in any modern browser (even from `file://`).**
+
+This addendum is about how far the data can be squeezed, what the Z-order code buys you, and what happened when I put the same queries on the GPU.
+
+### A.1 Geoid-only: no coordinates at all
+
+Every city in `geodb-core` already carries a **geoid**: a 64-bit Morton (Z-order) code that interleaves the quantized latitude (odd bits) and longitude (even bits), 32 bits per axis. One latitude step is 180° / 2³² ≈ 4.7 mm.
+
+The new `CompactGlobeDb` (`geodb-core/src/globe_db.rs`) keeps *only* that geoid as the position — no `f64` latitude/longitude — plus names, compact ids and a rank (town / regional / capital). The file format (`.globe`) is columnar:
+
+```text
+header   "GDBG"  version  geoid_bits  compressed  reserved
+counts   countries, states, cities                          (varints)
+cities   sorted by geoid, as columns:
+         geoid     varint delta of (geoid >> (64 - geoid_bits))
+         country   u8 (u16 if > 256 countries)
+         state     zigzag delta against the previous city
+         rank      2 bits per city
+         names     NUL-separated, in city order
+```
+
+Cities that are neighbours on the Z-order curve are neighbours on the map, so the geoid deltas are tiny and the country/state columns are long runs. Columns compress much better than records.
+
+The geoid can be truncated to trade precision for size. Measured on the real dataset (153,312 cities):
+
+| geoid bits | file (gzip inside) | bytes / city | worst position error | vs flat `.bin` (7.3 MB) |
+|---:|---:|---:|---:|---:|
+| 64 | 1.75 MB | 11.4 | 0 | 4.2× smaller |
+| 48 | 1.43 MB | 9.3 | 1.3 m | 5.1× smaller |
+| 40 | 1.27 MB | 8.3 | 21 m | 5.8× smaller |
+| **32** | **1.10 MB** | **7.1** | **341 m** | **6.7× smaller** |
+
+341 m is invisible on a globe, so the demo uses 32 bits. Every size is smaller than the 3.6 MB source `json.gz`.
+
+`geodb-cli build-globe --bits 32 [--raw] -o cities.globe` writes the format, `geodb-cli globe-nearest --lat … --lng …` answers from the file alone.
+
+### A.2 The sort *is* the spatial index
+
+Because the cities are sorted by geoid, there is no separate index to ship. A radius query asks `RadiusBounds::geoid_ranges()` for the at most 16 Z-order cells that cover the search circle (exact bounding box, antimeridian and poles included), and each cell is a contiguous slice of the sorted array — two binary searches. Then an `f64` haversine on the few candidates.
+
+That took the compact radius search from a 905 µs linear scan to **37 µs** (Munich) and 15 µs (Fiji, across the dateline). `find_nearest` is exact: it widens the radius (25 km, doubling) until it holds `k` cities. Both are tested against a brute-force scan at hard places (antimeridian, the 0°/0° cell boundary, the poles) and 300 random centres.
+
+### A.3 Load what you have: geodb-mini and geodb-float
+
+The globe app no longer embeds a database. It fetches one, and **the file decides what the app can do**. A small trait, `GlobeSource`, hides which one it got; the loader sniffs the first bytes:
+
+- `GDBG` → **geodb-mini**: the compact file. Positions from 32-bit geoids (±341 m), name search by scanning, countries fly to their capital, regions to the centre of their cities.
+- gzip → **geodb-float**: the full flat database — exact `f64` coordinates, smart search (folding, aliases, ISO codes), timezones, currencies, native names.
+
+Hovering a city shows everything the loaded data knows. For Munich, geodb-mini has 7 fields (and its geoid is `0xe0602f6d`, 32 bits); geodb-float has 15 (`0xe0602f6d30a2dcde` — the mini geoid is literally its first 32 bits).
+
+Cargo features decide which loaders are compiled in, so the smallest page does not pay for the big one:
+
+| build | contains | wasm | total download |
+|---|---|---:|---:|
+| `mini.html` | geodb-mini, WebGPU | 555 KB (192 KB br) | **1.30 MB** with brotli |
+| `flex.html` | + geodb-float (`?data=float`), WebGL2 fallback | 3.7 MB | 11 MB |
+| `one-in-all.html` | mini, everything inline (base64) | — | 2.46 MB file, 1.49 MB br |
+| `one-in-all-flex.html` | flex, everything inline | — | 16.5 MB |
+
+The single-file variants open straight from disk: `file://` cannot `fetch()` or import modules, so the wasm-bindgen glue is inlined and the wasm and data are base64 blocks the app reads before it would fetch.
+
+One compression lesson: I first assumed the one-file HTML with brotli would be best. Measured, it is not — the data files are already gzipped inside, and base64 hides byte patterns. Storing the `.globe` columns **raw** and letting the server send brotli is 10% smaller than the gzip inside the file (979 KB vs 1,090 KB), so the release (`scripts/web_release.py`) ships raw data plus precompressed `.br`/`.gz`:
+
+| file | plain | gzip | brotli |
+|---|---:|---:|---:|
+| cities.globe (raw) | 2,490,193 | 1,089,698 | 979,216 |
+| coast.bin (raw) | 162,458 | 117,077 | 109,898 |
+| wasm | 554,903 | 232,136 | 191,604 |
+| js + html | 100,167 | 18,927 | 16,037 |
+| **total** | 3.31 MB | 1.46 MB | **1.30 MB** |
+
+Chrome's own Resource Timing, shown live in the page's *Cost* panel, confirms these sizes on the wire. The coastlines are Natural Earth 1:50m, packed as zigzag-varint deltas in 1/100° (118 KB instead of 450 KB of GeoJSON); the earth texture is baked in the browser from them plus the city density.
+
+### A.4 WebGPU: frames and compute
+
+Rendering is the same `wgpu` renderer as the native TUI/window app, compiled to WebGPU. On an M2 Max with a 60 Hz Studio Display the page is **vsync-capped at 60 fps** — which says nothing about the GPU. So the benchmark also renders 120 frames offscreen back to back and waits for the queue: **3,750 fps** equivalent (0.27 ms per frame at 4096 × 1842 with 4× MSAA). The per-frame budget goes to the view query (a few ms at 1,024 markers), not the GPU.
+
+More interesting: the same geoids go to the GPU as a **compute index**. The kernels deinterleave the Morton codes (WGSL has no 64-bit integers, so each geoid is two `u32`), take exact integer axis deltas, and finish with an `f32` haversine. Radius search runs one query per call or many per dispatch (each with its own radius); k-nearest is two passes (each workgroup keeps the top k of 4,096 geoids, a second pass merges).
+
+The benchmark panel runs **the same random queries** through every engine, side by side. 2,000 queries, radius log-uniform between 1 and 1,000 km, geodb-mini, Chrome, M2 Max:
+
+| radius search | CPU index | GPU, 1 query/call | GPU, 1024/call |
+|---|---:|---:|---:|
+| median | **5.0 µs** | 260 µs | 11.4 µs |
+| mean | 240 µs | 321 µs | 11.4 µs |
+| queries/s | 4.2 k | 3.1 k | **87 k** |
+| agrees with CPU | reference | 1993/2000 (±1) | 1993/2000 (±1) |
+
+| 10 nearest | CPU index | GPU, 1/call | GPU, 1024/call | CPU scan |
+|---|---:|---:|---:|---:|
+| median | **10 µs** | 1.2 ms | 51 µs | 12.6 ms |
+| agrees with CPU | reference | 1999/2000 | 1999/2000 | — |
+
+What the numbers say:
+
+- **One GPU call per query is dominated by the round trip** (submit, compute, map, read back ≈ 0.25 ms). It cannot beat an index that answers most queries in 5 µs.
+- **Batched, the GPU wins on throughput for radius search** — the CPU's cost grows with the radius (1,000 km returns ~60,000 cities, built and sorted), the GPU tests all 153k geoids per query no matter what: ~11 µs, flat.
+- **For k-nearest the index wins.** The GPU is brute force; against a brute-force CPU scan it is ~250× faster, against a good index 5× slower.
+- The first kernel used an `f32` *flat-earth* distance and disagreed on 10% of the counts (off by up to 71 cities at long radii). Switching to haversine on the exact integer deltas brought that to ±1 — cities within metres of the circle, where `f32` and `f64` round differently.
+- Browser timers are coarse (100 µs) unless the page is cross-origin isolated; the local server sends COOP/COEP so the panel gets 5 µs and can time single queries.
+
+### A.5 The bug the GPU found
+
+The comparison paid for itself immediately. With geodb-float loaded, the GPU's 10 nearest cities matched the CPU's on only **1,503 of 2,000** queries. The GPU had been verified against an exact scan, so I checked the CPU the same way:
+
+> `GeoDb::find_nearest` returned the wrong cities for **501 of 2,000** random queries, the 10th neighbour up to **336 km** too far.
+
+It scanned a fixed window of the geoid-sorted index around the query. Z-order curves have jumps: two cities 5 km apart can be far apart in the sort. The window missed them. (The legacy nested model scanned everything but ranked by squared *degrees* — wrong near the poles and across the dateline.)
+
+The fix reuses A.2: `find_nearest` and `find_cities_in_radius_by_geoid` now walk the Z-order cells of the geoid index with an `f64` haversine; nearest widens the radius until it has `k`. It is exact, and the radius search got 3.7× faster (662 → 180 µs mean on the same queries). A regression test compares both models with a brute-force scan; run against the old code it fails at the very first place it checks (Munich).
+
+### A.6 How it compares
+
+Is 1.3 MB for a globe with 153k searchable cities unusual? I checked comparable projects. Sizes marked brotli were measured from the published npm files (jsDelivr/unpkg, brotli -q 11, 29 September 2026); the rest are as their docs state them.
+
+**Globe and map engines — the library alone, before any data:**
+
+| project | download (brotli) | geodata included | offline |
+|---|---:|---|---|
+| [cobe](https://github.com/shuding/cobe) 2.0.1 | 5 KB | a 256×128 dot map, no cities | yes |
+| [OpenGlobus](https://github.com/openglobus/openglobus) 0.28.7 | 174 KB | none, streams tile layers | not documented |
+| [MapLibre GL JS](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-globe-with-a-vector-map/) 6.11 (globe since v5) | 253 KB | none, needs a style and tiles | only with local tiles |
+| [NASA Web WorldWind](https://github.com/NASAWorldWind/WebWorldWind) 0.11 | 273 KB | none, imagery "retrieved from remote servers" | no |
+| [globe.gl](https://github.com/vasturiano/globe.gl) 2.46 (incl. three.js) | 408 KB | none; its places example fetches a 190 KB GeoJSON | if self-hosted |
+| [Mapbox GL JS](https://docs.mapbox.com/mapbox-gl-js/guides/globe/) 3.32 | 411 KB | Mapbox-hosted tiles, access token | no |
+| [deck.gl](https://deck.gl/docs/api-reference/core/globe-view) 9.4 (GlobeView "experimental") | 451 KB | none | if self-hosted |
+| [CesiumJS](https://cesium.com/learn/cesiumjs-learn/cesiumjs-quickstart/) 1.145 (main bundle only) | 1.36 MB | streams imagery/terrain from Cesium ion (token) | no |
+| **geodb-globe mini** | **1.30 MB total** | **153,312 cities, regions, countries, coastlines** | **yes, even `file://`** |
+
+The geodb-globe app itself is 192 KB wasm + 13 KB JS (brotli) — about OpenGlobus's size — and the other 1.09 MB is data.
+
+**City data in the browser:**
+
+| dataset / package | cities | brotli | fields |
+|---|---:|---:|---|
+| **cities.globe (geodb-mini)** | **153,312** | **979 KB** | name, region, country, flag, rank; 32-bit geoid |
+| [country-state-city](https://www.npmjs.com/package/country-state-city) 3.2.1 `city.json` (same dr5hn source) | 148,038 | 1.70 MB | name, codes, lat/lng strings |
+| [cities.json](https://www.npmjs.com/package/cities.json) 1.1.64 (GeoNames cities1000) | 171,075 | 2.34 MB | name, lat/lng, ISO2, admin1 code |
+| [all-the-cities](https://www.npmjs.com/package/all-the-cities) 3.1.0 (protobuf) | 138,398 | 2.68 MB | GeoNames fields |
+| [browser-geocoder-geonames](https://github.com/AshKyd/browser-geocoder-geonames) | GeoNames | ~3.5 MB (its README) | forward/reverse geocoding, no map |
+
+The datasets differ in fields and counts, so this is a bytes-per-city comparison, not a like-for-like race — but a spatially sorted columnar file with 32-bit geoids is clearly a compact way to ship a gazetteer. Node-side offline geocoders are much bigger: [local-reverse-geocoder](https://www.npmjs.com/package/local-reverse-geocoder) downloads "roughly 2GB" on first run, [offline-geocoder](https://www.npmjs.com/package/offline-geocoder)'s SQLite database is "roughly 12 MB".
+
+**Tiles and spatial formats:** a [PMTiles](https://docs.protomaps.com/basemaps/downloads) world basemap is 17 MB at zoom 0–5 ([Simon Willison's measurements](https://til.simonwillison.net/gis/pmtiles)) and still needs a renderer; the packed 1:50m coastlines here are 110 KB. [FlatGeobuf](https://github.com/flatgeobuf/flatgeobuf) (15 KB) and [h3-js](https://github.com/uber/h3-js) (54 KB) are formats and index math, without data.
+
+**GPU compute:** I found no public library or demo that runs geospatial queries as WebGPU compute shaders; deck.gl's WebGPU backend is "not production ready" and its guide does not mention compute. The nearest related work is WebGPU *relational* query processing ([WGLog, arXiv 2607.17571](https://arxiv.org/abs/2607.17571)).
+
+So, as far as a search can tell (it cannot rule out every hobby demo): every mainstream engine ships the renderer and streams the world; the city packages ship the data without a globe, index or search; nothing I found combines a 3D globe, a 150k-city database, offline search, radius/k-nearest queries and a CPU-vs-GPU benchmark in about 1 MB.
+
+### A.7 Lessons
+
+1. **Measure the wire, not the file.** Base64 + brotli, gzip inside gzip: the intuitive choice lost. Raw columns + HTTP brotli beat the one-file page by 13% (1.30 vs 1.49 MB).
+2. **A sort order can be an index.** Z-order + covering cells gave exact spatial queries without shipping an index — as long as you respect the curve's jumps (which the old `find_nearest` did not).
+3. **vsync hides everything.** 60 fps on a 60 Hz display is not a benchmark; render offscreen without it.
+4. **GPU compute is a batch tool.** One query per round trip loses to a CPU index; a thousand per dispatch wins where the CPU's cost grows with the result.
+5. **A second implementation is the best test.** Two engines on the same random queries, with an "agrees" row, found a 25% wrong-answer bug that unit tests with hand-picked cities never hit.
+
+Try it: `crates/geodb-globe` (`mini.html`, `flex.html`, `scripts/one_in_all.py`, `scripts/web_release.py`), and `cargo run --release -p geodb-globe --example make_mini_assets` for the data.

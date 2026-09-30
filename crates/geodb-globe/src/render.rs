@@ -19,6 +19,8 @@ struct Globals {
     sun: [f32; 4],
     viewport: [f32; 4],
     query: [f32; 4],
+    /// Detail patch: west longitude, north latitude, span (degrees), on.
+    patch: [f32; 4],
 }
 
 #[repr(C)]
@@ -47,6 +49,19 @@ pub struct Renderer {
     halo_pipeline: wgpu::RenderPipeline,
     marker_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
+    bind_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    /// City lights (alpha of a baked texture).
+    earth_view: wgpu::TextureView,
+    /// Surface colour (a bake or imagery, same equirectangular layout).
+    left_view: wgpu::TextureView,
+    /// Colour right of the split; a 1x1 placeholder without a split.
+    right_view: wgpu::TextureView,
+    placeholder_view: wgpu::TextureView,
+    /// Split position as a fraction of the width, when comparing.
+    split: Option<f32>,
+    /// Detail patch: texture, west longitude, north latitude, span.
+    patch: Option<(wgpu::TextureView, f32, f32, f32)>,
     globals: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -55,6 +70,11 @@ pub struct Renderer {
     marker_count: u32,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
+    coast_pipeline: wgpu::RenderPipeline,
+    /// Vector coastlines: (lon, lat, layer) vertices, strip indices with
+    /// restarts, index count.
+    coast: Option<(wgpu::Buffer, wgpu::Buffer, u32)>,
+    coast_on: bool,
     /// For [`Renderer::render_region`]: the resolved image and its blit.
     region: Option<RegionBlit>,
 }
@@ -191,43 +211,21 @@ impl Renderer {
         // ---- earth texture (size limited by the device)
         let max_dim = device.limits().max_texture_dimension_2d;
         let earth = texture(max_dim.min(4096));
-        let earth_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("earth"),
+        let earth_tex = upload_earth(&device, &queue, &earth);
+        let placeholder = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("imagery placeholder"),
             size: wgpu::Extent3d {
-                width: earth.width,
-                height: earth.height,
+                width: 1,
+                height: 1,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: earth.mips.len() as u32,
+            mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        for (level, data) in earth.mips.iter().enumerate() {
-            let w = (earth.width >> level).max(1);
-            let h = (earth.height >> level).max(1);
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &earth_tex,
-                    mip_level: level as u32,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * w),
-                    rows_per_image: Some(h),
-                },
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("earth"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -294,28 +292,53 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("globals"),
-            layout: &bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &earth_tex.create_view(&Default::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
+        let earth_view = earth_tex.create_view(&Default::default());
+        let left_view_init = earth_view.clone();
+        let placeholder_view = placeholder.create_view(&Default::default());
+        let bind_group = make_bind_group(
+            &device,
+            &bgl,
+            &globals,
+            &sampler,
+            [
+                &earth_view,
+                &earth_view,
+                &placeholder_view,
+                &placeholder_view,
             ],
-        });
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("globe"),
             bind_group_layouts: &[Some(&bgl)],
@@ -418,6 +441,51 @@ impl Renderer {
             Some(premultiplied),
         );
 
+        // Coastlines: line strips over the surface, depth-tested (the far
+        // side stays hidden), one strip per ring, split by primitive restart.
+        let coast_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("coastlines"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_coast"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 12,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                })],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineStrip,
+                strip_index_format: Some(wgpu::IndexFormat::Uint32),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: SAMPLES,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_coast"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: view_format,
+                    blend: Some(premultiplied),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let (msaa, depth) = attachments(&device, width, height, view_format);
         Self {
             device,
@@ -428,6 +496,14 @@ impl Renderer {
             halo_pipeline,
             marker_pipeline,
             bind_group,
+            bind_layout: bgl,
+            sampler,
+            earth_view,
+            left_view: left_view_init,
+            right_view: placeholder_view.clone(),
+            placeholder_view,
+            split: None,
+            patch: None,
             globals,
             vertices,
             indices,
@@ -436,8 +512,118 @@ impl Renderer {
             marker_count: 0,
             msaa,
             depth,
+            coast_pipeline,
+            coast: None,
+            coast_on: true,
             region: None,
         }
+    }
+
+    /// Uploads a baked earth texture (with its mips) for [`set_surface`].
+    pub fn earth_view(&self, earth: &EarthTexture) -> wgpu::TextureView {
+        upload_earth(&self.device, &self.queue, earth).create_view(&Default::default())
+    }
+
+    /// The primary texture in use (the one baked at start, until changed).
+    pub fn primary_view(&self) -> wgpu::TextureView {
+        self.earth_view.clone()
+    }
+
+    /// Chooses what the globe shows: city `lights` (alpha of a bake), the
+    /// surface colour `left` (a bake or imagery), and optionally `right`
+    /// with a split at `split` (fraction of the width) to compare two
+    /// surfaces. Textures no longer referenced are freed.
+    pub fn set_surface(
+        &mut self,
+        lights: wgpu::TextureView,
+        left: wgpu::TextureView,
+        right: Option<(wgpu::TextureView, f32)>,
+    ) {
+        self.earth_view = lights;
+        self.left_view = left;
+        match right {
+            Some((view, at)) => {
+                self.right_view = view;
+                self.split = Some(at.clamp(0.0, 1.0));
+            }
+            None => {
+                self.right_view = self.placeholder_view.clone();
+                self.split = None;
+            }
+        }
+        self.rebind();
+    }
+
+    /// A detail patch over the surface: `view` (transparent where it has no
+    /// pixels) covers `span` degrees east and south of (`west`, `north`).
+    /// `None` removes it.
+    pub fn set_patch(&mut self, patch: Option<(wgpu::TextureView, f32, f32, f32)>) {
+        self.patch = patch;
+        self.rebind();
+    }
+
+    /// Draws `layers` of rings (lon, lat in degrees; layer 0 land, 1 lakes)
+    /// as lines on the globe. Returns the GPU bytes used.
+    pub fn set_coastlines(&mut self, layers: &[&[crate::coast::Ring]]) -> usize {
+        let mut vertices: Vec<[f32; 3]> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        for (layer, rings) in layers.iter().enumerate() {
+            for ring in rings.iter().filter(|r| r.len() >= 2) {
+                let first = vertices.len() as u32;
+                vertices.extend(ring.iter().map(|p| [p[0], p[1], layer as f32]));
+                indices.extend(first..vertices.len() as u32);
+                indices.push(first); // close the ring
+                indices.push(u32::MAX); // restart
+            }
+        }
+        let vb = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("coast vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let ib = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("coast indices"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+        let bytes = vertices.len() * 12 + indices.len() * 4;
+        self.coast = Some((vb, ib, indices.len() as u32));
+        self.coast_on = true;
+        bytes
+    }
+
+    /// Frees the coastlines.
+    pub fn clear_coastlines(&mut self) {
+        self.coast = None;
+    }
+
+    /// Shows or hides loaded coastlines.
+    pub fn show_coastlines(&mut self, on: bool) {
+        self.coast_on = on;
+    }
+
+    /// The largest 2D texture this device takes.
+    pub fn max_texture_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
+    fn rebind(&mut self) {
+        self.bind_group = make_bind_group(
+            &self.device,
+            &self.bind_layout,
+            &self.globals,
+            &self.sampler,
+            [
+                &self.earth_view,
+                &self.left_view,
+                &self.right_view,
+                self.patch.as_ref().map_or(&self.placeholder_view, |p| &p.0),
+            ],
+        );
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -536,8 +722,17 @@ impl Renderer {
             view_proj: cam.view_proj().to_cols_array_2d(),
             camera: [eye.x, eye.y, eye.z, cam.dist as f32],
             sun: scene.sun_dir.extend(0.0).to_array(),
-            viewport: [self.size.0 as f32, self.size.1 as f32, 0.0, 0.0],
+            viewport: [
+                self.size.0 as f32,
+                self.size.1 as f32,
+                if self.split.is_some() { 1.0 } else { 0.0 },
+                self.split.unwrap_or(0.5),
+            ],
             query: [qc.x, qc.y, qc.z, qr],
+            patch: self
+                .patch
+                .as_ref()
+                .map_or([0.0, 0.0, 1.0, 0.0], |p| [p.1, p.2, p.3, 1.0]),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -576,6 +771,13 @@ impl Renderer {
         pass.draw_indexed(0..self.index_count, 0, 0..1);
         pass.set_pipeline(&self.halo_pipeline);
         pass.draw_indexed(0..self.index_count, 0, 0..1);
+
+        if let (Some((vb, ib, count)), true) = (&self.coast, self.coast_on) {
+            pass.set_pipeline(&self.coast_pipeline);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..*count, 0, 0..1);
+        }
 
         if self.marker_count > 0 {
             pass.set_pipeline(&self.marker_pipeline);
@@ -722,4 +924,87 @@ fn attachments(
             .create_view(&Default::default())
     };
     (make("msaa", format), make("depth", DEPTH_FORMAT))
+}
+
+/// Creates the earth texture with its mip chain.
+fn upload_earth(device: &wgpu::Device, queue: &wgpu::Queue, earth: &EarthTexture) -> wgpu::Texture {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("earth"),
+        size: wgpu::Extent3d {
+            width: earth.width,
+            height: earth.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: earth.mips.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, data) in earth.mips.iter().enumerate() {
+        let w = (earth.width >> level).max(1);
+        let h = (earth.height >> level).max(1);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    tex
+}
+
+/// `views`: city lights (earth), left and right surface, detail patch.
+fn make_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    views: [&wgpu::TextureView; 4],
+) -> wgpu::BindGroup {
+    let [earth, left, right, patch] = views;
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("globals"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(earth),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(left),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(right),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(patch),
+            },
+        ],
+    })
 }

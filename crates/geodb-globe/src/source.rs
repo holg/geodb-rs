@@ -13,7 +13,8 @@ use crate::mini;
 use crate::places::{Nearby, Target};
 use crate::texture::Seed;
 use geodb_core::globe_db::{CompactGlobeDb, GLOBE_MAGIC};
-use geodb_core::spatial::generate_geoid;
+pub use geodb_core::globe_layers::Positions;
+use std::cell::{Cell, Ref, RefCell};
 
 /// One loaded dataset, behind the same interface.
 pub trait GlobeSource {
@@ -41,6 +42,46 @@ pub trait GlobeSource {
     fn nearest_geoids(&self, lat: f64, lon: f64, k: usize) -> Vec<u64>;
     /// The CPU calls the benchmark times: (radius, nearest), described.
     fn cpu_calls(&self) -> (&'static str, &'static str);
+
+    // ---- optional layers (geodb-mini): load more data later
+
+    /// Layers this data can load: (file name, what it adds, loaded?).
+    fn layers(&self) -> Vec<(&'static str, &'static str, bool)> {
+        Vec::new()
+    }
+    /// Attaches a layer file; returns what it added.
+    fn attach_layer(&self, _bytes: &[u8]) -> Result<&'static str, String> {
+        Err("this data has no optional layers".into())
+    }
+    /// Drops a loaded layer (by file name) again.
+    fn detach_layer(&self, _file: &str) -> Result<(), String> {
+        Err("this data has no optional layers".into())
+    }
+    /// Whether exact source coordinates are available.
+    fn has_exact(&self) -> bool {
+        true
+    }
+    /// The positions queries use now.
+    fn positions(&self) -> Positions {
+        Positions::Exact
+    }
+    /// Switches between geoid and exact positions (when both exist).
+    fn set_positions(&self, _positions: Positions) {}
+    /// City ids (in source order) within `radius_km` on `positions`, nearest
+    /// first: for comparing geoid and exact results.
+    fn radius_ids(&self, lat: f64, lon: f64, radius_km: f64, positions: Positions) -> Vec<u32>;
+    /// Ids of the `k` nearest cities on `positions`.
+    fn nearest_ids(&self, lat: f64, lon: f64, k: usize, positions: Positions) -> Vec<u32>;
+    /// Per city, the distance (m) between its geoid position and its exact
+    /// position; `None` without both.
+    fn position_errors_m(&self) -> Option<Vec<f64>> {
+        None
+    }
+    /// Great-circle distance (km) from (lat, lon) to city `id` at its exact
+    /// position (NaN without exact positions).
+    fn distance_exact_km(&self, _lat: f64, _lon: f64, _id: u32) -> f64 {
+        f64::NAN
+    }
 }
 
 /// Loads a dataset from its file bytes; the format is detected.
@@ -60,11 +101,7 @@ pub fn load(bytes: &[u8]) -> Result<Box<dyn GlobeSource>, String> {
 /// Worst position error (m) of `bits`-bit geoids: half the cell diagonal at
 /// the equator.
 pub fn geoid_error_m(bits: u8) -> f64 {
-    let cells = 2f64.powi(i32::from(bits) / 2);
-    let km_per_deg = 6371.0 * std::f64::consts::PI / 180.0;
-    let lat = 180.0 / cells * km_per_deg;
-    let lon = 360.0 / cells * km_per_deg;
-    0.5 * (lat * lat + lon * lon).sqrt() * 1000.0
+    geodb_core::globe_db::geoid_error_m(bits)
 }
 
 pub fn fmt_error(m: f64) -> String {
@@ -78,7 +115,6 @@ pub fn fmt_error(m: f64) -> String {
 }
 
 /// 83517030 -> "83,517,030".
-#[cfg(any(feature = "float", not(feature = "mini")))]
 fn fmt_count(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -110,20 +146,34 @@ fn push(rows: &mut Vec<(&'static str, String)>, label: &'static str, value: Opti
 
 // ------------------------------------------------------------------ mini
 
-/// geodb-mini: the compact geoid-only database.
+/// geodb-mini: the compact geoid-only database, plus the optional layers
+/// once they are attached (coords: exact positions; meta: details).
 pub struct MiniDb {
-    pub globe: CompactGlobeDb,
+    globe: RefCell<CompactGlobeDb>,
+    /// Smart-search blobs for the loaded layers; rebuilt when one attaches.
+    index: RefCell<Option<geodb_core::globe_search::GlobeSearchIndex>>,
     pub geoid_bits: u8,
+    positions: Cell<Positions>,
 }
 
 impl MiniDb {
     pub fn from_bytes(bytes: &[u8]) -> Result<MiniDb, String> {
         let globe = CompactGlobeDb::from_bytes(bytes).map_err(|e| e.to_string())?;
         Ok(MiniDb {
-            globe,
-            // Header: magic, version, geoid_bits (checked by from_bytes).
-            geoid_bits: bytes[5],
+            geoid_bits: globe.geoid_bits,
+            globe: RefCell::new(globe),
+            index: RefCell::new(None),
+            positions: Cell::new(Positions::Geoid),
         })
+    }
+
+    /// The database, with whatever layers are attached.
+    pub fn globe(&self) -> Ref<'_, CompactGlobeDb> {
+        self.globe.borrow()
+    }
+
+    fn ids(hits: Vec<(f64, usize)>) -> Vec<u32> {
+        hits.into_iter().map(|(_, i)| i as u32).collect()
     }
 }
 
@@ -133,14 +183,20 @@ impl GlobeSource for MiniDb {
     }
 
     fn capabilities(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("format", "compact geoid-only file (.globe)".into()),
+        let g = self.globe();
+        let mut rows = vec![
+            ("format", "compact geoid-only file (.globe)".to_string()),
             (
                 "positions",
                 format!(
-                    "{}-bit geoids only (within {}), decoded on the fly",
+                    "{}-bit geoids (within {}), decoded on the fly{}",
                     self.geoid_bits,
-                    fmt_error(geoid_error_m(self.geoid_bits))
+                    fmt_error(geoid_error_m(self.geoid_bits)),
+                    if g.exact.is_some() {
+                        "; exact coordinates loaded"
+                    } else {
+                        ""
+                    }
                 ),
             ),
             (
@@ -149,76 +205,240 @@ impl GlobeSource for MiniDb {
             ),
             (
                 "search",
-                "name scan; countries fly to the capital, regions to their centre".into(),
+                "smart search as GeoDb: folded (deunicode), ISO codes; + aliases, phone codes \
+                 with meta; + native names and 19 languages with names"
+                    .into(),
             ),
-            ("fields", "name, region, country, flag, rank".into()),
-        ]
+            ("fields", {
+                let mut f = String::from("name, region, country, flag, rank");
+                if g.meta.is_some() {
+                    f.push_str(" + population, type, timezone, codes, country facts");
+                }
+                if let Some(n) = &g.names {
+                    f.push_str(&format!(
+                        " + native names, {} languages, Wikidata",
+                        n.languages.len()
+                    ));
+                }
+                f
+            }),
+        ];
+        rows.push((
+            "now using",
+            match self.positions() {
+                Positions::Exact => "exact coordinates".into(),
+                Positions::Geoid => "geoid positions".into(),
+            },
+        ));
+        rows
     }
 
     fn stats(&self) -> (usize, usize, usize) {
-        self.globe.stats()
+        self.globe().stats()
     }
 
     fn position_error_m(&self) -> f64 {
-        geoid_error_m(self.geoid_bits)
+        match self.positions() {
+            Positions::Exact => 0.0,
+            Positions::Geoid => geoid_error_m(self.geoid_bits),
+        }
     }
 
     fn heap_bytes(&self) -> usize {
-        mini::heap_bytes(&self.globe)
+        let g = self.globe();
+        let exact = g
+            .exact
+            .as_ref()
+            .map_or(0, |e| std::mem::size_of_val(&e[..]));
+        let names = g.names.as_ref().map_or(0, |n| n.heap_bytes());
+        let meta = g.meta.as_ref().map_or(0, |m| {
+            m.city_type.len() * 2
+                + m.city_population.len() * 4
+                + m.city_timezone.len() * 2
+                + m.timezones.iter().map(String::len).sum::<usize>()
+                + m.countries
+                    .iter()
+                    .map(|c| {
+                        c.translations
+                            .iter()
+                            .map(|(a, b)| a.len() + b.len() + 48)
+                            .sum::<usize>()
+                            + 512
+                    })
+                    .sum::<usize>()
+                + m.states.len() * 160
+        });
+        let index = self.index.borrow().as_ref().map_or(0, |i| i.heap_bytes());
+        mini::heap_bytes(&g) + exact + meta + names + index
     }
 
     fn nearby(&self, lat: f64, lon: f64, radius_km: f64, spread: usize, limit: usize) -> Nearby {
-        mini::nearby(&self.globe, lat, lon, radius_km, spread, limit)
+        mini::nearby(
+            &self.globe(),
+            self.positions(),
+            lat,
+            lon,
+            radius_km,
+            spread,
+            limit,
+        )
     }
 
     fn search(&self, query: &str, limit: usize) -> Vec<Target> {
-        mini::search(&self.globe, query, limit)
+        let g = self.globe();
+        let mut index = self.index.borrow_mut();
+        let index =
+            index.get_or_insert_with(|| geodb_core::globe_search::GlobeSearchIndex::build(&g));
+        mini::search(&g, index, self.positions(), query, limit)
     }
 
     fn texture_seeds(&self) -> Vec<Seed> {
-        mini::texture_seeds(&self.globe)
+        mini::texture_seeds(&self.globe())
     }
 
     fn geoids(&self) -> Vec<u64> {
-        self.globe.cities.iter().map(|c| c.geoid).collect()
+        self.globe().cities.iter().map(|c| c.geoid).collect()
     }
 
     fn city_info(&self, geoid: u64, name: &str) -> Vec<(&'static str, String)> {
-        let g = &self.globe;
+        let g = self.globe();
         let from = g.cities.partition_point(|c| c.geoid < geoid);
-        let Some(city) = g.cities[from..]
+        let Some(i) = g.cities[from..]
             .iter()
             .take_while(|c| c.geoid == geoid)
-            .find(|c| c.name == name)
+            .position(|c| c.name == name)
+            .map(|k| from + k)
         else {
             return Vec::new();
         };
+        let city = &g.cities[i];
         let state = g.states.get(city.state_id as usize);
         let country = g.countries.get(city.country_id as usize);
         let (lat, lon) = city.coords();
+        let meta = g.meta.as_ref();
         let mut rows = vec![("city", city.name.clone())];
         push(&mut rows, "rank", Some(city.rank.label()));
-        push(&mut rows, "region", state.map(|s| s.name.as_str()));
-        if let Some(c) = country {
-            rows.push((
-                "country",
-                format!(
-                    "{} {} ({})",
-                    c.emoji.as_deref().unwrap_or(""),
-                    c.name,
-                    c.iso2
-                ),
-            ));
-            push(&mut rows, "capital", c.capital.as_deref());
+        if let Some(m) = meta {
+            push(&mut rows, "type", m.city_type(i));
+            match m.city_population(i) {
+                Some(p) => rows.push(("population", fmt_count(u64::from(p)))),
+                None => rows.push(("population", "unknown".into())),
+            }
         }
+        if let Some(n) = &g.names {
+            push(&mut rows, "native", n.native(i));
+            let t = n.translations(i);
+            if !t.is_empty() {
+                let shown: Vec<String> = t
+                    .iter()
+                    .filter(|(l, _)| ["de", "fr", "es", "ru", "ja", "zh-CN", "ar"].contains(l))
+                    .map(|(l, v)| format!("{l}: {v}"))
+                    .collect();
+                rows.push((
+                    "names",
+                    format!(
+                        "{}{}",
+                        shown.join(" · "),
+                        if t.len() > shown.len() {
+                            format!(" (+{} more)", t.len() - shown.len())
+                        } else {
+                            String::new()
+                        }
+                    ),
+                ));
+            }
+            push(&mut rows, "wikidata", n.wikidata(i).as_deref());
+        }
+        if let Some(names) = meta.and_then(|m| m.city_names(i)) {
+            if !names.aliases.is_empty() {
+                rows.push(("also", names.aliases.join(", ")));
+            }
+        }
+        if let Some(s) = state {
+            let sm = meta.and_then(|m| m.states.get(city.state_id as usize));
+            let codes = sm
+                .map(|m| {
+                    [m.code.as_deref(), m.full_code.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            rows.push((
+                "region",
+                if codes.is_empty() {
+                    s.name.clone()
+                } else {
+                    format!("{} ({codes})", s.name)
+                },
+            ));
+            push(
+                &mut rows,
+                "region native",
+                sm.and_then(|m| m.native_name.as_deref()),
+            );
+        }
+        push(&mut rows, "timezone", meta.and_then(|m| m.city_timezone(i)));
         rows.push((
-            "position",
+            "geoid position",
             format!(
                 "{} ± {}",
                 fmt_position(lat, lon),
-                fmt_error(self.position_error_m())
+                fmt_error(geoid_error_m(self.geoid_bits))
             ),
         ));
+        if let Some(&(elat, elon)) = g.exact.as_ref().and_then(|e| e.get(i)) {
+            rows.push(("exact position", fmt_position(elat, elon)));
+            rows.push((
+                "geoid error",
+                fmt_error(geodb_core::spatial::haversine_distance(lat, lon, elat, elon) * 1000.0),
+            ));
+        }
+        if let Some(c) = country {
+            let cm = meta.and_then(|m| m.countries.get(city.country_id as usize));
+            let iso = [Some(c.iso2.as_str()), cm.and_then(|m| m.iso3.as_deref())]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" / ");
+            rows.push((
+                "country",
+                format!("{} {} ({iso})", c.emoji.as_deref().unwrap_or(""), c.name),
+            ));
+            push(&mut rows, "capital", c.capital.as_deref());
+            if let Some(m) = cm {
+                push(&mut rows, "native name", m.native_name.as_deref());
+                let area = [m.region.as_deref(), m.subregion.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                push(&mut rows, "world region", Some(&area));
+                let money = [
+                    m.currency.as_deref(),
+                    m.currency_symbol.as_deref(),
+                    m.currency_name.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+                push(&mut rows, "currency", Some(&money));
+                push(
+                    &mut rows,
+                    "phone",
+                    m.phone_code
+                        .as_deref()
+                        .map(|p| format!("+{}", p.trim_start_matches('+')))
+                        .as_deref(),
+                );
+                push(&mut rows, "domain", m.tld.as_deref());
+                if let Some(p) = m.population {
+                    rows.push(("country pop.", fmt_count(p)));
+                }
+            }
+        }
         rows.push((
             "geoid",
             format!(
@@ -232,25 +452,123 @@ impl GlobeSource for MiniDb {
     }
 
     fn radius_count(&self, lat: f64, lon: f64, radius_km: f64) -> usize {
-        self.globe
-            .find_in_radius(generate_geoid(lat, lon), radius_km)
+        self.globe()
+            .radius_at(lat, lon, radius_km, Positions::Geoid)
             .len()
     }
 
     fn nearest_geoids(&self, lat: f64, lon: f64, k: usize) -> Vec<u64> {
-        self.globe
-            .find_nearest(lat, lon, k)
+        let g = self.globe();
+        g.nearest_at(lat, lon, k, Positions::Geoid)
             .into_iter()
-            .map(|(c, _, _)| c.geoid)
+            .map(|(_, i)| g.cities[i].geoid)
             .collect()
     }
 
     fn cpu_calls(&self) -> (&'static str, &'static str) {
         (
-            "CompactGlobeDb::find_in_radius: binary search of the Z-order cells that cover \
-             the circle, f64 haversine on those cities; returns every hit, sorted",
-            "CompactGlobeDb::find_nearest: radius search from 25 km, doubling until k are \
-             found; exact; returns the k cities",
+            "CompactGlobeDb::radius_at(Geoid): binary search of the Z-order cells that \
+             cover the circle, f64 haversine on the decoded geoids; returns every hit, sorted",
+            "CompactGlobeDb::nearest_at(Geoid): radius search from 25 km, doubling until k \
+             are found; exact on geoid positions; returns the k cities",
+        )
+    }
+
+    fn layers(&self) -> Vec<(&'static str, &'static str, bool)> {
+        let g = self.globe();
+        vec![
+            ("cities.coords", "exact coordinates", g.exact.is_some()),
+            (
+                "cities.meta",
+                "population, types, timezones, codes, country facts",
+                g.meta.is_some(),
+            ),
+            (
+                "cities.names",
+                "native names, 19 languages, Wikidata",
+                g.names.is_some(),
+            ),
+        ]
+    }
+
+    fn attach_layer(&self, bytes: &[u8]) -> Result<&'static str, String> {
+        let kind = self
+            .globe
+            .borrow_mut()
+            .attach_layer(bytes)
+            .map_err(|e| e.to_string())?;
+        // New names, codes or aliases: search over them from now on.
+        *self.index.borrow_mut() = Some(geodb_core::globe_search::GlobeSearchIndex::build(
+            &self.globe(),
+        ));
+        Ok(kind.label())
+    }
+
+    fn detach_layer(&self, file: &str) -> Result<(), String> {
+        use geodb_core::globe_layers::LayerKind;
+        let kind = match file {
+            "cities.coords" => LayerKind::Coords,
+            "cities.meta" => LayerKind::Meta,
+            "cities.names" => LayerKind::Names,
+            other => return Err(format!("no layer {other}")),
+        };
+        // Drop the index first (it holds folded copies), then the layer.
+        *self.index.borrow_mut() = None;
+        self.globe.borrow_mut().detach_layer(kind);
+        if kind == LayerKind::Coords {
+            self.positions.set(Positions::Geoid);
+        }
+        *self.index.borrow_mut() = Some(geodb_core::globe_search::GlobeSearchIndex::build(
+            &self.globe(),
+        ));
+        Ok(())
+    }
+
+    fn has_exact(&self) -> bool {
+        self.globe().exact.is_some()
+    }
+
+    fn positions(&self) -> Positions {
+        if self.has_exact() {
+            self.positions.get()
+        } else {
+            Positions::Geoid
+        }
+    }
+
+    fn set_positions(&self, positions: Positions) {
+        self.positions.set(positions);
+    }
+
+    fn radius_ids(&self, lat: f64, lon: f64, radius_km: f64, positions: Positions) -> Vec<u32> {
+        Self::ids(self.globe().radius_at(lat, lon, radius_km, positions))
+    }
+
+    fn nearest_ids(&self, lat: f64, lon: f64, k: usize, positions: Positions) -> Vec<u32> {
+        Self::ids(self.globe().nearest_at(lat, lon, k, positions))
+    }
+
+    fn distance_exact_km(&self, lat: f64, lon: f64, id: u32) -> f64 {
+        let g = self.globe();
+        if g.exact.is_none() || id as usize >= g.cities.len() {
+            return f64::NAN;
+        }
+        let (clat, clon) = g.position(id as usize, Positions::Exact);
+        geodb_core::spatial::haversine_distance(lat, lon, clat, clon)
+    }
+
+    fn position_errors_m(&self) -> Option<Vec<f64>> {
+        let g = self.globe();
+        let exact = g.exact.as_ref()?;
+        Some(
+            g.cities
+                .iter()
+                .zip(exact)
+                .map(|(c, &(elat, elon))| {
+                    let (lat, lon) = c.coords();
+                    geodb_core::spatial::haversine_distance(lat, lon, elat, elon) * 1000.0
+                })
+                .collect(),
         )
     }
 }
@@ -457,10 +775,40 @@ impl GlobeSource for FloatDb {
         rows
     }
 
+    fn radius_ids(&self, lat: f64, lon: f64, radius_km: f64, _: Positions) -> Vec<u32> {
+        use geodb_core::prelude::GeoSearch;
+        let base = self.db.cities.as_ptr() as usize;
+        let size =
+            std::mem::size_of::<geodb_core::prelude::City<geodb_core::prelude::DefaultBackend>>();
+        self.db
+            .find_cities_in_radius_by_geoid(
+                geodb_core::spatial::generate_geoid(lat, lon),
+                radius_km,
+            )
+            .into_iter()
+            .map(|(c, _, _)| ((std::ptr::from_ref(c) as usize - base) / size) as u32)
+            .collect()
+    }
+
+    fn nearest_ids(&self, lat: f64, lon: f64, k: usize, _: Positions) -> Vec<u32> {
+        use geodb_core::prelude::GeoSearch;
+        let base = self.db.cities.as_ptr() as usize;
+        let size =
+            std::mem::size_of::<geodb_core::prelude::City<geodb_core::prelude::DefaultBackend>>();
+        self.db
+            .find_nearest(lat, lon, k)
+            .into_iter()
+            .map(|(c, _, _)| ((std::ptr::from_ref(c) as usize - base) / size) as u32)
+            .collect()
+    }
+
     fn radius_count(&self, lat: f64, lon: f64, radius_km: f64) -> usize {
         use geodb_core::prelude::GeoSearch;
         self.db
-            .find_cities_in_radius_by_geoid(generate_geoid(lat, lon), radius_km)
+            .find_cities_in_radius_by_geoid(
+                geodb_core::spatial::generate_geoid(lat, lon),
+                radius_km,
+            )
             .len()
     }
 

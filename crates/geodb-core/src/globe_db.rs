@@ -138,6 +138,22 @@ pub struct CompactGlobeDb {
     pub states: Vec<GlobeState>,
     /// Cities sorted strictly by `geoid` (Morton code / Z-order curve).
     pub cities: Vec<GlobeCity>,
+    /// Precision of the geoids (bits; 0 or 64 = exact). Set by
+    /// [`from_bytes`](Self::from_bytes) from the file header.
+    #[serde(default)]
+    pub geoid_bits: u8,
+    /// Exact (lat, lng) per city, in `cities` order, once the coordinates
+    /// layer is attached (see [`crate::globe_layers`]).
+    #[serde(default)]
+    pub exact: Option<Vec<(f64, f64)>>,
+    /// Everything else the source dataset has, once the meta layer is
+    /// attached (see [`crate::globe_layers`]).
+    #[serde(default)]
+    pub meta: Option<crate::globe_layers::GlobeMeta>,
+    /// Native names, translations and Wikidata ids, once the names layer is
+    /// attached (see [`crate::globe_layers`]).
+    #[serde(default)]
+    pub names: Option<crate::globe_layers::GlobeNames>,
 }
 
 /// A city with its state and country.
@@ -152,6 +168,14 @@ impl CompactGlobeDb {
     /// Build a `CompactGlobeDb` from a loaded standard `GeoDb`.
     #[cfg(not(feature = "legacy_model"))]
     pub fn from_db<B: GeoBackend>(db: &crate::model::flat::GeoDb<B>) -> Self {
+        Self::from_db_ordered(db).0
+    }
+
+    /// Like [`from_db`](Self::from_db), plus the order: `order[i]` is the
+    /// index in `db.cities` of `cities[i]`. The order is deterministic
+    /// (geoid, then source index), so layers built from it line up.
+    #[cfg(not(feature = "legacy_model"))]
+    pub fn from_db_ordered<B: GeoBackend>(db: &crate::model::flat::GeoDb<B>) -> (Self, Vec<u32>) {
         let countries: Vec<GlobeCountry> = db
             .countries
             .iter()
@@ -174,7 +198,7 @@ impl CompactGlobeDb {
             })
             .collect();
 
-        let mut cities: Vec<GlobeCity> = db
+        let cities: Vec<GlobeCity> = db
             .cities
             .iter()
             .map(|c| {
@@ -206,14 +230,28 @@ impl CompactGlobeDb {
             })
             .collect();
 
-        // Sort cities along the Morton curve (Z-order curve) for implicit spatial indexing and delta packing
-        cities.sort_unstable_by_key(|c| c.geoid);
+        // Sort cities along the Morton curve (Z-order curve) for implicit
+        // spatial indexing and delta packing; ties by source index.
+        let mut order: Vec<u32> = (0..cities.len() as u32).collect();
+        order.sort_unstable_by_key(|&i| (cities[i as usize].geoid, i));
+        let mut slots: Vec<Option<GlobeCity>> = cities.into_iter().map(Some).collect();
+        let cities = order
+            .iter()
+            .filter_map(|&i| slots[i as usize].take())
+            .collect();
 
-        Self {
-            countries,
-            states,
-            cities,
-        }
+        (
+            Self {
+                countries,
+                states,
+                cities,
+                geoid_bits: 64,
+                exact: None,
+                meta: None,
+                names: None,
+            },
+            order,
+        )
     }
 
     /// Number of cities, states, and countries.
@@ -486,21 +524,14 @@ impl CompactGlobeDb {
         }
 
         let shift = 64 - u32::from(geoid_bits);
-        // Centre of the cell: the highest dropped bit of each axis.
-        let centre = if shift >= 2 {
-            0b11u64 << (shift - 2)
-        } else {
-            0
-        };
         let mut geoids = Vec::with_capacity(n_cities);
         let mut q = 0u64;
         for _ in 0..n_cities {
             q = q.wrapping_add(r.varint()?);
-            geoids.push(if shift == 64 {
-                centre
-            } else {
-                (q << shift) | centre
-            });
+            geoids.push(cell_centre(
+                if shift == 64 { 0 } else { q << shift },
+                geoid_bits,
+            ));
         }
         let wide = n_countries > 256;
         let mut country_ids = Vec::with_capacity(n_cities);
@@ -543,6 +574,10 @@ impl CompactGlobeDb {
             countries,
             states,
             cities,
+            geoid_bits,
+            exact: None,
+            meta: None,
+            names: None,
         })
     }
 
@@ -570,22 +605,71 @@ impl CompactGlobeDb {
     }
 }
 
+/// The geoid a `bits`-bit file decodes to: the centre of the cell that
+/// contains `geoid` (its dropped bits replaced by the highest one of each
+/// axis).
+pub fn cell_centre(geoid: u64, bits: u8) -> u64 {
+    if bits >= 64 || bits == 0 {
+        return geoid;
+    }
+    let shift = 64 - u32::from(bits);
+    let kept = if shift == 64 {
+        0
+    } else {
+        (geoid >> shift) << shift
+    };
+    kept | if shift >= 2 {
+        0b11u64 << (shift - 2)
+    } else {
+        0
+    }
+}
+
+/// Worst position error (m) of `bits`-bit geoids: half the diagonal of a
+/// cell at the equator (0 for exact geoids).
+pub fn geoid_error_m(bits: u8) -> f64 {
+    if bits == 0 || bits >= 64 {
+        return 0.0;
+    }
+    let cells = 2f64.powi(i32::from(bits) / 2);
+    let km_per_deg = crate::spatial::EARTH_RADIUS_KM * std::f64::consts::PI / 180.0;
+    let lat = 180.0 / cells * km_per_deg;
+    let lon = 360.0 / cells * km_per_deg;
+    0.5 * (lat * lat + lon * lon).sqrt() * 1000.0
+}
+
+/// Identifies a base file's cities (count and quantized geoids), so a
+/// layer can refuse to attach to a different base.
+pub(crate) fn fingerprint(cities: &[GlobeCity], bits: u8) -> u64 {
+    let shift = 64 - u32::from(if bits == 0 { 64 } else { bits.min(64) });
+    // FNV-1a over the quantized geoids.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ cities.len() as u64;
+    for c in cities {
+        let q = if shift == 64 { 0 } else { c.geoid >> shift };
+        for b in q.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
 fn to_u16<T: TryInto<u16>>(v: T) -> Result<u16> {
     v.try_into()
         .map_err(|_| GeoError::InvalidData("globe: id out of range".into()))
 }
 
 #[derive(Default)]
-struct Writer {
-    buf: Vec<u8>,
+pub(crate) struct Writer {
+    pub(crate) buf: Vec<u8>,
 }
 
 impl Writer {
-    fn bytes(&mut self, b: &[u8]) {
+    pub(crate) fn bytes(&mut self, b: &[u8]) {
         self.buf.extend_from_slice(b);
     }
 
-    fn varint(&mut self, mut v: u64) {
+    pub(crate) fn varint(&mut self, mut v: u64) {
         while v >= 0x80 {
             self.buf.push((v as u8) | 0x80);
             v >>= 7;
@@ -593,11 +677,11 @@ impl Writer {
         self.buf.push(v as u8);
     }
 
-    fn zigzag(&mut self, v: i64) {
+    pub(crate) fn zigzag(&mut self, v: i64) {
         self.varint(((v << 1) ^ (v >> 63)) as u64);
     }
 
-    fn text(&mut self, s: &str) -> Result<()> {
+    pub(crate) fn text(&mut self, s: &str) -> Result<()> {
         if s.as_bytes().contains(&0) {
             return Err(GeoError::InvalidData(format!(
                 "globe: text contains NUL: {s:?}"
@@ -609,9 +693,9 @@ impl Writer {
     }
 }
 
-struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
+pub(crate) struct Reader<'a> {
+    pub(crate) buf: &'a [u8],
+    pub(crate) pos: usize,
 }
 
 impl Reader<'_> {
@@ -619,20 +703,20 @@ impl Reader<'_> {
         GeoError::InvalidData("globe: unexpected end of data".into())
     }
 
-    fn byte(&mut self) -> Result<u8> {
+    pub(crate) fn byte(&mut self) -> Result<u8> {
         let b = *self.buf.get(self.pos).ok_or_else(Self::eof)?;
         self.pos += 1;
         Ok(b)
     }
 
-    fn take(&mut self, n: usize) -> Result<&[u8]> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&[u8]> {
         let end = self.pos.checked_add(n).ok_or_else(Self::eof)?;
         let s = self.buf.get(self.pos..end).ok_or_else(Self::eof)?;
         self.pos = end;
         Ok(s)
     }
 
-    fn varint(&mut self) -> Result<u64> {
+    pub(crate) fn varint(&mut self) -> Result<u64> {
         let mut v = 0u64;
         for shift in (0..64).step_by(7) {
             let b = self.byte()?;
@@ -644,13 +728,13 @@ impl Reader<'_> {
         Err(GeoError::InvalidData("globe: varint too long".into()))
     }
 
-    fn zigzag(&mut self) -> Result<i64> {
+    pub(crate) fn zigzag(&mut self) -> Result<i64> {
         let u = self.varint()?;
         Ok(((u >> 1) as i64) ^ -((u & 1) as i64))
     }
 
     /// A count, bounded so corrupt input cannot request huge allocations.
-    fn len(&mut self, max: usize) -> Result<usize> {
+    pub(crate) fn len(&mut self, max: usize) -> Result<usize> {
         let n = self.varint()? as usize;
         if n > max || n > self.buf.len().saturating_sub(self.pos) * 8 + 8 {
             return Err(GeoError::InvalidData(format!("globe: bad count {n}")));
@@ -658,7 +742,7 @@ impl Reader<'_> {
         Ok(n)
     }
 
-    fn text(&mut self) -> Result<String> {
+    pub(crate) fn text(&mut self) -> Result<String> {
         let rest = &self.buf[self.pos..];
         let end = rest.iter().position(|&b| b == 0).ok_or_else(Self::eof)?;
         let s = std::str::from_utf8(&rest[..end])
@@ -738,6 +822,8 @@ mod tests {
                 },
             ],
             cities,
+            geoid_bits: 64,
+            ..Default::default()
         }
     }
 

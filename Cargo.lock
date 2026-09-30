@@ -3439,6 +3439,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scopekit"
 version = "0.1.0"
+source = "git+ssh://git@github.com/holg/scopekit.git?rev=2275f3459e47ad3648b2cb603258fc30aac068e9#2275f3459e47ad3648b2cb603258fc30aac068e9"
 dependencies = [
  "arboard",
  "crossterm",

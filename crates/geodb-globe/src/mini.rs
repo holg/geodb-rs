@@ -18,7 +18,9 @@ use crate::coast::Ring;
 use crate::geo;
 use crate::places::{Nearby, Place, Rank, Target};
 use crate::texture::Seed;
-use geodb_core::globe_db::{CompactGlobeDb, GlobeHit, GlobeRank};
+use geodb_core::globe_db::{CompactGlobeDb, GlobeRank};
+use geodb_core::globe_layers::Positions;
+use geodb_core::globe_search::{GlobeSearchIndex, GlobeSmartItem};
 use geodb_core::spatial::{decode_geoid, generate_geoid};
 use std::io::{Read, Write};
 
@@ -164,9 +166,33 @@ fn rank(r: GlobeRank) -> Rank {
     }
 }
 
-fn place((city, state, country): GlobeHit<'_>, lat: f64, lon: f64) -> Place {
-    let (clat, clon) = city.coords();
-    Place {
+/// City `i` as a list/marker entry, at its position on `positions`.
+fn place(
+    globe: &CompactGlobeDb,
+    i: usize,
+    positions: Positions,
+    lat: f64,
+    lon: f64,
+) -> Option<Place> {
+    let (city, state, country) = globe.hit_at(i)?;
+    let (clat, clon) = globe.position(i, positions);
+    // With the meta layer: region code and timezone, as the full database shows.
+    let detail = globe
+        .meta
+        .as_ref()
+        .map(|m| {
+            let code = m
+                .states
+                .get(city.state_id as usize)
+                .and_then(|s| s.code.as_deref());
+            [code, m.city_timezone(i)]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .unwrap_or_default();
+    Some(Place {
         name: city.name.clone(),
         state: state.name.clone(),
         country: country.name.clone(),
@@ -176,67 +202,59 @@ fn place((city, state, country): GlobeHit<'_>, lat: f64, lon: f64) -> Place {
         rank: rank(city.rank),
         dist_km: geo::haversine_km(lat, lon, clat, clon),
         geoid: city.geoid,
-        detail: String::new(),
-    }
+        detail,
+    })
 }
 
 /// Cities around (lat, lon) for the list, labels and markers: the same
-/// shape as [`crate::places::nearby`], from the compact database. Only the
-/// `limit` returned places are turned into owned [`Place`]s.
+/// shape as [`crate::places::nearby`], from the compact database, on geoid
+/// or (with the coords layer) exact positions. Only the `limit` returned
+/// places are turned into owned [`Place`]s.
 pub fn nearby(
     globe: &CompactGlobeDb,
+    positions: Positions,
     lat: f64,
     lon: f64,
     radius_km: f64,
     spread: usize,
     limit: usize,
 ) -> Nearby {
-    let mut hits: Vec<(f64, GlobeHit<'_>)> = globe
-        .find_in_radius(generate_geoid(lat, lon), radius_km)
-        .into_iter()
-        .map(|(d, city, s, c)| (d, (city, s, c)))
-        .collect();
+    let mut hits = globe.radius_at(lat, lon, radius_km, positions);
     let fallback = hits.is_empty();
     if fallback {
-        hits = globe
-            .find_nearest(lat, lon, 12)
-            .into_iter()
-            .map(|h| {
-                let (clat, clon) = h.0.coords();
-                (geo::haversine_km(lat, lon, clat, clon), h)
-            })
-            .collect();
+        hits = globe.nearest_at(lat, lon, 12, positions);
     }
     let total = hits.len();
+    let rank_of = |i: usize| globe.cities[i].rank;
     // Prominent first, then near; greedily pick spread-out highlights.
-    hits.sort_by(|a, b| b.1 .0.rank.cmp(&a.1 .0.rank).then(a.0.total_cmp(&b.0)));
+    hits.sort_by(|a, b| rank_of(b.1).cmp(&rank_of(a.1)).then(a.0.total_cmp(&b.0)));
     let min_sep = radius_km / 4.0;
     let mut chosen: Vec<usize> = Vec::with_capacity(spread);
-    for (i, (_, (city, _, _))) in hits.iter().enumerate() {
+    for (k, &(_, i)) in hits.iter().enumerate() {
         if chosen.len() == spread {
             break;
         }
-        let (a_lat, a_lon) = city.coords();
+        let (a_lat, a_lon) = globe.position(i, positions);
         let far = chosen.iter().all(|&j| {
-            let (b_lat, b_lon) = hits[j].1 .0.coords();
+            let (b_lat, b_lon) = globe.position(hits[j].1, positions);
             geo::haversine_km(a_lat, a_lon, b_lat, b_lon) >= min_sep
         });
         if far {
-            chosen.push(i);
+            chosen.push(k);
         }
     }
     let highlights = chosen.len();
     let mut is_chosen = vec![false; hits.len()];
-    for &i in &chosen {
-        is_chosen[i] = true;
+    for &k in &chosen {
+        is_chosen[k] = true;
     }
-    let mut rest: Vec<usize> = (0..hits.len()).filter(|&i| !is_chosen[i]).collect();
+    let mut rest: Vec<usize> = (0..hits.len()).filter(|&k| !is_chosen[k]).collect();
     rest.sort_by(|&a, &b| hits[a].0.total_cmp(&hits[b].0));
     let places: Vec<Place> = chosen
         .into_iter()
         .chain(rest)
         .take(limit)
-        .map(|i| place(hits[i].1, lat, lon))
+        .filter_map(|k| place(globe, hits[k].1, positions, lat, lon))
         .collect();
     Nearby {
         highlights: highlights.min(places.len()),
@@ -246,170 +264,94 @@ pub fn nearby(
     }
 }
 
-/// Case-insensitive match quality: 3 exact, 2 prefix, 1 contains, 0 none.
-/// ASCII queries compare bytes without allocating.
-fn score(name: &str, q: &str) -> u8 {
-    if q.is_ascii() {
-        let (n, qb) = (name.as_bytes(), q.as_bytes());
-        if n.len() < qb.len() {
-            return 0;
-        }
-        if n.eq_ignore_ascii_case(qb) {
-            3
-        } else if n[..qb.len()].eq_ignore_ascii_case(qb) {
-            2
-        } else if n.windows(qb.len()).any(|w| w.eq_ignore_ascii_case(qb)) {
-            1
-        } else {
-            0
-        }
-    } else {
-        let n = name.to_lowercase();
-        if n == q {
-            3
-        } else if n.starts_with(q) {
-            2
-        } else if n.contains(q) {
-            1
-        } else {
-            0
-        }
-    }
-}
-
-/// Search by name over countries (fly to the capital), regions (fly to the
-/// centre of their cities) and cities. The compact file has no search
-/// index and no coordinates for countries or regions: both come from the
-/// cities.
-pub fn search(globe: &CompactGlobeDb, query: &str, limit: usize) -> Vec<Target> {
+/// Smart search (the same folding, fields and scores as
+/// `GeoDb::smart_search`, see [`GlobeSearchIndex`]) turned into fly-to
+/// targets: a country flies to its capital, a region to the centre of its
+/// cities, a city to its position.
+pub fn search(
+    globe: &CompactGlobeDb,
+    index: &GlobeSearchIndex,
+    positions: Positions,
+    query: &str,
+    limit: usize,
+) -> Vec<Target> {
     let q = query.trim();
     if q.chars().count() < 2 {
         return Vec::new();
     }
-    let q = if q.is_ascii() {
-        q.to_string()
-    } else {
-        q.to_lowercase()
-    };
-    // (score, kind: 2 country / 1 region / 0 city, prominence, target)
-    let mut hits: Vec<(u8, u8, u8, Target)> = Vec::new();
-    for (ci, c) in globe.countries.iter().enumerate() {
-        let s = score(&c.name, &q).max(if c.iso2.eq_ignore_ascii_case(&q) {
-            3
-        } else {
-            0
-        });
-        if s == 0 {
+    let mut out = Vec::with_capacity(limit);
+    let mut seen = std::collections::HashSet::new();
+    for hit in index.smart_search(globe, q) {
+        if out.len() == limit {
+            break;
+        }
+        if !seen.insert(hit.item) {
             continue;
         }
-        let capital = globe
-            .cities
-            .iter()
-            .find(|city| city.country_id as usize == ci && city.rank == GlobeRank::Capital)
-            .or_else(|| {
-                globe
+        let target = match hit.item {
+            GlobeSmartItem::Country(ci) => {
+                let c = &globe.countries[ci];
+                let capital = globe
                     .cities
                     .iter()
-                    .find(|city| city.country_id as usize == ci)
-            });
-        if let Some(city) = capital {
-            let (lat, lon) = city.coords();
-            hits.push((
-                s,
-                2,
-                0,
+                    .position(|city| {
+                        city.country_id as usize == ci && city.rank == GlobeRank::Capital
+                    })
+                    .or_else(|| {
+                        globe
+                            .cities
+                            .iter()
+                            .position(|city| city.country_id as usize == ci)
+                    });
+                capital.map(|i| {
+                    let (lat, lon) = globe.position(i, positions);
+                    Target {
+                        label: c.name.clone(),
+                        detail: "Country".into(),
+                        emoji: c.emoji.clone().unwrap_or_default(),
+                        lat,
+                        lon,
+                        dist: 1.9,
+                    }
+                })
+            }
+            GlobeSmartItem::State(si) => {
+                let state = &globe.states[si];
+                let sum = (0..globe.cities.len())
+                    .filter(|&i| globe.cities[i].state_id as usize == si)
+                    .map(|i| {
+                        let (lat, lon) = globe.position(i, positions);
+                        geo::to_vec(lat, lon)
+                    })
+                    .reduce(|a, b| a + b);
+                sum.zip(globe.countries.get(state.country_id as usize))
+                    .map(|(sum, country)| {
+                        let (lat, lon) = geo::from_vec(sum.normalize());
+                        Target {
+                            label: state.name.clone(),
+                            detail: format!("Region · {}", country.name),
+                            emoji: country.emoji.clone().unwrap_or_default(),
+                            lat,
+                            lon,
+                            dist: 1.25,
+                        }
+                    })
+            }
+            GlobeSmartItem::City(i) => globe.hit_at(i).map(|(city, state, country)| {
+                let (lat, lon) = globe.position(i, positions);
                 Target {
-                    label: c.name.clone(),
-                    detail: "Country".into(),
-                    emoji: c.emoji.clone().unwrap_or_default(),
+                    label: city.name.clone(),
+                    detail: format!("{}, {}", state.name, country.name),
+                    emoji: country.emoji.clone().unwrap_or_default(),
                     lat,
                     lon,
-                    dist: 1.9,
-                },
-            ));
-        }
-    }
-    let mut regions: Vec<usize> = globe
-        .states
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| score(&s.name, &q) > 0)
-        .map(|(i, _)| i)
-        .take(limit * 4)
-        .collect();
-    regions.sort_by_key(|&i| std::cmp::Reverse(score(&globe.states[i].name, &q)));
-    regions.truncate(limit);
-    for si in regions {
-        let state = &globe.states[si];
-        let sum = globe
-            .cities
-            .iter()
-            .filter(|c| c.state_id as usize == si)
-            .map(|c| {
-                let (lat, lon) = c.coords();
-                geo::to_vec(lat, lon)
-            })
-            .reduce(|a, b| a + b);
-        let (Some(sum), Some(country)) = (sum, globe.countries.get(state.country_id as usize))
-        else {
-            continue;
+                    dist: 1.03,
+                }
+            }),
         };
-        let (lat, lon) = geo::from_vec(sum.normalize());
-        hits.push((
-            score(&state.name, &q),
-            1,
-            0,
-            Target {
-                label: state.name.clone(),
-                detail: format!("Region · {}", country.name),
-                emoji: country.emoji.clone().unwrap_or_default(),
-                lat,
-                lon,
-                dist: 1.25,
-            },
-        ));
+        out.extend(target);
     }
-    let mut cities: Vec<(u8, u8, usize)> = globe
-        .cities
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| {
-            let s = score(&c.name, &q);
-            (s > 0).then_some((s, c.rank as u8, i))
-        })
-        .collect();
-    cities.sort_by_key(|c| std::cmp::Reverse((c.0, c.1)));
-    for (s, prominence, i) in cities.into_iter().take(limit) {
-        // A capital ranks with countries, above a region of the same name.
-        let kind = if prominence == GlobeRank::Capital as u8 {
-            2
-        } else {
-            0
-        };
-        let city = &globe.cities[i];
-        let (lat, lon) = city.coords();
-        let (Some(state), Some(country)) = (
-            globe.states.get(city.state_id as usize),
-            globe.countries.get(city.country_id as usize),
-        ) else {
-            continue;
-        };
-        hits.push((
-            s,
-            kind,
-            prominence,
-            Target {
-                label: city.name.clone(),
-                detail: format!("{}, {}", state.name, country.name),
-                emoji: country.emoji.clone().unwrap_or_default(),
-                lat,
-                lon,
-                dist: 1.03,
-            },
-        ));
-    }
-    hits.sort_by_key(|h| std::cmp::Reverse((h.0, h.1, h.2)));
-    hits.into_iter().take(limit).map(|h| h.3).collect()
+    out
 }
 
 /// Every city as a texture seed; capitals glow brighter.
@@ -656,39 +598,37 @@ mod tests {
     #[test]
     fn nearby_matches_the_full_database() {
         let g = globe();
-        let n = nearby(&g, 35.68, 139.76, 460.0, 14, 1024);
+        let n = nearby(&g, Positions::Geoid, 35.68, 139.76, 460.0, 14, 1024);
         let full = crate::places::nearby(crate::data::db(), 35.68, 139.76, 460.0, 14, 1024);
         // 32-bit geoids move cities by up to ~350 m: a city on the edge may flip.
         assert!((n.total as i64 - full.total as i64).abs() <= 3);
         assert_eq!(n.places[0].name, "Tokyo");
         assert_eq!(n.places[0].rank, Rank::Capital);
-        let ocean = nearby(&g, -40.0, -130.0, 50.0, 14, 1024);
+        let ocean = nearby(&g, Positions::Geoid, -40.0, -130.0, 50.0, 14, 1024);
         assert!(ocean.fallback && !ocean.places.is_empty());
     }
 
     #[test]
     fn search_finds_countries_regions_and_cities() {
         let g = globe();
-        let hits = search(&g, "germany", 5);
+        let ix = GlobeSearchIndex::build(&g);
+        let search = |q: &str, n| search(&g, &ix, Positions::Geoid, q, n);
+        let hits = search("germany", 5);
         let de = hits.iter().find(|t| t.label == "Germany").expect("Germany");
         assert!(
             (de.lat - 52.52).abs() < 0.2 && (de.lon - 13.4).abs() < 0.3,
             "Berlin"
         );
-        let hits = search(&g, "Bavaria", 5);
+        let hits = search("Bavaria", 5);
         let by = hits.iter().find(|t| t.label == "Bavaria").expect("Bavaria");
         assert!((47.0..51.0).contains(&by.lat) && (9.0..14.0).contains(&by.lon));
-        let tokyo = &search(&g, "tokyo", 3)[0];
-        assert_eq!(
-            (tokyo.label.as_str(), tokyo.dist),
-            ("Tokyo", 1.03),
-            "the city, not the region"
-        );
-        assert_eq!(
-            search(&g, "münchen", 3).len(),
-            search(&g, "MÜNCHEN", 3).len()
-        );
-        assert!(search(&g, "x", 5).is_empty());
+        // Ranked as GeoDb::smart_search: the region (state, 60) before the
+        // city (45), both found.
+        let tokyo = search("tokyo", 3);
+        assert_eq!((tokyo[0].label.as_str(), tokyo[0].dist), ("Tokyo", 1.25));
+        assert!(tokyo.iter().any(|t| t.label == "Tokyo" && t.dist == 1.03));
+        assert_eq!(search("münchen", 3).len(), search("MÜNCHEN", 3).len());
+        assert!(search("x", 5).is_empty());
     }
 
     #[test]

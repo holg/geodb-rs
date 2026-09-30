@@ -17,6 +17,11 @@ pub const DATA_REPO_URL: &str = "https://github.com/dr5hn/countries-states-citie
 
 /// URL the builder downloads from. It must match what `common_io::open_stream`
 /// reads: gzipped JSON with the `compact` feature, plain JSON (~47 MB) without.
+/// The upstream per-city export (gzipped JSON, ~25 MB): population, native
+/// names, type, translations and Wikidata ids that the combined dataset
+/// leaves out. Used only to build the compact globe's optional layers.
+pub const CITY_EXTRAS_URL: &str = "https://github.com/dr5hn/countries-states-cities-database/releases/latest/download/json-cities.json.gz";
+
 #[cfg(feature = "compact")]
 pub const DATA_DOWNLOAD_URL: &str = DATA_REPO_URL;
 #[cfg(not(feature = "compact"))]

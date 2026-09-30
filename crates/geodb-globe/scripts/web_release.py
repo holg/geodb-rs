@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Build the globe web demo for a server that sends compressed files.
 
-Builds mini.html (or flex.html), swaps in the data files with uncompressed
+Builds mini.html twice — a WebGPU build and a WebGL2 build (mini + the
+`webgl` feature) — and a small loader in index.html that asks for a WebGPU
+adapter first and loads only the build that will run: browsers without
+WebGPU (older iPads, Firefox on macOS/Linux) get the WebGL2 build, the
+others never download it. (--flex builds flex.html alone, which has both
+backends.) Then swaps in the data files with uncompressed
 payloads (assets/mini-raw, from `make_mini_assets`) and writes a `.br`
 (brotli -q 11) and `.gz` (gzip -9) next to every file. Brotli on the raw
 columns is about 10% smaller than the gzip inside the files.
@@ -15,15 +20,22 @@ plain files would send the raw data uncompressed (2.7 MB): use the
 `.br`/`.gz` files or the gzipped assets/mini data there.
 
 --serve runs a small local server that does the same (Accept-Encoding: br,
-gzip or identity), for testing. It also sends COOP/COEP headers: the page
+gzip or identity), for testing. --host 0.0.0.0 serves the intranet too;
+there browsers need HTTPS (a secure context) for WebGPU, the 5 µs timer
+and brotli, so add --tls: a self-signed certificate for localhost, this
+host's name and its current IP addresses is made once in .tls/ (accept
+it once per browser, or trust it). It also sends COOP/COEP headers: the page
 is then cross-origin isolated and its timer precise to 5 µs (send them from
 the real server too for per-query benchmark samples).
 """
 
 import argparse
 import gzip
+import re
 import http.server
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -37,13 +49,56 @@ TYPES = {
     ".wasm": "application/wasm",
     ".globe": "application/octet-stream",
     ".bin": "application/octet-stream",
+    ".coords": "application/octet-stream",
+    ".meta": "application/octet-stream",
+    ".names": "application/octet-stream",
+    ".webp": "image/webp",
 }
+# Already compressed: served as they are.
+NO_PRECOMPRESS = {".webp"}
+DETAIL = CRATE / "assets" / "detail"
 
 
-def build(page: str) -> Path:
-    dist = CRATE / ("dist-flex" if page == "flex.html" else "dist-mini")
+def build(page: str, dist: Path | None = None) -> Path:
+    dist = dist or CRATE / ("dist-flex" if page == "flex.html" else "dist-mini")
     subprocess.run(["trunk", "build", page, "--release", "--dist", str(dist)], cwd=CRATE, check=True)
     return dist
+
+
+LOADER = """<script type="module">
+// Load the build that will run here: WebGPU where an adapter exists, else
+// the WebGL2 build (no GPU compute, same app). Each browser fetches one.
+// ?webgl2 (or ?gl) forces the WebGL2 build, to compare it on this device.
+const forced = new URLSearchParams(location.search);
+const webgl2 = forced.has("webgl2") || forced.has("gl");
+const webgpu = !webgl2 && await (async () => {
+    try { return !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { return false; }
+})();
+const build = webgpu
+    ? { name: "webgpu", js: "./%(gpu_js)s", wasm: "./%(gpu_wasm)s" }
+    : { name: "webgl2", js: "./%(gl_js)s", wasm: "./%(gl_wasm)s" };
+window.__GEODB_BUILD = build.name;
+window.__GEODB_FILES = { js: build.js, wasm: build.wasm };
+const { default: init } = await import(build.js);
+await init({ module_or_path: build.wasm });
+</script>"""
+
+
+def build_webgl_variant() -> Path:
+    """mini.html with the WebGL2 backend compiled in, built to dist-mini-gl."""
+    page = CRATE / ".mini-gl.html"
+    html = (CRATE / "mini.html").read_text()
+    html = html.replace('data-cargo-features="mini"', 'data-cargo-features="mini,webgl"')
+    page.write_text(html)
+    try:
+        return build(page.name, CRATE / "dist-mini-gl")
+    finally:
+        page.unlink(missing_ok=True)
+
+
+def glue_pair(dist: Path) -> tuple[str, str]:
+    wasm = next(dist.glob("*_bg.wasm")).name
+    return wasm.removesuffix("_bg.wasm") + ".js", wasm
 
 
 def release(page: str) -> None:
@@ -55,14 +110,34 @@ def release(page: str) -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
     shutil.copytree(dist, OUT)
+    if page == "mini.html":
+        # Second build with WebGL2, and the loader that picks one.
+        gl = build_webgl_variant()
+        gpu_js, gpu_wasm = glue_pair(dist)
+        gl_js, gl_wasm = glue_pair(gl)
+        for name in (gl_js, gl_wasm):
+            shutil.copy(gl / name, OUT / name)
+        index = OUT / "index.html"
+        html = index.read_text()
+        html = re.sub(r'<link rel="(modulepreload|preload)"[^>]*>\s*', "", html)
+        html = re.sub(r'<script type="module">.*?</script>', lambda _: LOADER % {
+            "gpu_js": gpu_js, "gpu_wasm": gpu_wasm, "gl_js": gl_js, "gl_wasm": gl_wasm,
+        }, html, count=1, flags=re.S)
+        index.write_text(html)
+        print(f"builds: webgpu {gpu_wasm}, webgl2 {gl_wasm}")
     for raw in RAW.iterdir():
         shutil.copy(raw, OUT / raw.name)
+    # Earth detail layers (scripts/fetch_detail.py), when made.
+    for name in ("coast10m.bin", "earth-16k.webp", "earth-8k.webp", "earth-4k.webp"):
+        if (DETAIL / name).exists():
+            shutil.copy(DETAIL / name, OUT / name)
 
     rows = []
-    for f in sorted(p for p in OUT.iterdir() if p.suffix in TYPES):
+    for f in sorted(p for p in OUT.iterdir() if p.suffix in TYPES and p.suffix not in NO_PRECOMPRESS):
         data = f.read_bytes()
         (f.parent / (f.name + ".gz")).write_bytes(gzip.compress(data, 9, mtime=0))
-        subprocess.run(["brotli", "-q", "11", "-f", "-o", str(f) + ".br", str(f)], check=True)
+        # Window 2^24: browsers accept it, and it helps the large layers.
+        subprocess.run(["brotli", "-q", "11", "-w", "24", "-f", "-o", str(f) + ".br", str(f)], check=True)
         rows.append((f.name, len(data), (f.parent / (f.name + ".gz")).stat().st_size,
                      (f.parent / (f.name + ".br")).stat().st_size))
 
@@ -106,17 +181,58 @@ class Precompressed(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def local_addresses() -> list[str]:
+    """IPv4 addresses of this machine (for the certificate and the URLs)."""
+    out = subprocess.run(["ifconfig"], capture_output=True, text=True).stdout if shutil.which("ifconfig") else ""
+    addrs = [line.split()[1] for line in out.splitlines() if line.strip().startswith("inet ")]
+    return [a for a in addrs if a != "127.0.0.1"]
+
+
+def certificate() -> tuple[Path, Path]:
+    """A self-signed certificate for localhost, this host and its addresses."""
+    tls = CRATE / ".tls"
+    cert, key = tls / "cert.pem", tls / "key.pem"
+    if cert.exists() and key.exists():
+        return cert, key
+    tls.mkdir(exist_ok=True)
+    host = socket.gethostname()
+    names = ["localhost", host] + ([host.removesuffix(".local") + ".local"] if not host.endswith(".local") else [])
+    san = ",".join([f"DNS:{n}" for n in dict.fromkeys(names)] + ["IP:127.0.0.1"] + [f"IP:{a}" for a in local_addresses()])
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "825",
+         "-keyout", str(key), "-out", str(cert), "-subj", f"/CN={host}", "-addext", f"subjectAltName={san}"],
+        check=True, capture_output=True,
+    )
+    print(f"made {cert} for {san}")
+    return cert, key
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--flex", action="store_true", help="build flex.html instead of mini.html")
     ap.add_argument("--serve", type=int, metavar="PORT", help="serve dist-web with precompression")
+    ap.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0: intranet too)")
+    ap.add_argument("--tls", action="store_true", help="HTTPS with a self-signed certificate (.tls/)")
     ap.add_argument("--no-build", action="store_true", help="only serve the last release")
     args = ap.parse_args()
     if not args.no_build:
         release("flex.html" if args.flex else "mini.html")
     if args.serve:
-        print(f"\nserving {OUT} on http://127.0.0.1:{args.serve}/ (br, gzip or plain)")
-        http.server.ThreadingHTTPServer(("127.0.0.1", args.serve), Precompressed).serve_forever()
+        server = http.server.ThreadingHTTPServer((args.host, args.serve), Precompressed)
+        scheme = "http"
+        if args.tls:
+            cert, key = certificate()
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert, key)
+            server.socket = ctx.wrap_socket(server.socket, server_side=True)
+            scheme = "https"
+        hosts = ["127.0.0.1"] if args.host == "127.0.0.1" else ["localhost", socket.gethostname()] + local_addresses()
+        print(f"\nserving {OUT} (br, gzip or plain) on:")
+        for h in hosts:
+            print(f"  {scheme}://{h}:{args.serve}/")
+        if args.host != "127.0.0.1" and not args.tls:
+            print("  note: plain http off localhost is not a secure context (no WebGPU, no brotli); add --tls")
+        server.serve_forever()
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--flex", action="store_true", help="both datasets and WebGL2")
     ap.add_argument("--no-build", action="store_true", help="reuse the last trunk build")
+    ap.add_argument("--with-names", action="store_true", help="also embed the names layer (~11 MB)")
     args = ap.parse_args()
 
     page, dist = ("flex.html", CRATE / "dist-flex") if args.flex else ("mini.html", CRATE / "dist-mini")
@@ -55,23 +56,37 @@ def main() -> None:
     html = (dist / "index.html").read_text()
     wasm = next(dist.glob("*_bg.wasm"))
     glue = next(p for p in dist.glob("*.js"))
-    data = sorted(p for p in dist.iterdir() if p.suffix in (".globe", ".bin"))
+    # Data and the optional layers (loaded on demand, but inline too); the
+    # names layer (~11 MB) only when asked for.
+    kinds = (".globe", ".bin", ".coords", ".meta") + ((".names",) if args.with_names else ())
+    data = sorted(p for p in dist.iterdir() if p.suffix in kinds)
 
     # Drop trunk's loader, preloads and copied-file links.
     html = re.sub(r'<link rel="(modulepreload|preload)"[^>]*>\s*', "", html)
     html = re.sub(r'<script type="module">.*?</script>\s*', "", html, flags=re.S)
 
+    # Same layout as the in-page "Download as one HTML file": the wasm and
+    # glue as app.wasm / app.js, the page skeleton as page.html (so the
+    # file can be downloaded again from itself).
+    skeleton = html
     blocks = [
-        f'<script type="application/octet-stream" id="embed:{p.name}">'
-        f"{base64.b64encode(p.read_bytes()).decode()}</script>"
-        for p in [wasm, *data]
+        f'<script type="application/octet-stream" id="embed:{name}">'
+        f"{base64.b64encode(data).decode()}</script>"
+        for name, data in [
+            ("app.wasm", wasm.read_bytes()),
+            ("app.js", glue.read_bytes()),
+            ("page.html", skeleton.encode()),
+        ] + [(p.name, p.read_bytes()) for p in data]
     ]
+    names = ["app.wasm", "app.js", "page.html"] + [p.name for p in data]
     loader = f"""<script type="module">
 {glue_script(glue.read_text())}
 const bytes = (id) => Uint8Array.from(atob(document.getElementById("embed:" + id).textContent), (c) => c.charCodeAt(0));
 window.__GEODB_FILE_BYTES = Number("{SIZE_PLACEHOLDER}".replace(/\\D/g, ""));
-window.__GEODB_EMBEDDED = {{ {", ".join(f'"{p.name}": bytes("{p.name}")' for p in data)} }};
-await __wbg_init({{ module_or_path: bytes("{wasm.name}") }});
+window.__GEODB_BUILD = "{'flex' if args.flex else 'webgpu'}";
+window.__GEODB_FILES = {{ js: "app.js", wasm: "app.wasm" }};
+window.__GEODB_EMBEDDED = {{ {", ".join(f'"{n}": bytes("{n}")' for n in names)} }};
+await __wbg_init({{ module_or_path: window.__GEODB_EMBEDDED["app.wasm"] }});
 </script>"""
     html = html.replace("</body>", "\n".join(blocks) + "\n" + loader + "\n</body>")
 

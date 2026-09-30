@@ -17,8 +17,10 @@ pub mod mesh;
 pub mod mini;
 pub mod places;
 pub mod render;
+pub mod single_file;
 pub mod source;
 pub mod texture;
+pub mod tiles;
 pub mod view;
 
 #[cfg(all(target_arch = "wasm32", not(feature = "mini")))]
