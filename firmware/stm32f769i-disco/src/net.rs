@@ -19,6 +19,25 @@ static mut PACKETS: MaybeUninit<PacketQueue<4, 4>> = MaybeUninit::uninit();
 static mut STORAGE: MaybeUninit<StackStorage<'static>> = MaybeUninit::uninit();
 pub static DEVICE: StaticCell<Device> = StaticCell::new();
 
+/// Zeroes the `.ethbuf` section (`ethbuf.x`). It is NOLOAD, so cortex-m-rt leaves it alone, but it
+/// holds xarxa-driver's packet pool, whose bitmap must start at zero: SRAM1 keeps the bits of the
+/// previous run across a reset, and the RX ring then finds the pool "exhausted".
+///
+/// # Safety
+/// Call once, first thing in `main`, before anything uses the packet pool or the statics here.
+pub unsafe fn zero_ethbuf() {
+    extern "C" {
+        static mut __sethbuf: u32;
+        static mut __eethbuf: u32;
+    }
+    let mut p = core::ptr::addr_of_mut!(__sethbuf);
+    let end = core::ptr::addr_of_mut!(__eethbuf);
+    while p < end {
+        p.write_volatile(0);
+        p = p.add(1);
+    }
+}
+
 /// The stack storage, initialised once.
 ///
 /// # Safety

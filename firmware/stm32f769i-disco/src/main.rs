@@ -46,6 +46,8 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // First, before the data cache is on and before anything takes a packet buffer.
+    unsafe { net::zero_ethbuf() };
     // STM32F769I-DISCO: 25 MHz HSE crystal -> 216 MHz sysclk, PLLSAI 384/7/2 = 27.43 MHz LTDC pixel
     // clock, DSI PLL 25/5 x 100 = 500 MHz (62.5 MHz lane byte clock).
     let mut config = Config::default();
