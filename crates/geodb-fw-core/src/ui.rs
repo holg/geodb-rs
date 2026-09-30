@@ -123,7 +123,11 @@ impl Extra {
     pub fn set(&mut self, index: u32, name: &str, detail: &str) {
         fn put(dst: &mut [u8], s: &str) -> u8 {
             let mut n = 0;
-            for b in s.bytes().filter(|b| (0x20..0x7f).contains(b)).take(dst.len()) {
+            for b in s
+                .bytes()
+                .filter(|b| (0x20..0x7f).contains(b))
+                .take(dst.len())
+            {
                 dst[n] = b;
                 n += 1;
             }
@@ -354,7 +358,11 @@ pub fn draw(
     // The nearest city's detail from the host (state, country), else the unit note.
     let detail = nearest[..n]
         .first()
-        .and_then(|h| extras.iter().find(|e| e.index == h.index && e.detail_len > 0))
+        .and_then(|h| {
+            extras
+                .iter()
+                .find(|e| e.index == h.index && e.detail_len > 0)
+        })
         .map_or("km, positions within 300 m", Extra::detail);
     render::text(fb, x0, 456, detail, 1, DIM);
     n

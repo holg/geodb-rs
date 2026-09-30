@@ -78,7 +78,7 @@ and a wide view neither counts nor draws its 80,000 dots.
 
 ## Names from the host
 
-Flash holds names for about a third of the cities (by population). For the
+Every city in flash has a name (the build drops unnamed ones: `make_image --budget BYTES`, `--countries DE,AT`, `--bbox LAT0,LON0,LAT1,LON1` choose what is kept, biggest first). For the nearest city the
 others the board asks a host script, over **Ethernet** (RJ45, LAN8742 over
 RMII, DHCP) when a cable is in, else over the ST-LINK's virtual COM port
 (USART1, 115200 8N1). The question is `?LAT,LON` (degrees x 1e5), the answer

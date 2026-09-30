@@ -516,9 +516,10 @@ async fn resolve(
     let mut hits = [Hit { index: 0, km: 0.0 }; ui::LIST];
     let n = img.nearest(view.lat, view.lon, &mut hits);
     let mut changed = false;
-    for hit in &hits[..n] {
+    for (k, hit) in hits[..n].iter().enumerate() {
         let idx = hit.index;
-        if img.name(idx as usize).is_some() || extras.iter().any(|e| e.index == idx) {
+        // (every city in the image has a name; the host adds the state and country of the nearest)
+        if (img.name(idx as usize).is_some() && k > 0) || extras.iter().any(|e| e.index == idx) {
             continue;
         }
         let (la, lo) = geo::to_deg(img.geoid(idx as usize));
