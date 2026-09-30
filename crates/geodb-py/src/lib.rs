@@ -350,11 +350,11 @@ impl PyGeoDb {
     ///     List of matching cities as dicts with full location info
     ///
     /// Example:
-    ///     # Find Springfield in Illinois, US
-    ///     results = db.query_cities(country="US", region="Illinois", city="Springfield")
+    ///   # Find Springfield in Illinois, US
+    ///   results = db.query_cities(country="US", region="Illinois", city="Springfield")
     ///
-    ///     # Find all cities in Bavaria, Germany
-    ///     results = db.query_cities(country="DE", region="Bavaria", limit=100)
+    ///   # Find all cities in Bavaria, Germany
+    ///   results = db.query_cities(country="DE", region="Bavaria", limit=100)
     #[pyo3(signature = (country=None, region=None, city=None, limit=20))]
     pub fn query_cities<'py>(
         &self,

@@ -562,7 +562,7 @@ impl Renderer {
         }
     }
 
-    /// Uploads a baked earth texture (with its mips) for [`set_surface`].
+    /// Uploads a baked earth texture (with its mips) for [`Renderer::set_surface`].
     pub fn earth_view(&self, earth: &EarthTexture) -> wgpu::TextureView {
         upload_earth(&self.device, &self.queue, earth).create_view(&Default::default())
     }

@@ -26,7 +26,7 @@
 //! ```
 //!
 //! For programmatic access to the data structures and APIs, use the
-//! [`geodb-core`] crate directly.
+//! `geodb-core` crate directly.
 //!
 //! Links
 //! -----
