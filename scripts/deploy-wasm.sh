@@ -45,3 +45,9 @@ scp "$LOCAL_DIST/index.html" "${REMOTE_HOST}:${REMOTE_PATH}/$REMOTE_INDEX_NAME"
 
 echo -e "\n${GREEN}✓ Deployment complete!${NC}"
 echo -e "${BLUE}View at: https://trahe.eu/$REMOTE_INDEX_NAME${NC}"
+
+# Optional: also deploy the globe mini demo (scripts/deploy-globe.sh)
+if [ "${1:-}" = "--globe" ]; then
+    echo
+    scripts/deploy-globe.sh
+fi
