@@ -8,8 +8,6 @@ on:
       - "crates/geodb-core/**"
       - "Cargo.toml"
 
-env:
-
 jobs:
   wasm:
     runs-on: ubuntu-latest
