@@ -9,18 +9,20 @@ and this script replies with the nearest city of the full dataset (within 2 km)
 
     =LAT,LON|Name|State, Country\n      (ASCII; "=LAT,LON||" when unknown)
 
-Usage: serve_names.py [/dev/cu.usbmodemXXXX] [--baud 115200]
-Needs pyserial (pip install pyserial); unidecode is used when present.
+Usage: serve_names.py             UDP on port 7878: the board (Ethernet, DHCP) broadcasts
+                                  its questions, this answers the sender
+       serve_names.py --serial [/dev/cu.usbmodemXXXX]   the ST-LINK serial port (pyserial)
+unidecode is used when present.
 """
 import glob
 import gzip
 import json
 import math
+import socket
 import sys
 import unicodedata
 from pathlib import Path
 
-import serial
 
 DATA = Path(__file__).resolve().parents[3] / "crates/geodb-core/data/countries+states+cities.json.gz"
 
@@ -72,26 +74,50 @@ def lookup(grid, lat, lon):
     return best[1] if best else None
 
 
-def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    baud = int(sys.argv[sys.argv.index("--baud") + 1]) if "--baud" in sys.argv else 115200
-    args = [a for a in args if a != str(baud)]
-    port = args[0] if args else (glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/ttyACM*"))[0]
-    grid = load()
+def answer(grid, line):
+    """The reply line for one question line, or None when it is not a question."""
+    line = line.strip()
+    if not line.startswith("?"):
+        return None
+    try:
+        la, lo = (int(v) for v in line[1:].split(","))
+    except ValueError:
+        return None
+    found = lookup(grid, la / 1e5, lo / 1e5)
+    print(f"{la / 1e5:.4f},{lo / 1e5:.4f} -> {found[2] if found else '-'}", flush=True)
+    return f"={la},{lo}|{found[2]}|{found[3]}\n" if found else f"={la},{lo}||\n"
+
+
+def serve_udp(grid, port=7878):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("", port))
+    print(f"serving UDP on port {port} (the board broadcasts its questions)", flush=True)
+    while True:
+        data, peer = sock.recvfrom(512)
+        reply = answer(grid, data.decode("ascii", "replace"))
+        if reply:
+            sock.sendto(reply.encode("ascii"), peer)
+
+
+def serve_serial(grid, port, baud):
+    import serial
+
     ser = serial.Serial(port, baud, timeout=1)
     print(f"serving on {port} at {baud} baud", flush=True)
     while True:
-        line = ser.readline().decode("ascii", "replace").strip()
-        if not line.startswith("?"):
-            continue
-        try:
-            la, lo = (int(v) for v in line[1:].split(","))
-        except ValueError:
-            continue
-        found = lookup(grid, la / 1e5, lo / 1e5)
-        reply = f"={la},{lo}|{found[2]}|{found[3]}\n" if found else f"={la},{lo}||\n"
-        ser.write(reply.encode("ascii"))
-        print(f"{la / 1e5:.4f},{lo / 1e5:.4f} -> {found[2] if found else '-'}", flush=True)
+        reply = answer(grid, ser.readline().decode("ascii", "replace"))
+        if reply:
+            ser.write(reply.encode("ascii"))
+
+
+def main():
+    grid = load()
+    if "--serial" in sys.argv:
+        rest = [a for a in sys.argv[sys.argv.index("--serial") + 1:] if not a.startswith("--")]
+        port = rest[0] if rest else (glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/ttyACM*"))[0]
+        serve_serial(grid, port, 115200)
+    else:
+        serve_udp(grid)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,12 @@ embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579
   "exti",
   "single-bank",
 ] }
+embassy-net = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
+  "defmt",
+  "udp",
+  "dhcpv4",
+  "medium-ethernet",
+] }
 embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
   "defmt",
   "defmt-timestamp-uptime",
@@ -42,6 +48,7 @@ embedded-hal-02 = { package = "embedded-hal", version = "0.2" }
 geodb-fw-core = { path = "../../crates/geodb-fw-core" }
 otm8009a = "0.1"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+static_cell = "2"
 stm32-fmc = "0.4"
 
 [profile.release]

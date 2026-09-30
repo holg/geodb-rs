@@ -43,6 +43,9 @@ pub const FB1_ADDR: usize = SDRAM_BASE + FB_BYTES;
 // SDRAM
 // ---------------------------------------------------------------------------
 
+/// Where ethbuf.x puts the Ethernet packet buffers.
+pub const ETH_BUF_ADDR: usize = 0x2006_0000;
+
 pub type Sdram = stm32_fmc::Sdram<Fmc<'static, FMC>, Mt48lc4m32b2>;
 
 /// The Cortex-M default memory map treats 0xC000_0000 as *Device* memory: no
@@ -60,6 +63,11 @@ fn sdram_mpu() {
         // XN | AP=full access | TEX=001 S=1 C=0 B=0 (normal, non-cacheable) | SIZE=2^24 | ENABLE
         mpu.rasr
             .write((1 << 28) | (0b011 << 24) | (0b001 << 19) | (1 << 18) | (23 << 1) | 1);
+        // Region 1: the Ethernet DMA buffers (64 KB of SRAM1, see ethbuf.x), non-cacheable too.
+        mpu.rnr.write(1);
+        mpu.rbar.write(ETH_BUF_ADDR as u32);
+        mpu.rasr
+            .write((1 << 28) | (0b011 << 24) | (0b001 << 19) | (1 << 18) | (15 << 1) | 1);
         mpu.ctrl.write((1 << 2) | 1); // PRIVDEFENA | ENABLE
         cortex_m::asm::dsb();
         cortex_m::asm::isb();

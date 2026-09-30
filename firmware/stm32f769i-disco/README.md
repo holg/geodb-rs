@@ -79,14 +79,20 @@ and a wide view neither counts nor draws its 80,000 dots.
 ## Names from the host
 
 Flash holds names for about a third of the cities (by population). For the
-others the board asks the host over the ST-LINK's virtual COM port (USART1,
-115200 8N1): `?LAT,LON` (degrees x 1e5) and the script answers
-`=LAT,LON|Name|State, Country` from the full dataset. Run it while the board
-runs (it needs `pyserial`):
+others the board asks a host script, over **Ethernet** (RJ45, LAN8742 over
+RMII, DHCP) when a cable is in, else over the ST-LINK's virtual COM port
+(USART1, 115200 8N1). The question is `?LAT,LON` (degrees x 1e5), the answer
+`=LAT,LON|Name|State, Country` from the full dataset:
 
-    python3 firmware/stm32f769i-disco/scripts/serve_names.py
+    python3 firmware/stm32f769i-disco/scripts/serve_names.py            # UDP 7878
+    python3 firmware/stm32f769i-disco/scripts/serve_names.py --serial   # ST-LINK port (pyserial)
 
-The board asks when the globe comes to rest, for the listed cities without a
-name, and shows the answers in the list (the nearest city's state and country in
-the footer). Without the script the list shows `(unnamed)` and the board asks
-again only every 5 s.
+On Ethernet the board *broadcasts* the question (UDP port 7878), so it needs no
+address of the host; the script answers the sender. The board asks when the
+globe comes to rest, for the listed cities without a name, and shows the answers
+in the list (the nearest city's state and country in the footer). Without the
+script the list shows `(unnamed)` and the board asks again only every 5 s.
+
+The Ethernet DMA cannot reach the DTCM and ignores the data cache, so `.bss`
+(with the stack's packet pool) is linked into SRAM1 at 0x20060000
+(`ethbuf.x`) and an MPU region makes it non-cacheable.

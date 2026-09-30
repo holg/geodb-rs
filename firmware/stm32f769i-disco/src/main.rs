@@ -6,16 +6,20 @@
 #![no_main]
 
 mod display;
+mod net;
 mod touch;
 
 use cortex_m::peripheral::DWT;
 use defmt::{error, info, warn};
 use embassy_executor::Spawner;
+use embassy_net::Stack;
 use embassy_stm32::dsihost::{self, DsiHost};
+use embassy_stm32::eth::{self, Ethernet};
 use embassy_stm32::fmc::Fmc;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::ltdc::{self, Ltdc, LtdcLayer};
+use embassy_stm32::rng::{self, Rng};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::usart::{self, Uart};
 use embassy_stm32::{bind_interrupts, dma, peripherals, Config};
@@ -32,13 +36,15 @@ static IMAGE: &[u8] = include_bytes!("../geodb.fw");
 bind_interrupts!(struct Irqs {
     LTDC => ltdc::InterruptHandler<peripherals::LTDC>;
     DSI => dsihost::InterruptHandler<peripherals::DSIHOST>;
+    ETH => eth::InterruptHandler<peripherals::ETH>;
+    RNG => rng::InterruptHandler<peripherals::RNG>;
     USART1 => usart::InterruptHandler<peripherals::USART1>;
     DMA2_STREAM7 => dma::InterruptHandler<peripherals::DMA2_CH7>;
     DMA2_STREAM5 => dma::InterruptHandler<peripherals::DMA2_CH5>;
 });
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     // STM32F769I-DISCO: 25 MHz HSE crystal -> 216 MHz sysclk, PLLSAI 384/7/2 = 27.43 MHz LTDC pixel
     // clock, DSI PLL 25/5 x 100 = 500 MHz (62.5 MHz lane byte clock).
     let mut config = Config::default();
@@ -215,6 +221,36 @@ async fn main(_spawner: Spawner) {
         usart::Config::default(), // 115200 8N1
     )
     .ok();
+    // ---- Ethernet (LAN8742 over RMII) with DHCP; the host is found by broadcast ----
+    let mut rng = Rng::new(p.RNG, Irqs);
+    let mut seed = [0u8; 8];
+    rng.blocking_fill_bytes(&mut seed);
+    let device = Ethernet::new(
+        unsafe { net::packets() },
+        p.ETH,
+        p.PA1,
+        p.PA7,
+        p.PC4,
+        p.PC5,
+        p.PG13,
+        p.PG14,
+        p.PG11,
+        [0x02, 0x47, 0x45, 0x4f, 0x44, 0x42], // locally administered: "GEODB"
+        p.ETH_SMA,
+        p.PA2,
+        p.PC1,
+        Irqs,
+    );
+    let (stack, runner) = Stack::new(unsafe { net::storage() }, u64::from_le_bytes(seed));
+    let iface = stack.add_iface(net::DEVICE.init(device)).ok();
+    if let Some(iface) = &iface {
+        let _ = iface.set_dhcpv4(Some(Default::default()));
+    }
+    spawner.spawn(defmt::unwrap!(net::net_task(runner)));
+    info!("ethernet: started, waiting for a cable and DHCP");
+    let mut udp = net::open_socket(stack);
+    let mut announced = false;
+
     let mut extras = [ui::Extra::empty(); 40];
     let mut extra_next = 0usize;
     let mut resolved_for = (0u32, 0u32, 0u32);
@@ -345,8 +381,18 @@ async fn main(_spawner: Spawner) {
             let key = (view.lat.to_bits(), view.lon.to_bits(), view.zoom.to_bits());
             if key != resolved_for && Instant::now() >= host_retry {
                 resolved_for = key;
-                if let Some(uart) = uart.as_mut() {
-                    match resolve(uart, &img, view, &mut extras, &mut extra_next).await {
+                let net_up = iface.as_ref().is_some_and(|i| i.is_config_up());
+                if net_up && !announced {
+                    announced = true;
+                    info!("ethernet: up");
+                }
+                let mut link = match (udp.as_mut(), uart.as_mut()) {
+                    (Some(u), _) if net_up => Some(Link::Udp(u)),
+                    (_, Some(u)) => Some(Link::Serial(u)),
+                    _ => None,
+                };
+                if let Some(link) = link.as_mut() {
+                    match resolve(link, &img, view, &mut extras, &mut extra_next).await {
                         Some(true) => full = 2,
                         Some(false) => {}
                         None => host_retry = Instant::now() + Duration::from_secs(5),
@@ -460,7 +506,7 @@ impl core::fmt::Write for Buf {
 /// Asks the host for the names of the nearest cities the flash has no name for. Returns whether
 /// anything new arrived, or `None` when the host did not answer (not running).
 async fn resolve(
-    uart: &mut Uart<'static, embassy_stm32::mode::Async>,
+    link: &mut Link<'_, '_>,
     img: &FwImage<'_>,
     view: View,
     extras: &mut [ui::Extra],
@@ -487,12 +533,8 @@ async fn resolve(
             len: 0,
         };
         let _ = write!(ask, "?{la},{lo}\n");
-        uart.write(&ask.bytes[..ask.len]).await.ok()?;
         let mut reply = [0u8; 96];
-        let got = with_timeout(Duration::from_millis(250), uart.read_until_idle(&mut reply))
-            .await
-            .ok()?
-            .ok()?;
+        let got = link.ask(&ask.bytes[..ask.len], &mut reply).await?;
         let Ok(text) = core::str::from_utf8(&reply[..got]) else {
             continue;
         };
@@ -511,4 +553,39 @@ async fn resolve(
         info!("host: city {} is {}", idx, name);
     }
     Some(changed)
+}
+
+/// The way to the host: the network (broadcast question, unicast answer) or the serial port.
+enum Link<'a, 'd> {
+    Udp(&'a mut embassy_net::udp::UdpSocket<'static>),
+    Serial(&'a mut Uart<'d, embassy_stm32::mode::Async>),
+}
+
+impl Link<'_, '_> {
+    /// Sends `ask`, waits for the answer; `None` when the host does not answer.
+    async fn ask(&mut self, ask: &[u8], reply: &mut [u8]) -> Option<usize> {
+        match self {
+            Link::Udp(socket) => {
+                socket.send_to(ask, net::BROADCAST).await.ok()?;
+                with_timeout(
+                    Duration::from_millis(250),
+                    socket.recv_from_with(|data, _from| {
+                        let n = data.len().min(reply.len());
+                        reply[..n].copy_from_slice(&data[..n]);
+                        n
+                    }),
+                )
+                .await
+                .ok()?
+                .ok()
+            }
+            Link::Serial(uart) => {
+                uart.write(ask).await.ok()?;
+                with_timeout(Duration::from_millis(250), uart.read_until_idle(reply))
+                    .await
+                    .ok()?
+                    .ok()
+            }
+        }
+    }
 }
