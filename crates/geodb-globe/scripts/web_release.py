@@ -19,6 +19,13 @@ or Caddy `file_server { precompressed br gzip }`. A server that sends the
 plain files would send the raw data uncompressed (2.7 MB): use the
 `.br`/`.gz` files or the gzipped assets/mini data there.
 
+--pages DIR writes a copy for static hosts that send files as they are
+(GitHub Pages): no .br/.gz, and the data files with gzip inside their own
+format again (assets/mini; coast10m.bin gzipped the same way), so they
+are small without Content-Encoding.
+
+    python3 crates/geodb-globe/scripts/web_release.py --pages site/globe
+
 --serve runs a small local server that does the same (Accept-Encoding: br,
 gzip or identity), for testing. --host 0.0.0.0 serves the intranet too;
 there browsers need HTTPS (a secure context) for WebGPU, the 5 µs timer
@@ -42,6 +49,7 @@ from pathlib import Path
 
 CRATE = Path(__file__).resolve().parent.parent
 RAW = CRATE / "assets" / "mini-raw"
+GZIPPED = CRATE / "assets" / "mini"
 OUT = CRATE / "dist-web"
 TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -149,6 +157,33 @@ def release(page: str) -> None:
     print(f"{'total':<{w}} " + " ".join(f"{s:>10,}" for s in totals))
 
 
+def gzip_inside(data: bytes) -> bytes:
+    """Packed coastlines (`GDBC`, 5-byte header) with a gzip payload; the
+    reader detects it (the same as `single_file::gzip_inside`)."""
+    if data.startswith(b"GDBC") and data[5:7] != b"\x1f\x8b":
+        return data[:5] + gzip.compress(data[5:], 9, mtime=0)
+    return data
+
+
+def pages(dest: Path) -> None:
+    """dist-web for a static host without precompression."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    for f in OUT.iterdir():
+        if f.is_file() and f.suffix not in (".br", ".gz"):
+            shutil.copy(f, dest / f.name)
+    for f in GZIPPED.iterdir():
+        shutil.copy(f, dest / f.name)
+    coast = dest / "coast10m.bin"
+    if coast.exists():
+        coast.write_bytes(gzip_inside(coast.read_bytes()))
+    total = sum(f.stat().st_size for f in dest.iterdir())
+    print(f"\n{dest}: {total / 1e6:.1f} MB for a static host (data gzipped inside)")
+    for f in sorted(dest.iterdir()):
+        print(f"  {f.name:<40} {f.stat().st_size:>12,}")
+
+
 class Precompressed(http.server.SimpleHTTPRequestHandler):
     """Serves `x.br` / `x.gz` for `x` when the client accepts them."""
 
@@ -214,9 +249,12 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0: intranet too)")
     ap.add_argument("--tls", action="store_true", help="HTTPS with a self-signed certificate (.tls/)")
     ap.add_argument("--no-build", action="store_true", help="only serve the last release")
+    ap.add_argument("--pages", type=Path, metavar="DIR", help="also write a copy for a static host (GitHub Pages)")
     args = ap.parse_args()
     if not args.no_build:
         release("flex.html" if args.flex else "mini.html")
+    if args.pages:
+        pages(args.pages)
     if args.serve:
         server = http.server.ThreadingHTTPServer((args.host, args.serve), Precompressed)
         scheme = "http"
