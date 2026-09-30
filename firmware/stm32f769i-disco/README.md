@@ -1,11 +1,12 @@
 # geodb on the STM32F769I-DISCO
 
-The 153,312 cities of the web demo, in the chip's flash and queried in place.
+The 153,312 cities of the web demo, in the chip's flash and queried in place,
+with the globe, the nearest cities and touch control on the 4" 800 x 480 LCD.
 
 ```text
 crates/geodb-fw-core     no_std core: the flash image (zero-copy), radius / nearest
                          queries on Z-order ranges, a software globe, the whole
-                         800 x 480 screen as one function
+                         800 x 480 screen as one function, taps and drags
 firmware/stm32f769i-disco  this crate: embassy-stm32 on the board
 ```
 
@@ -34,6 +35,24 @@ it was before the first flash of this firmware:
 st-flash write backup/factory-flash-2MB.bin 0x08000000
 ```
 
+## The screen
+
+Touch: a **drag** pans the globe, a **tap on the globe** looks at that point
+(and zooms in), `-` / `+` / `WORLD` are buttons. Zoomed in (view under about
+1000 km) the coarse earth picture says nothing and the screen switches to a
+*scope*: distance rings, every city as a dot, the ten nearest labelled. The
+whole screen is `geodb_fw_core::ui::draw`, so `make_image` renders exactly what
+the LCD shows to `preview-globe.png`, `preview-scope.png`, `preview-world.png`.
+
+The display bring-up (SDRAM on the FMC, MPU attribute, DSI PHY and video
+timing, panel detection over DSI, NT35510 / OTM8009A init, backlight PI14,
+FT6206 touch on I2C4) is the one proven on this board in the plantworks
+gateway (`../plantworks/firmware/plantworks-gw-stm32`, `display.rs`, `touch.rs`)
+with its gotchas: embassy from the same pinned git revision (`dsihost` is not on
+crates.io), the SDRAM mapped Normal / non-cacheable, `LTDC` pixel clock 27.43 MHz
+from PLLSAI. Here the LTDC layer is RGB565 (768 KB per frame, two in the 16 MB
+SDRAM) instead of ARGB8888.
+
 ## Measured on the chip (216 MHz, caches on)
 
 | | |
@@ -41,12 +60,14 @@ st-flash write backup/factory-flash-2MB.bin 0x08000000
 | 10 nearest cities | 0.13 - 0.7 ms |
 | all cities within 300 km of Munich (18,296 candidates) | 22 ms |
 | the same around Tokyo (1,074 candidates) | 1.3 ms |
-| globe, 240 x 240 | 199 ms |
+| a whole 800 x 480 screen, world view | 272 ms |
+| a whole screen, scope view | see the RTT log (`screen ... drawn in`) |
 
 The queries answer exactly like `geodb-core` (`make_image` checks 7 radius
 queries: identical counts; nearest within 0.021 km).
 
-Two things that made it 20x faster: the Cortex-M7 runs from flash (7 wait
-states at 216 MHz), so the I- and D-cache must be on; and `libm`'s sinf / cosf /
-atan2f compute in software double precision on this single-precision-FPU
-target, so `fmath` has f32-only versions.
+What made it fast: the Cortex-M7 runs from flash (7 wait states at 216 MHz), so
+the I- and D-cache must be on; `libm`'s sinf / cosf / atan2f compute in software
+double precision on this single-precision-FPU target, so `fmath` has f32-only
+versions; the globe is computed per 2 x 2 pixel block (the texture is 256 x 128);
+and a wide view neither counts nor draws its 80,000 dots.

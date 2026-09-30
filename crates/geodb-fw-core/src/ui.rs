@@ -20,6 +20,7 @@ const DOT: u16 = rgb565(150, 205, 255);
 const RING: u16 = rgb565(255, 196, 70);
 const SCOPE: u16 = rgb565(10, 20, 38);
 const GRID: u16 = rgb565(44, 70, 110);
+const BUTTON: u16 = rgb565(18, 30, 58);
 
 /// Globe placement on the screen.
 const GLOBE_X: i32 = 250;
@@ -27,6 +28,8 @@ const GLOBE_Y: i32 = 240;
 const GLOBE_R: i32 = 224;
 /// Radius (km) of the query ring and of the dots around the view centre.
 pub const QUERY_KM: f32 = 1000.0;
+/// The globe is computed per block of this many pixels (the texture is coarse).
+const GLOBE_STEP: i32 = 2;
 /// Nearest cities listed.
 pub const LIST: usize = 10;
 
@@ -78,6 +81,8 @@ const RINGS_KM: [f32; 12] = [
 const SCOPE_ZOOM: f32 = 12.0;
 /// More dots than this would only be a blob.
 const MAX_DOTS: usize = 60_000;
+/// Wider than this (query radius, km) no dots are drawn or counted.
+const DOTS_MAX_KM: f32 = 2500.0;
 
 /// The zoom that shows about `km` around the centre.
 pub fn zoom_for(km: f32) -> f32 {
@@ -121,21 +126,33 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
         }
     } else {
         let (w, h, px) = img.texture();
-        render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &Texture { w, h, px });
+        render::draw_globe(
+            fb,
+            GLOBE_X,
+            GLOBE_Y,
+            GLOBE_R,
+            view,
+            &Texture { w, h, px },
+            GLOBE_STEP,
+        );
     }
 
-    // Every city in reach, as a dot (a pixel on the globe, larger on the scope).
+    // Every city in reach, as a dot (a pixel on the globe, larger on the scope). A wide view
+    // has far too many to show (or to count: that alone would take 100 ms).
     let query_km = visible_km * 0.75;
     let mut count = 0usize;
-    img.radius_index(view.lat, view.lon, query_km, |_, _| count += 1);
-    if count <= MAX_DOTS {
-        let size = if scope { 1 } else { 0 };
-        img.radius_index(view.lat, view.lon, query_km, |index, _| {
-            let (la, lo) = crate::geo::to_deg(img.geoid(index as usize));
-            if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
-                render::dot(fb, x, y, size, DOT);
-            }
-        });
+    let shown = query_km <= DOTS_MAX_KM;
+    if shown {
+        img.radius_index(view.lat, view.lon, query_km, |_, _| count += 1);
+        if count <= MAX_DOTS {
+            let size = if scope { 1 } else { 0 };
+            img.radius_index(view.lat, view.lon, query_km, |index, _| {
+                let (la, lo) = crate::geo::to_deg(img.geoid(index as usize));
+                if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
+                    render::dot(fb, x, y, size, DOT);
+                }
+            });
+        }
     }
     if !scope {
         // The query ring.
@@ -185,7 +202,9 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
     );
     render::text(fb, x0, 70, line.as_str(), 2, TEXT);
     let mut line = Line::new();
-    if visible_km >= 100.0 {
+    if !shown {
+        let _ = write!(line, "view {:.0} km", visible_km);
+    } else if visible_km >= 100.0 {
         let _ = write!(line, "view {:.0} km, {} cities in reach", visible_km, count);
     } else {
         let _ = write!(line, "view {:.1} km, {} cities in reach", visible_km, count);
@@ -213,8 +232,98 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
         let wd = render::text_width(dist.as_str(), 1);
         render::text(fb, 792 - wd, y + 4, dist.as_str(), 1, DIM);
     }
+    for (x, y, w, h, label) in BUTTONS {
+        fb.rect(x, y, w, h, BUTTON);
+        for k in 0..w {
+            fb.set(x + k, y, GRID);
+            fb.set(x + k, y + h - 1, GRID);
+        }
+        for k in 0..h {
+            fb.set(x, y + k, GRID);
+            fb.set(x + w - 1, y + k, GRID);
+        }
+        let tw = render::text_width(label, 2);
+        render::text(fb, x + (w - tw) / 2, y + (h - 16) / 2, label, 2, TEXT);
+    }
     render::text(fb, x0, 456, "km, positions within 300 m", 1, DIM);
     n
+}
+
+/// The touch buttons: x, y, width, height, label.
+pub const BUTTONS: [(i32, i32, i32, i32, &str); 3] = [
+    (500, 396, 84, 44, "-"),
+    (596, 396, 84, 44, "+"),
+    (692, 396, 100, 44, "WORLD"),
+];
+
+/// What a tap does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Action {
+    None,
+    ZoomIn,
+    ZoomOut,
+    World,
+    /// Look at this point (a tap on the globe).
+    Center {
+        lat: f32,
+        lon: f32,
+    },
+}
+
+/// The action of a tap at screen pixel (x, y).
+pub fn hit(view: View, x: i32, y: i32) -> Action {
+    for (i, &(bx, by, bw, bh, _)) in BUTTONS.iter().enumerate() {
+        // A finger is bigger than the button: 12 px of slack.
+        if x >= bx - 12 && x < bx + bw + 12 && y >= by - 12 && y < by + bh + 12 {
+            return [Action::ZoomOut, Action::ZoomIn, Action::World][i];
+        }
+    }
+    let (dx, dy) = (x - GLOBE_X, y - GLOBE_Y);
+    if dx * dx + dy * dy <= GLOBE_R * GLOBE_R {
+        let r = GLOBE_R as f32;
+        if let Some((lat, lon, _)) = render::unproject(view, dx as f32 / r, -(dy as f32) / r) {
+            return Action::Center { lat, lon };
+        }
+    }
+    Action::None
+}
+
+/// Applies an action to the view.
+pub fn apply(view: &mut View, action: Action) {
+    let clamp = |z: f32| z.clamp(1.0, 4000.0);
+    match action {
+        Action::None => {}
+        Action::ZoomIn => view.zoom = clamp(view.zoom * 2.0),
+        Action::ZoomOut => view.zoom = clamp(view.zoom / 2.0),
+        Action::World => view.zoom = 1.0,
+        Action::Center { lat, lon } => {
+            view.lat = lat.clamp(-89.5, 89.5);
+            view.lon = wrap_lon(lon);
+            // A tap on the globe also moves in, until the scope takes over.
+            if view.zoom < SCOPE_ZOOM {
+                view.zoom = clamp(view.zoom * 2.0);
+            }
+        }
+    }
+}
+
+/// Drags the view by (dx, dy) screen pixels: the point under the finger
+/// stays under it.
+pub fn pan(view: &mut View, dx: i32, dy: i32) {
+    let deg_per_px = view.span() / DEG_TO_RAD / GLOBE_R as f32;
+    let cos_lat = crate::fmath::cos(view.lat * DEG_TO_RAD).max(0.05);
+    view.lon = wrap_lon(view.lon - dx as f32 * deg_per_px / cos_lat);
+    view.lat = (view.lat + dy as f32 * deg_per_px).clamp(-89.5, 89.5);
+}
+
+fn wrap_lon(mut lon: f32) -> f32 {
+    while lon > 180.0 {
+        lon -= 360.0;
+    }
+    while lon < -180.0 {
+        lon += 360.0;
+    }
+    lon
 }
 
 fn abs(v: f32) -> f32 {
@@ -230,5 +339,52 @@ fn truncate(s: &str, n: usize) -> &str {
     match s.char_indices().nth(n) {
         Some((at, _)) => &s[..at],
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn taps_and_drags_move_the_view() {
+        let mut view = View::new(48.0, 11.0);
+        // The buttons.
+        assert_eq!(hit(view, 540, 420), Action::ZoomOut);
+        assert_eq!(hit(view, 640, 420), Action::ZoomIn);
+        assert_eq!(hit(view, 750, 420), Action::World);
+        assert_eq!(hit(view, 790, 20), Action::None);
+        // A tap in the middle of the globe stays put and zooms in.
+        match hit(view, GLOBE_X, GLOBE_Y) {
+            Action::Center { lat, lon } => {
+                assert!(
+                    (lat - 48.0).abs() < 0.1 && (lon - 11.0).abs() < 0.1,
+                    "{lat} {lon}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        let tap = hit(view, GLOBE_X + 100, GLOBE_Y);
+        apply(&mut view, tap);
+        assert!(view.lon > 11.0 && view.zoom == 2.0, "{view:?}");
+        apply(&mut view, Action::ZoomIn);
+        apply(&mut view, Action::ZoomIn);
+        assert_eq!(view.zoom, 8.0);
+        apply(&mut view, Action::World);
+        assert_eq!(view.zoom, 1.0);
+        // Zoom is bounded.
+        view.zoom = 3000.0;
+        apply(&mut view, Action::ZoomIn);
+        assert_eq!(view.zoom, 4000.0);
+        // Dragging right moves the view west, down moves it north.
+        let mut v = View::new(0.0, 0.0);
+        pan(&mut v, 100, 0);
+        assert!(v.lon < -10.0 && v.lat == 0.0, "{v:?}");
+        pan(&mut v, 0, 100);
+        assert!(v.lat > 10.0);
+        // The poles and the dateline are handled.
+        let mut v = View::new(89.0, 179.0);
+        pan(&mut v, -400, -400);
+        assert!(v.lat <= 89.5 && v.lon.abs() <= 180.0, "{v:?}");
     }
 }

@@ -1,9 +1,10 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-# The chip of the STM32F769I-DISCO as `probe-rs chip list` names it.
-runner = "probe-rs run --chip STM32F769NI"
+# The chip of the STM32F769I-DISCO as `probe-rs chip list` names it. Connect under reset: the
+# ST-LINK of this board sometimes does not answer a plain attach.
+runner = "probe-rs run --chip STM32F769NIHx --connect-under-reset"
 
 [build]
 target = "thumbv7em-none-eabihf"
 
 [env]
-DEFMT_LOG = "info"
+DEFMT_LOG = "info,embassy_stm32::dsihost=debug,embassy_stm32::ltdc=debug"

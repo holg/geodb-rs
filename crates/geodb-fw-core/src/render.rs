@@ -150,27 +150,57 @@ pub fn project(
 }
 
 /// Draws the lit globe. The sun is a fixed direction in camera space; a
-/// thin blue rim stands for the atmosphere.
-pub fn draw_globe(fb: &mut Fb<'_>, cx: i32, cy: i32, radius: i32, view: View, tex: &Texture<'_>) {
+/// thin blue rim stands for the atmosphere. `step` > 1 computes one colour
+/// per `step` x `step` block of pixels (the texture is coarse anyway):
+/// `step` 2 is four times as fast.
+pub fn draw_globe(
+    fb: &mut Fb<'_>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    view: View,
+    tex: &Texture<'_>,
+    step: i32,
+) {
     const LIGHT: [f32; 3] = [-0.42, 0.50, 0.76];
+    let step = step.max(1);
     let r = radius as f32;
-    for y in (cy - radius).max(0)..=(cy + radius).min(fb.h as i32 - 1) {
-        let ny = -((y - cy) as f32) / r;
-        for x in (cx - radius).max(0)..=(cx + radius).min(fb.w as i32 - 1) {
-            let nx = (x - cx) as f32 / r;
-            let Some((lat, lon, z)) = unproject(view, nx, ny) else {
-                continue;
-            };
-            let mut rgb = tex.sample(lat, lon);
-            let lambert = (nx * LIGHT[0] + ny * LIGHT[1] + z * LIGHT[2]).max(0.0);
-            let shade = 0.30 + 0.85 * lambert;
-            let rim = (1.0 - z) * (1.0 - z) * (1.0 - z);
-            let glow = [0.30, 0.55, 1.0];
-            for k in 0..3 {
-                rgb[k] = (rgb[k] * shade + 255.0 * glow[k] * rim * 0.55).clamp(0.0, 255.0);
+    let mut by = (cy - radius).max(0);
+    while by <= (cy + radius).min(fb.h as i32 - 1) {
+        let mut bx = (cx - radius).max(0);
+        while bx <= (cx + radius).min(fb.w as i32 - 1) {
+            // The block's centre; blocks over the rim use the nearest disc point.
+            let (mut nx, mut ny) = (
+                ((bx + step / 2) - cx) as f32 / r,
+                -(((by + step / 2) - cy) as f32) / r,
+            );
+            let rho2 = nx * nx + ny * ny;
+            if rho2 > 1.0 {
+                let k = 0.9999 / crate::fmath::sqrt(rho2);
+                (nx, ny) = (nx * k, ny * k);
             }
-            fb.set(x, y, rgb565(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8));
+            if let Some((lat, lon, z)) = unproject(view, nx, ny) {
+                let mut rgb = tex.sample(lat, lon);
+                let lambert = (nx * LIGHT[0] + ny * LIGHT[1] + z * LIGHT[2]).max(0.0);
+                let shade = 0.30 + 0.85 * lambert;
+                let rim = (1.0 - z) * (1.0 - z) * (1.0 - z);
+                let glow = [0.30, 0.55, 1.0];
+                for k in 0..3 {
+                    rgb[k] = (rgb[k] * shade + 255.0 * glow[k] * rim * 0.55).clamp(0.0, 255.0);
+                }
+                let color = rgb565(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8);
+                for y in by..by + step {
+                    for x in bx..bx + step {
+                        let (dx, dy) = (x - cx, y - cy);
+                        if dx * dx + dy * dy <= radius * radius {
+                            fb.set(x, y, color);
+                        }
+                    }
+                }
+            }
+            bx += step;
         }
+        by += step;
     }
 }
 
@@ -291,7 +321,7 @@ mod tests {
             w: 64,
             h: 64,
         };
-        draw_globe(&mut fb, 32, 32, 30, View::new(0.0, 0.0), &tex);
+        draw_globe(&mut fb, 32, 32, 30, View::new(0.0, 0.0), &tex, 1);
         // Left of the centre looks at the west (blue), right of it at the east.
         let blue = |c: u16| (c & 0x1f) > ((c >> 11) & 0x1f);
         let green = |c: u16| ((c >> 5) & 0x3f) > 2 * (c & 0x1f) + 8;
