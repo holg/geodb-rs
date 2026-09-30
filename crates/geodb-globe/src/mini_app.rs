@@ -1423,7 +1423,7 @@ fn render_data_panel(doc: &Document, data: Dataset, src: &dyn GlobeSource, compu
     set_html(doc, "caps", &format!("<table>{rows}</table>"));
     render_layers(doc, src);
     if !compute {
-        for id in ["q-gpu1", "q-gpub"] {
+        for id in ["q-gpu1", "q-gpub", "q-gpuscan"] {
             if let Some(b) = find(doc, id) {
                 let _ = b.set_attribute("disabled", "");
                 let _ = b.remove_attribute("checked");
@@ -3161,6 +3161,9 @@ struct BenchConfig {
     batch: usize,
     gpu_single: bool,
     gpu_batch: bool,
+    /// The GPU radius kernels test every city instead of only the ranges of
+    /// the Z-order index.
+    gpu_scan: bool,
     nearest: bool,
     scan: bool,
 }
@@ -3198,6 +3201,7 @@ impl BenchConfig {
                 as usize,
             gpu_single: checked(doc, "q-gpu1"),
             gpu_batch: checked(doc, "q-gpub"),
+            gpu_scan: checked(doc, "q-gpuscan"),
             nearest: checked(doc, "q-knn"),
             scan: checked(doc, "q-scan"),
         }
@@ -3589,6 +3593,19 @@ async fn run_bench(
         }
     };
 
+    if let Some(index) = &gpu {
+        index.set_scan(cfg.gpu_scan);
+    }
+    // What the GPU radius kernels test per query.
+    let gpu_tests = |index: &GpuGeoidIndex| {
+        if index.indexed() {
+            "only the cities of the Z-order ranges that cover the circle (the same ranges the \
+             CPU index uses, made on the CPU: two binary searches each)"
+                .to_string()
+        } else {
+            format!("all {} geoids", index.len())
+        }
+    };
     if let (Some(index), true) = (&gpu, cfg.gpu_single && !stop.get()) {
         let _ = index.radius_async(queries[0].geoid, 1.0).await; // warm-up
         let mut got = Vec::with_capacity(done);
@@ -3610,9 +3627,10 @@ async fn run_bench(
         sections[0].engines.push(Engine {
             name: "GPU 1 by 1",
             what: format!(
-                "GpuGeoidIndex::radius_async, one call per query: a compute pass tests all \
-                 {cities} geoids (f32 haversine), then the hit indices are read back \
-                 (unsorted); one GPU round trip each"
+                "GpuGeoidIndex::radius_async, one call per query: a compute pass tests {} \
+                 (f32 haversine), then the hit indices are read back (unsorted); one GPU \
+                 round trip each",
+                gpu_tests(index)
             ),
             stats: Stats::of(&samples),
             work_ms,
@@ -3643,9 +3661,10 @@ async fn run_bench(
             name: "GPU batch",
             what: format!(
                 "GpuGeoidIndex::radius_counts_each_async, {} queries per call: one compute \
-                 pass tests {} × {cities} pairs (f32 haversine); only the count per query is \
-                 read back",
-                cfg.batch, cfg.batch
+                 pass tests, per query, {} (f32 haversine); only the count per query is read \
+                 back",
+                cfg.batch,
+                gpu_tests(index)
             ),
             stats: Stats::of(&samples),
             work_ms,
@@ -3774,7 +3793,7 @@ async fn run_bench(
             sections[s].engines.push(Engine {
                 name: "GPU 1 by 1",
                 what: format!(
-                    "GpuGeoidIndex::nearest_each_async, one query per call: {} workgroups each \
+                    "GpuGeoidIndex::nearest_each_async (no index yet: scans all geoids), one query per call: {} workgroups each \
                      keep the top {K} of 4096 geoids, a second pass merges them; {K} (index, \
                      km) read back; one GPU round trip each",
                     cities.div_ceil(4096)

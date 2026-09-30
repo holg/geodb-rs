@@ -13,7 +13,8 @@ struct Params {
     n: u32,
     nq: u32,
     cap: u32,
-    _pad0: u32,
+    // Number of segments (radius_*_seg).
+    nseg: u32,
     _pad1: u32,
 };
 
@@ -24,6 +25,14 @@ struct Params {
 @group(0) @binding(4) var<storage, read> queries: array<vec2<u32>>;
 // Haversine threshold per query, for radius_batch.
 @group(0) @binding(5) var<storage, read> thresholds: array<f32>;
+// Work list of the *_seg kernels: one workgroup per segment, (query, first
+// city, number of cities <= 256). The CPU makes them from the Z-order index:
+// only the cities of the geoid ranges that cover the circle are tested.
+@group(0) @binding(8) var<storage, read> segments: array<vec4<u32>>;
+// Per query for radius_batch_seg: centre (lo, hi), haversine threshold as bits.
+// (One buffer instead of two: 4 storage buffers per stage is the smallest limit.)
+@group(0) @binding(9) var<storage, read> qinfo: array<vec4<u32>>;
+const GRID: u32 = 65535u; // workgroups per dispatch dimension
 
 const STEP_RAD: f32 = 7.3145904e-10; // one latitude step: π / (2^32 - 1)
 const HALF_PI: f32 = 1.5707964;
@@ -81,7 +90,64 @@ fn radius_single(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
+// One query, indexed: workgroup = segment, thread = city of the segment.
+@compute @workgroup_size(256)
+fn radius_single_seg(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
+    let s = wid.y * GRID + wid.x;
+    if (s >= p.nseg) {
+        return;
+    }
+    let seg = segments[s];
+    if (li >= seg.z) {
+        return;
+    }
+    let i = seg.y + li;
+    if (hav(split(cities[i]), split(p.center)) <= p.h) {
+        let k = atomicAdd(&counters[0], 1u);
+        if (k < p.cap) {
+            hits[k] = i;
+        }
+    }
+}
+
 var<workgroup> local_count: atomic<u32>;
+
+// Many queries, indexed: workgroup = segment of one query; counts per query.
+@compute @workgroup_size(256)
+fn radius_batch_seg(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
+    if (li == 0u) {
+        atomicStore(&local_count, 0u);
+    }
+    workgroupBarrier();
+    // Uniform across the workgroup, so the barriers below are safe.
+    let s = wid.y * GRID + wid.x;
+    let live = s < p.nseg;
+    var q = 0u;
+    if (live) {
+        let seg = segments[s];
+        q = seg.x;
+        if (li < seg.z) {
+            let i = seg.y + li;
+            let info = qinfo[q];
+            if (hav(split(cities[i]), split(info.xy)) <= bitcast<f32>(info.z)) {
+                atomicAdd(&local_count, 1u);
+            }
+        }
+    }
+    workgroupBarrier();
+    if (li == 0u && live) {
+        let c = atomicLoad(&local_count);
+        if (c > 0u) {
+            atomicAdd(&counters[q], c);
+        }
+    }
+}
 
 // Many queries: x = city, y = query; counts per query.
 @compute @workgroup_size(256)

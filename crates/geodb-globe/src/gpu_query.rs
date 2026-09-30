@@ -28,7 +28,8 @@ struct Params {
     n: u32,
     nq: u32,
     cap: u32,
-    _pad: [u32; 2],
+    nseg: u32,
+    _pad: u32,
 }
 
 pub struct GpuGeoidIndex {
@@ -36,6 +37,16 @@ pub struct GpuGeoidIndex {
     queue: wgpu::Queue,
     single: wgpu::ComputePipeline,
     batch: wgpu::ComputePipeline,
+    /// The indexed kernels (see [`set_scan`](Self::set_scan)).
+    single_seg: wgpu::ComputePipeline,
+    batch_seg: wgpu::ComputePipeline,
+    /// The geoids in city order, when they are sorted (the Z-order index the
+    /// CPU uses): empty otherwise, and every query scans all cities.
+    geoids: Vec<u64>,
+    /// Scan every city instead of only the ranges of the index.
+    scan: std::cell::Cell<bool>,
+    /// Work list of one query (segments), rewritten per call.
+    segments: wgpu::Buffer,
     cities: wgpu::Buffer,
     params: wgpu::Buffer,
     counters: wgpu::Buffer,
@@ -131,6 +142,12 @@ impl GpuGeoidIndex {
         let readback_hits = mappable("readback hits", HITS_AT + n as u64 * 4);
         let readback_counts = mappable("readback counts", 4096 * 4);
         let readback_knn = mappable("readback knn", (Self::MAX_BATCH * Self::MAX_K * 8) as u64);
+        let sorted = geoids.windows(2).all(|w| w[0] <= w[1]);
+        // Segments of one query: at most n / 256 full ones plus a partial one per range.
+        let segments = storage(
+            "segments",
+            (u64::from(n).div_ceil(u64::from(WORKGROUP)) + 4096) * 16,
+        );
         let module = device.create_shader_module(wgpu::include_wgsl!("gpu_query.wgsl"));
         let pipeline = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -147,6 +164,11 @@ impl GpuGeoidIndex {
             queue: queue.clone(),
             single: pipeline("radius_single"),
             batch: pipeline("radius_batch"),
+            single_seg: pipeline("radius_single_seg"),
+            batch_seg: pipeline("radius_batch_seg"),
+            geoids: if sorted { geoids.to_vec() } else { Vec::new() },
+            scan: std::cell::Cell::new(!sorted),
+            segments,
             cities,
             params,
             counters,
@@ -167,6 +189,52 @@ impl GpuGeoidIndex {
 
     pub fn is_empty(&self) -> bool {
         self.n == 0
+    }
+
+    /// Whether radius queries use the Z-order index (ranges made on the CPU,
+    /// only their cities tested on the GPU) rather than testing every city.
+    pub fn indexed(&self) -> bool {
+        !self.scan.get()
+    }
+
+    /// Chooses between the index (`false`, the default) and testing every
+    /// city (`true`). Without sorted geoids there is no index: always scans.
+    pub fn set_scan(&self, scan: bool) {
+        self.scan.set(scan || self.geoids.is_empty());
+    }
+
+    /// The city index ranges `[start, end)` that can hold a city within
+    /// `radius_km` of `center`: the covering Z-order cells (as on the CPU),
+    /// each two binary searches in the sorted geoids.
+    fn index_ranges(&self, center: u64, radius_km: f64) -> Vec<(u32, u32)> {
+        let (lat, lon) = crate::geoid::decode_f64(center);
+        geodb_core::spatial::RadiusBounds::new(lat, lon, radius_km)
+            .geoid_ranges()
+            .into_iter()
+            .filter_map(|(a, b)| {
+                let lo = self.geoids.partition_point(|&g| g < a);
+                let hi = self.geoids.partition_point(|&g| g <= b);
+                (lo < hi).then_some((lo as u32, hi as u32))
+            })
+            .collect()
+    }
+
+    /// Adds the work items of query `q` (segments of at most 256 cities).
+    fn push_segments(&self, out: &mut Vec<[u32; 4]>, q: u32, center: u64, radius_km: f64) {
+        for (start, end) in self.index_ranges(center, radius_km) {
+            let mut at = start;
+            while at < end {
+                let len = (end - at).min(WORKGROUP);
+                out.push([q, at, len, 0]);
+                at += len;
+            }
+        }
+    }
+
+    /// Workgroups for `segments` work items, as a 2D grid (65535 a side).
+    fn grid(segments: u32) -> (u32, u32) {
+        const GRID: u32 = 65535;
+        (segments.min(GRID), segments.div_ceil(GRID).max(1))
     }
 
     /// Submits `encoder` and returns `range` (bytes) of `buffer` once the
@@ -252,6 +320,48 @@ impl GpuGeoidIndex {
         })
     }
 
+    /// [`bind`](Self::bind) plus the work list, for the indexed kernels.
+    fn bind_segments(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        qinfo: Option<&wgpu::Buffer>,
+        segments: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.cities.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: self.params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: self.counters.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: segments.as_entire_binding(),
+            },
+        ];
+        match qinfo {
+            Some(q) => entries.push(wgpu::BindGroupEntry {
+                binding: 9,
+                resource: q.as_entire_binding(),
+            }),
+            None => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: self.hits.as_entire_binding(),
+            }),
+        }
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        })
+    }
+
     /// Indices of all cities within `radius_km` of `center` (unordered).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn radius(&self, center: u64, radius_km: f64) -> Vec<u32> {
@@ -272,6 +382,13 @@ impl GpuGeoidIndex {
 
     /// [`radius`](Self::radius) for any target (WebGPU in the browser too).
     pub async fn radius_async(&self, center: u64, radius_km: f64) -> Vec<u32> {
+        let mut segments = Vec::new();
+        if self.indexed() {
+            self.push_segments(&mut segments, 0, center, radius_km);
+            if segments.is_empty() {
+                return Vec::new();
+            }
+        }
         self.queue.write_buffer(
             &self.params,
             0,
@@ -281,17 +398,28 @@ impl GpuGeoidIndex {
                 n: self.n,
                 nq: 1,
                 cap: self.n,
-                _pad: [0; 2],
+                nseg: segments.len() as u32,
+                _pad: 0,
             }),
         );
         self.queue.write_buffer(&self.counters, 0, &[0u8; 4]);
-        let bind = self.bind(&self.single, None);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.single);
-            pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(self.n.div_ceil(WORKGROUP), 1, 1);
+            if self.indexed() {
+                self.queue
+                    .write_buffer(&self.segments, 0, bytemuck::cast_slice(&segments));
+                let bind = self.bind_segments(&self.single_seg, None, &self.segments);
+                pass.set_pipeline(&self.single_seg);
+                pass.set_bind_group(0, &bind, &[]);
+                let (x, y) = Self::grid(segments.len() as u32);
+                pass.dispatch_workgroups(x, y, 1);
+            } else {
+                let bind = self.bind(&self.single, None);
+                pass.set_pipeline(&self.single);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups(self.n.div_ceil(WORKGROUP), 1, 1);
+            }
         }
         // Counter plus a prefix of the hits in one round trip ...
         let prefix = PREFIX_HITS.min(self.n) as u64 * 4;
@@ -360,6 +488,14 @@ impl GpuGeoidIndex {
         };
         let qbuf = init("queries", bytemuck::cast_slice(&packed));
         let rbuf = init("thresholds", bytemuck::cast_slice(&thresholds));
+        // Indexed: one work list for all queries (queries without a city in
+        // reach have no segments and count 0).
+        let mut segments: Vec<[u32; 4]> = Vec::new();
+        if self.indexed() {
+            for (q, (&g, &r)) in queries.iter().zip(radii_km).take(nq as usize).enumerate() {
+                self.push_segments(&mut segments, q as u32, g, r);
+            }
+        }
         self.queue.write_buffer(
             &self.params,
             0,
@@ -369,18 +505,38 @@ impl GpuGeoidIndex {
                 n: self.n,
                 nq,
                 cap: 0,
-                _pad: [0; 2],
+                nseg: segments.len() as u32,
+                _pad: 0,
             }),
         );
         self.queue
             .write_buffer(&self.counters, 0, &vec![0u8; nq as usize * 4]);
-        let bind = self.bind(&self.batch, Some((&qbuf, &rbuf)));
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
+        if !self.indexed() || !segments.is_empty() {
+            let seg_buf;
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.batch);
-            pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(self.n.div_ceil(WORKGROUP), nq, 1);
+            if self.indexed() {
+                seg_buf = init("segments", bytemuck::cast_slice(&segments));
+                let info: Vec<[u32; 4]> = queries
+                    .iter()
+                    .zip(&thresholds)
+                    .map(|(&g, &h)| {
+                        let [lo, hi] = halves(g);
+                        [lo, hi, h.to_bits(), 0]
+                    })
+                    .collect();
+                let info_buf = init("query info", bytemuck::cast_slice(&info));
+                let bind = self.bind_segments(&self.batch_seg, Some(&info_buf), &seg_buf);
+                pass.set_pipeline(&self.batch_seg);
+                pass.set_bind_group(0, &bind, &[]);
+                let (x, y) = Self::grid(segments.len() as u32);
+                pass.dispatch_workgroups(x, y, 1);
+            } else {
+                let bind = self.bind(&self.batch, Some((&qbuf, &rbuf)));
+                pass.set_pipeline(&self.batch);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups(self.n.div_ceil(WORKGROUP), nq, 1);
+            }
         }
         let bytes = nq as u64 * 4;
         encoder.copy_buffer_to_buffer(&self.counters, 0, &self.readback_counts, 0, bytes);
@@ -444,7 +600,8 @@ impl GpuGeoidIndex {
                 n: self.n,
                 nq,
                 cap: k as u32,
-                _pad: [0; 2],
+                nseg: 0,
+                _pad: 0,
             }),
         );
         fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -498,5 +655,86 @@ impl GpuGeoidIndex {
                     .collect()
             })
             .collect()
+    }
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    use super::*;
+    use geodb_core::globe_db::CompactGlobeDb;
+    use geodb_core::spatial::generate_geoid;
+
+    #[test]
+    fn indexed_equals_scan_and_the_cpu_index() {
+        let Ok(dev) = scopekit::gpu::headless(scopekit::Backend::Auto) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let globe = CompactGlobeDb::from_db(crate::data::db());
+        let geoids: Vec<u64> = globe.cities.iter().map(|c| c.geoid).collect();
+        let gpu = GpuGeoidIndex::new(&dev.device, &dev.queue, dev.describe(), &geoids);
+        assert!(gpu.indexed(), "sorted geoids give an index");
+
+        // Munich, Tokyo (tiny), across the antimeridian, at the pole, a
+        // tenth of the earth, the whole earth, empty ocean, a speck.
+        let cases: [(f64, f64, f64); 9] = [
+            (48.14, 11.58, 30.0),
+            (35.68, 139.69, 1.5),
+            (-17.7, 179.99, 300.0),
+            (-89.0, 0.0, 800.0),
+            (0.0, 0.0, 2000.0),
+            (10.0, -170.0, 20_000.0),
+            (-40.0, -140.0, 500.0),
+            (48.14, 11.58, 0.05),
+            (61.0, -150.0, 5000.0),
+        ];
+        let centres: Vec<u64> = cases.iter().map(|c| generate_geoid(c.0, c.1)).collect();
+        let radii: Vec<f64> = cases.iter().map(|c| c.2).collect();
+        let sorted = |mut v: Vec<u32>| {
+            v.sort_unstable();
+            v
+        };
+        let mut indexed_hits = Vec::new();
+        for (&c, &r) in centres.iter().zip(&radii) {
+            indexed_hits.push(sorted(gpu.radius(c, r)));
+        }
+        let indexed_counts = gpu.radius_counts_each(&centres, &radii);
+        gpu.set_scan(true);
+        assert!(!gpu.indexed());
+        for (i, (&c, &r)) in centres.iter().zip(&radii).enumerate() {
+            assert_eq!(
+                indexed_hits[i],
+                sorted(gpu.radius(c, r)),
+                "case {:?}",
+                cases[i]
+            );
+        }
+        assert_eq!(indexed_counts, gpu.radius_counts_each(&centres, &radii));
+        for (i, hits) in indexed_hits.iter().enumerate() {
+            assert_eq!(hits.len() as u32, indexed_counts[i], "{:?}", cases[i]);
+        }
+        // The CPU index finds the same cities (the kernel is haversine on
+        // the geoids: allow one boundary city).
+        for (i, &(lat, lon, r)) in cases.iter().enumerate() {
+            let cpu = globe
+                .radius_at(lat, lon, r, geodb_core::globe_layers::Positions::Geoid)
+                .len();
+            let gpu_n = indexed_hits[i].len();
+            assert!(
+                cpu.abs_diff(gpu_n) <= 1 + cpu / 1000,
+                "{:?}: cpu {cpu} gpu {gpu_n}",
+                cases[i]
+            );
+        }
+        assert!(indexed_hits[0].len() > 20 && indexed_hits[6].is_empty());
+        // Many queries in one batch, over the 65535-workgroup row: still exact.
+        let many: Vec<u64> = (0..3000)
+            .map(|i| generate_geoid(-60.0 + (i % 120) as f64, -180.0 + (i as f64) * 0.12))
+            .collect();
+        let radii = vec![2500.0; many.len()];
+        gpu.set_scan(false);
+        let a = gpu.radius_counts_each(&many, &radii);
+        gpu.set_scan(true);
+        assert_eq!(a, gpu.radius_counts_each(&many, &radii));
     }
 }
