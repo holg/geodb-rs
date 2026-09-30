@@ -17,8 +17,8 @@ const webgpu = !webgl2 && await (async () => {
     try { return !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { return false; }
 })();
 const build = webgpu
-    ? { name: "webgpu", js: "./geodb-globe-3595490f9e4657ea.js", wasm: "./geodb-globe-3595490f9e4657ea_bg.wasm" }
-    : { name: "webgl2", js: "./geodb-globe-95bed54731f68837.js", wasm: "./geodb-globe-95bed54731f68837_bg.wasm" };
+    ? { name: "webgpu", js: "./geodb-globe-5e13638d2da46be.js", wasm: "./geodb-globe-5e13638d2da46be_bg.wasm" }
+    : { name: "webgl2", js: "./geodb-globe-b1d8cee12bb2eb06.js", wasm: "./geodb-globe-b1d8cee12bb2eb06_bg.wasm" };
 window.__GEODB_BUILD = build.name;
 window.__GEODB_FILES = { js: build.js, wasm: build.wasm };
 const { default: init } = await import(build.js);
@@ -292,6 +292,7 @@ await init({ module_or_path: build.wasm });
             <span class="checks">
                 <label><input id="q-gpu1" type="checkbox" checked/> GPU one by one</label>
                 <label><input id="q-gpub" type="checkbox" checked/> GPU batched</label>
+                <label title="test every city on the GPU instead of only the ranges of the Z-order index"><input id="q-gpuscan" type="checkbox"/> GPU: every city (no index)</label>
                 <label><input id="q-knn" type="checkbox" checked/> 10 nearest</label>
                 <label><input id="q-scan" type="checkbox"/> CPU scan (slow)</label>
             </span>
