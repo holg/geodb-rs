@@ -12,6 +12,8 @@ struct Globals {
     // Detail patch ("patch" is reserved in WGSL): x west longitude, y north latitude (degrees),
     // z span (degrees; Mercator: of the grid, 1 = the world), w 0 off, 1 geographic, 2 Mercator
     detail: vec4<f32>,
+    // x, y: 1 = the left / right surface is luma + chroma (see ycc.rs)
+    surface: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -22,6 +24,24 @@ struct Globals {
 @group(0) @binding(4) var surface_right: texture_2d<f32>;
 // Detail patch (tiles around the view), transparent where not loaded.
 @group(0) @binding(5) var patch_tex: texture_2d<f32>;
+// Chroma of luma + chroma surfaces (half size, RG); a placeholder otherwise.
+@group(0) @binding(6) var chroma_left: texture_2d<f32>;
+@group(0) @binding(7) var chroma_right: texture_2d<f32>;
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// A surface sample in linear RGB: as it is (sRGB textures decode on
+// sampling), or from luma + chroma (full-range BT.601 on sRGB values).
+fn surface_rgb(s: vec4<f32>, chroma: vec2<f32>, ycc: f32) -> vec3<f32> {
+    let cb = chroma.x - 0.5;
+    let cr = chroma.y - 0.5;
+    let rgb = vec3<f32>(s.r + 1.402 * cr, s.r - 0.344136 * cb - 0.714136 * cr, s.r + 1.772 * cb);
+    return select(s.rgb, srgb_to_linear(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0))), ycc > 0.5);
+}
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -48,8 +68,10 @@ fn vs_globe(v: VsIn) -> VsOut {
 @fragment
 fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(earth, earth_sampler, i.uv);
-    let left = textureSample(surface_left, earth_sampler, i.uv).rgb;
-    let right = textureSample(surface_right, earth_sampler, i.uv).rgb;
+    let left = surface_rgb(textureSample(surface_left, earth_sampler, i.uv),
+        textureSample(chroma_left, earth_sampler, i.uv).rg, g.surface.x);
+    let right = surface_rgb(textureSample(surface_right, earth_sampler, i.uv),
+        textureSample(chroma_right, earth_sampler, i.uv).rg, g.surface.y);
     let split_x = g.viewport.w * g.viewport.x;
     let use_right = select(0.0, 1.0, g.viewport.z > 0.5 && i.clip.x >= split_x);
     let n = normalize(i.world);

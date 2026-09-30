@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Fetch and prepare the optional earth detail layers of the globe demo.
 
-- earth-16k.webp / earth-8k.webp / earth-4k.webp: NASA Blue Marble Next
-  Generation, July 2004, with topography and bathymetry (public domain;
-  credit NASA Earth Observatory), resized from 21600 x 10800.
+- earth-4k.webp, earth-8k-{row}-{col}.webp (2 x 1 tiles),
+  earth-16k-{row}-{col}.webp (4 x 2 tiles of 4095 px): NASA Blue Marble
+  Next Generation, July 2004, with topography and bathymetry (public
+  domain; credit NASA Earth Observatory), resized from 21600 x 10800. The
+  app decodes one tile at a time (at most 4096 px, 64 MB decoded), so a
+  phone never holds a decoded 16K image (536 MB).
 - coast10m.bin: Natural Earth 1:10m land and lakes (public domain), packed
   like coast.bin, raw (served with brotli), for a sharper re-bake.
 
@@ -45,13 +48,24 @@ def imagery(src: Path) -> None:
 
     Image.MAX_IMAGE_PIXELS = None  # 233 Mpx source
     img = Image.open(src).convert("RGB")
-    # WebP is at most 16383 px wide: 16380 x 8190 keeps the 2:1 ratio.
-    for width, name in ((16380, "earth-16k.webp"), (8192, "earth-8k.webp"), (4096, "earth-4k.webp")):
-        out = OUT / name
-        img.resize((width, width // 2), Image.Resampling.LANCZOS).save(
-            out, "WEBP", quality=82, method=6
-        )
-        print(f"{out.name}: {out.stat().st_size:,} bytes")
+    # 16380 x 8190 keeps the 2:1 ratio and cuts into 4095 px tiles (the
+    # tile grid is IMAGERY in src/mini_app.rs).
+    for width, stem, (cols, rows) in ((16380, "earth-16k", (4, 2)), (8192, "earth-8k", (2, 1)),
+                                      (4096, "earth-4k", (1, 1))):
+        for old in OUT.glob(f"{stem}*.webp"):
+            old.unlink()
+        full = img.resize((width, width // 2), Image.Resampling.LANCZOS)
+        tw, th = width // cols, width // 2 // rows
+        total = 0
+        for r in range(rows):
+            for c in range(cols):
+                name = f"{stem}.webp" if cols * rows == 1 else f"{stem}-{r}-{c}.webp"
+                out = OUT / name
+                full.crop((c * tw, r * th, (c + 1) * tw, (r + 1) * th)).save(
+                    out, "WEBP", quality=82, method=6
+                )
+                total += out.stat().st_size
+        print(f"{stem}: {cols * rows} file(s), {total:,} bytes")
 
 
 def main() -> None:

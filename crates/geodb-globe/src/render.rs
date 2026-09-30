@@ -22,6 +22,8 @@ struct Globals {
     /// Detail patch: west longitude, north latitude, span, projection (0 off,
     /// 1 geographic, 2 Mercator).
     patch: [f32; 4],
+    /// x, y: 1 = the left / right surface is luma + chroma.
+    surface: [f32; 4],
 }
 
 #[repr(C)]
@@ -41,6 +43,23 @@ pub struct Scene {
     pub query: Option<(Vec3, f32)>,
 }
 
+/// A surface to show: an sRGB colour texture, or luma with its chroma
+/// (imagery, see [`crate::ycc`]).
+#[derive(Clone)]
+pub struct SurfaceView {
+    pub color: wgpu::TextureView,
+    pub chroma: Option<wgpu::TextureView>,
+}
+
+impl From<wgpu::TextureView> for SurfaceView {
+    fn from(color: wgpu::TextureView) -> Self {
+        SurfaceView {
+            color,
+            chroma: None,
+        }
+    }
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -55,9 +74,9 @@ pub struct Renderer {
     /// City lights (alpha of a baked texture).
     earth_view: wgpu::TextureView,
     /// Surface colour (a bake or imagery, same equirectangular layout).
-    left_view: wgpu::TextureView,
+    left_view: SurfaceView,
     /// Colour right of the split; a 1x1 placeholder without a split.
-    right_view: wgpu::TextureView,
+    right_view: SurfaceView,
     placeholder_view: wgpu::TextureView,
     /// Split position as a fraction of the width, when comparing.
     split: Option<f32>,
@@ -324,6 +343,26 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let earth_view = earth_tex.create_view(&Default::default());
@@ -337,6 +376,8 @@ impl Renderer {
             [
                 &earth_view,
                 &earth_view,
+                &placeholder_view,
+                &placeholder_view,
                 &placeholder_view,
                 &placeholder_view,
             ],
@@ -501,8 +542,8 @@ impl Renderer {
             bind_layout: bgl,
             sampler,
             earth_view,
-            left_view: left_view_init,
-            right_view: placeholder_view.clone(),
+            left_view: left_view_init.into(),
+            right_view: placeholder_view.clone().into(),
             placeholder_view,
             split: None,
             patch: None,
@@ -538,8 +579,8 @@ impl Renderer {
     pub fn set_surface(
         &mut self,
         lights: wgpu::TextureView,
-        left: wgpu::TextureView,
-        right: Option<(wgpu::TextureView, f32)>,
+        left: SurfaceView,
+        right: Option<(SurfaceView, f32)>,
     ) {
         self.earth_view = lights;
         self.left_view = left;
@@ -549,7 +590,7 @@ impl Renderer {
                 self.split = Some(at.clamp(0.0, 1.0));
             }
             None => {
-                self.right_view = self.placeholder_view.clone();
+                self.right_view = self.placeholder_view.clone().into();
                 self.split = None;
             }
         }
@@ -621,9 +662,17 @@ impl Renderer {
             &self.sampler,
             [
                 &self.earth_view,
-                &self.left_view,
-                &self.right_view,
+                &self.left_view.color,
+                &self.right_view.color,
                 self.patch.as_ref().map_or(&self.placeholder_view, |p| &p.0),
+                self.left_view
+                    .chroma
+                    .as_ref()
+                    .unwrap_or(&self.placeholder_view),
+                self.right_view
+                    .chroma
+                    .as_ref()
+                    .unwrap_or(&self.placeholder_view),
             ],
         );
     }
@@ -729,6 +778,12 @@ impl Renderer {
             ],
             query: [qc.x, qc.y, qc.z, qr],
             patch: self.patch.as_ref().map_or([0.0, 0.0, 1.0, 0.0], |p| p.1),
+            surface: [
+                f32::from(u8::from(self.left_view.chroma.is_some())),
+                f32::from(u8::from(self.right_view.chroma.is_some())),
+                0.0,
+                0.0,
+            ],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -964,15 +1019,16 @@ fn upload_earth(device: &wgpu::Device, queue: &wgpu::Queue, earth: &EarthTexture
     tex
 }
 
-/// `views`: city lights (earth), left and right surface, detail patch.
+/// `views`: city lights (earth), left and right surface, detail patch,
+/// left and right chroma.
 fn make_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     globals: &wgpu::Buffer,
     sampler: &wgpu::Sampler,
-    views: [&wgpu::TextureView; 4],
+    views: [&wgpu::TextureView; 6],
 ) -> wgpu::BindGroup {
-    let [earth, left, right, patch] = views;
+    let [earth, left, right, patch, chroma_left, chroma_right] = views;
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
         layout,
@@ -1000,6 +1056,14 @@ fn make_bind_group(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(patch),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(chroma_left),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(chroma_right),
             },
         ],
     })

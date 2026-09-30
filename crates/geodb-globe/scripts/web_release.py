@@ -136,9 +136,9 @@ def release(page: str) -> None:
     for raw in RAW.iterdir():
         shutil.copy(raw, OUT / raw.name)
     # Earth detail layers (scripts/fetch_detail.py), when made.
-    for name in ("coast10m.bin", "earth-16k.webp", "earth-8k.webp", "earth-4k.webp"):
-        if (DETAIL / name).exists():
-            shutil.copy(DETAIL / name, OUT / name)
+    for f in [DETAIL / "coast10m.bin", *sorted(DETAIL.glob("earth-*.webp"))]:
+        if f.exists():
+            shutil.copy(f, OUT / f.name)
 
     rows = []
     for f in sorted(p for p in OUT.iterdir() if p.suffix in TYPES and p.suffix not in NO_PRECOMPRESS):

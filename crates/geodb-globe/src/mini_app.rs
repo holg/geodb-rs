@@ -785,8 +785,8 @@ impl App {
         }
         let imagery: Vec<String> = IMAGERY
             .iter()
-            .filter(|(px, _, _, _)| self.surface.has(&format!("imagery-{px}")))
-            .map(|(px, _, _, _)| px.to_string())
+            .filter(|i| self.surface.has(&format!("imagery-{}", i.px)))
+            .map(|i| i.px.to_string())
             .collect();
         if !imagery.is_empty() {
             q.push(format!("imagery={}", imagery.join(",")));
@@ -831,9 +831,9 @@ impl App {
         if self.surface.has("coast-4096") || self.surface.lines.is_some() {
             files.push("coast10m.bin".into());
         }
-        for (px, _, file, _) in IMAGERY {
-            if self.surface.has(&format!("imagery-{px}")) {
-                files.push(file.to_string());
+        for i in IMAGERY {
+            if self.surface.has(&format!("imagery-{}", i.px)) {
+                files.extend(i.tiles().into_iter().map(|t| t.0));
             }
         }
         // The detail tiles of the patch shown now (by URL).
@@ -1491,7 +1491,20 @@ struct SurfaceTex {
     label: String,
     bake: bool,
     view: wgpu::TextureView,
+    /// Imagery: the chroma next to the luma in `view` (see `crate::ycc`).
+    chroma: Option<wgpu::TextureView>,
     px: u32,
+    /// GPU bytes, mips included.
+    bytes: f64,
+}
+
+impl SurfaceTex {
+    fn surface_view(&self) -> crate::render::SurfaceView {
+        crate::render::SurfaceView {
+            color: self.view.clone(),
+            chroma: self.chroma.clone(),
+        }
+    }
 }
 
 /// The earth surfaces loaded so far, each its own GPU texture (switching is
@@ -1513,7 +1526,7 @@ fn texture_bytes(w: u32) -> f64 {
 
 impl Surface {
     fn gpu_bytes(&self) -> f64 {
-        self.list.iter().map(|t| texture_bytes(t.px)).sum::<f64>() + self.lines.unwrap_or(0.0)
+        self.list.iter().map(|t| t.bytes).sum::<f64>() + self.lines.unwrap_or(0.0)
     }
 
     fn get(&self, id: &str) -> Option<&SurfaceTex> {
@@ -1554,12 +1567,12 @@ impl Surface {
         };
         let left = self
             .get(&self.show)
-            .map_or(lights.view.clone(), |t| t.view.clone());
+            .map_or(lights.view.clone().into(), SurfaceTex::surface_view);
         let right = self
             .compare
             .as_deref()
             .and_then(|c| self.get(c))
-            .map(|t| (t.view.clone(), 0.5));
+            .map(|t| (t.surface_view(), 0.5));
         r.set_surface(lights.view.clone(), left, right);
     }
 }
@@ -1567,11 +1580,60 @@ impl Surface {
 /// Coast bake widths and imagery sizes: (width, file, download).
 /// (Sharper coasts beyond this are the vector lines, not a bigger bake.)
 const COAST_PX: [u32; 1] = [4096];
-const IMAGERY: [(u32, &str, &str, &str); 3] = [
-    (4096, "4K", "earth-4k.webp", "0.65 MB"),
-    (8192, "8K", "earth-8k.webp", "2.1 MB"),
-    (16380, "16K", "earth-16k.webp", "7.8 MB"),
+const IMAGERY: [Imagery; 3] = [
+    Imagery {
+        px: 4096,
+        name: "4K",
+        stem: "earth-4k",
+        grid: (1, 1),
+        size: "0.65 MB",
+    },
+    Imagery {
+        px: 8192,
+        name: "8K",
+        stem: "earth-8k",
+        grid: (2, 1),
+        size: "2.1 MB",
+    },
+    Imagery {
+        px: 16380,
+        name: "16K",
+        stem: "earth-16k",
+        grid: (4, 2),
+        size: "6.8 MB",
+    },
 ];
+
+/// A global satellite texture (NASA Blue Marble, `scripts/fetch_detail.py`):
+/// `px` x `px/2`, shipped as `grid` (columns, rows) WebP tiles of at most
+/// 4096 px, so no decoded image is larger than 64 MB.
+struct Imagery {
+    px: u32,
+    name: &'static str,
+    stem: &'static str,
+    grid: (u32, u32),
+    /// Download size.
+    size: &'static str,
+}
+
+impl Imagery {
+    /// (file, x, y, w, h) per tile: `earth-4k.webp` alone, or
+    /// `earth-16k-{row}-{col}.webp`.
+    fn tiles(&self) -> Vec<(String, u32, u32, u32, u32)> {
+        let (cols, rows) = self.grid;
+        crate::ycc::tile_rects(self.px, self.px / 2, cols, rows)
+            .into_iter()
+            .map(|(r, c, x, y, w, h)| {
+                let file = if cols * rows == 1 {
+                    format!("{}.webp", self.stem)
+                } else {
+                    format!("{}-{r}-{c}.webp", self.stem)
+                };
+                (file, x, y, w, h)
+            })
+            .collect()
+    }
+}
 
 fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, date: Option<&str>) {
     let mut html = String::from("<div class=\"layers\">");
@@ -1599,10 +1661,11 @@ fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, d
             ));
         }
     }
-    for (px, name, _, size) in IMAGERY {
-        if px <= max && !s.has(&format!("imagery-{px}")) {
+    for i in IMAGERY {
+        if i.px <= max && !s.has(&format!("imagery-{}", i.px)) {
             html.push_str(&format!(
-                "<button data-texture=\"imagery:{px}\">Load satellite {name} ({size})</button>"
+                "<button data-texture=\"imagery:{}\">Load satellite {} ({})</button>",
+                i.px, i.name, i.size
             ));
         }
     }
@@ -1768,7 +1831,9 @@ async fn load_coast_detail(app: Rc<RefCell<App>>, width: u32) {
         label: format!("baked, 1:10m coasts, {width} px"),
         bake: true,
         view,
+        chroma: None,
         px: width,
+        bytes: texture_bytes(width),
     });
     a.cost.layers.push(LayerCost {
         key: format!("coast-{width}"),
@@ -1793,24 +1858,23 @@ async fn load_coast_detail(app: Rc<RefCell<App>>, width: u32) {
 /// makes each mip level (ImageBitmap resize), copied straight into a GPU
 /// texture.
 async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
-    let (doc, max, device, queue) = {
+    use crate::ycc::{tile_texture, YccConverter, YccTexture};
+    let (doc, max, device, queue, webgpu) = {
         let a = app.borrow();
         (
             a.doc.clone(),
             a.renderer.max_texture_dimension(),
             a.device.clone(),
             a.queue.clone(),
+            a.backend == "BrowserWebGpu",
         )
     };
     // The largest size the device takes, at most the one asked for.
-    let Some((width, name, file, _)) = IMAGERY
-        .into_iter()
-        .rev()
-        .find(|(px, _, _, _)| *px <= width.min(max))
-    else {
+    let Some(img) = IMAGERY.iter().rev().find(|i| i.px <= width.min(max)) else {
         set_html(&doc, "layerstatus", "This device takes no imagery texture.");
         return;
     };
+    let (width, height) = (img.px, img.px / 2);
     if app.borrow().surface.has(&format!("imagery-{width}")) {
         return;
     }
@@ -1819,66 +1883,63 @@ async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
         "layerstatus",
         &format!("Loading satellite imagery, {width} px…"),
     );
+    // The tiles are small compressed: fetch them all at once.
     let t = now();
-    let bytes = match fetch_bytes(file).await {
-        Ok(b) => b,
-        Err(e) => {
-            set_html(
-                &doc,
-                "layerstatus",
-                &format!("Could not load: {}", escape(&e)),
-            );
-            return;
+    let tiles = img.tiles();
+    let fetches: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = _>>>> = tiles
+        .iter()
+        .map(|(file, ..)| {
+            let file = file.clone();
+            Box::pin(async move { fetch_bytes(&file).await }) as _
+        })
+        .collect();
+    let mut files = Vec::new();
+    for r in join_all::<Result<Vec<u8>, String>>(fetches).await {
+        match r {
+            Ok(b) => files.push(b),
+            Err(e) => {
+                set_html(
+                    &doc,
+                    "layerstatus",
+                    &format!("Could not load: {}", escape(&e)),
+                );
+                return;
+            }
         }
-    };
+    }
     let fetch_ms = now() - t;
+    let file_bytes: usize = files.iter().map(Vec::len).sum();
+    // Decode and convert one tile at a time: at most one decoded tile
+    // (<= 64 MB) and its scratch texture exist at once.
     let t = now();
-    let result: Result<wgpu::TextureView, String> = async {
-        let window = web_sys::window().ok_or("no window")?;
-        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]));
-        let blob =
-            web_sys::Blob::new_with_u8_array_sequence(&parts).map_err(|e| format!("{e:?}"))?;
-        let decode = |p: Result<js_sys::Promise, JsValue>| async move {
-            let v = wasm_bindgen_futures::JsFuture::from(p.map_err(|e| format!("{e:?}"))?)
-                .await
-                .map_err(|e| format!("decode: {e:?}"))?;
-            v.dyn_into::<web_sys::ImageBitmap>()
-                .map_err(|_| "not an image".to_string())
-        };
-        let full = decode(window.create_image_bitmap_with_blob(&blob)).await?;
-        let height = width / 2;
-        let levels = 32 - width.leading_zeros();
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("imagery"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        for level in 0..levels {
-            let (w, h) = ((width >> level).max(1), (height >> level).max(1));
-            let bitmap = if level == 0 {
-                full.clone()
-            } else {
-                let opts = web_sys::ImageBitmapOptions::new();
-                opts.set_resize_width(w);
-                opts.set_resize_height(h);
-                opts.set_resize_quality(web_sys::ResizeQuality::High);
-                decode(
-                    window.create_image_bitmap_with_image_bitmap_and_image_bitmap_options(
-                        &full, &opts,
-                    ),
-                )
-                .await?
+    let result: Result<(wgpu::TextureView, wgpu::TextureView), String> = async {
+        let conv = YccConverter::new(&device);
+        let image = YccTexture::new(&device, width, height);
+        let n = tiles.len();
+        // One scratch texture for every tile of that size (queue order
+        // keeps each copy after the previous tile's conversion).
+        let mut scratch: Option<wgpu::Texture> = None;
+        for (k, ((_, x, y, w, h), bytes)) in tiles.iter().zip(files).enumerate() {
+            if n > 1 {
+                set_html(
+                    &doc,
+                    "layerstatus",
+                    &format!("Satellite imagery, {width} px: tile {}/{n}…", k + 1),
+                );
+            }
+            let bitmap = bitmap(&bytes).await?;
+            drop(bytes);
+            if scratch
+                .as_ref()
+                .is_none_or(|s| (s.width(), s.height()) != (*w, *h))
+            {
+                if let Some(old) = scratch.take() {
+                    old.destroy();
+                }
+                scratch = Some(tile_texture(&device, *w, *h));
+            }
+            let Some(tile) = scratch.as_ref() else {
+                unreachable!("made above");
             };
             queue.copy_external_image_to_texture(
                 &wgpu::CopyExternalImageSourceInfo {
@@ -1887,32 +1948,40 @@ async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
                     flip_y: false,
                 },
                 wgpu::CopyExternalImageDestInfo {
-                    texture: &texture,
-                    mip_level: level,
+                    texture: tile,
+                    mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                     color_space: wgpu::PredefinedColorSpace::Srgb,
                     premultiplied_alpha: false,
                 },
                 wgpu::Extent3d {
-                    width: w,
-                    height: h,
+                    width: (*w).min(bitmap.width()),
+                    height: (*h).min(bitmap.height()),
                     depth_or_array_layers: 1,
                 },
             );
-            // Free the decoded pixels now, not at the next GC. The WebGL2
-            // backend copies at the next submit: flush before closing.
-            if level > 0 {
-                queue.submit(std::iter::empty());
-                bitmap.close();
+            // The WebGL2 backend copies at the next submit: flush before
+            // freeing the pixels.
+            queue.submit(std::iter::empty());
+            bitmap.close();
+            let view = tile.create_view(&Default::default());
+            image.write_tile(&device, &queue, &conv, &view, *x, *y, *w, *h);
+            // Let the GPU finish this tile before the next is decoded, so
+            // the browser can free its upload copy (WebGL2 works in order
+            // at each submit already).
+            if webgpu {
+                work_done(&queue).await;
             }
         }
-        queue.submit(std::iter::empty());
-        full.close();
-        Ok(texture.create_view(&Default::default()))
+        if let Some(tile) = scratch {
+            tile.destroy();
+        }
+        image.build_mips(&device, &queue, &conv);
+        Ok(image.views())
     }
     .await;
-    let view = match result {
+    let (view, chroma) = match result {
         Ok(v) => v,
         Err(e) => {
             set_html(
@@ -1924,34 +1993,56 @@ async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
         }
     };
     let decode_ms = now() - t;
-    let wire = network()
-        .into_iter()
-        .find(|(label, _, _)| label == file)
-        .map_or(bytes.len() as f64, |n| n.1);
+    // Bytes on the wire per tile (Resource Timing), else the file sizes.
+    let net = network();
+    let wire: f64 = tiles
+        .iter()
+        .map(|(file, ..)| {
+            net.iter()
+                .find(|(label, _, _)| label == file)
+                .map_or(0.0, |n| n.1)
+        })
+        .sum();
+    let gpu = YccTexture::gpu_bytes(width, height);
     let mut a = app.borrow_mut();
     a.surface.add(SurfaceTex {
         id: format!("imagery-{width}"),
-        label: format!("satellite {name}, {width} px"),
+        label: format!("satellite {}, {width} px", img.name),
         bake: false,
         view,
+        chroma: Some(chroma),
         px: width,
+        bytes: gpu,
     });
     a.cost.layers.push(LayerCost {
         key: format!("imagery-{width}"),
-        file: format!("{file} (NASA Blue Marble)"),
-        wire,
-        unpacked: f64::from(width) * f64::from(width / 2) * 4.0,
+        file: if tiles.len() == 1 {
+            format!("{} (NASA Blue Marble)", tiles[0].0)
+        } else {
+            format!(
+                "{}-*.webp, {} tiles (NASA Blue Marble)",
+                img.stem,
+                tiles.len()
+            )
+        },
+        wire: if wire > 0.0 { wire } else { file_bytes as f64 },
+        unpacked: f64::from(width) * f64::from(height) * 4.0,
         fetch_ms,
         action: "decode",
         attach_ms: decode_ms,
         heap_added: 0.0,
-        gpu_added: texture_bytes(width),
+        gpu_added: gpu,
     });
     surface_changed(&mut a);
     set_html(
         &doc,
         "layerstatus",
-        &format!("Satellite imagery at {width} px."),
+        &format!(
+            "Satellite imagery at {width} px: luma + half-size chroma on the GPU, {} \
+             (RGBA would be {}).",
+            fmt_bytes(gpu),
+            fmt_bytes(texture_bytes(width))
+        ),
     );
 }
 
@@ -2147,6 +2238,32 @@ fn yesterday() -> String {
 
 /// One tile: its URL and size, or `None` when it failed.
 type TileFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<(String, usize)>>>>;
+
+/// Resolves once the GPU has finished what was submitted so far (WebGPU:
+/// the browser frees upload copies and destroyed textures then).
+async fn work_done(queue: &wgpu::Queue) {
+    use std::sync::{Arc, Mutex};
+    use std::task::{Poll, Waker};
+    let state: Arc<Mutex<(bool, Option<Waker>)>> = Arc::default();
+    let shared = state.clone();
+    queue.on_submitted_work_done(move || {
+        let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+        s.0 = true;
+        if let Some(w) = s.1.take() {
+            w.wake();
+        }
+    });
+    std::future::poll_fn(|cx| {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        if s.0 {
+            Poll::Ready(())
+        } else {
+            s.1 = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    })
+    .await;
+}
 
 /// Decodes an image (JPEG, WebP) with the browser.
 async fn bitmap(bytes: &[u8]) -> Result<web_sys::ImageBitmap, String> {
@@ -3407,7 +3524,9 @@ async fn run() -> Result<(), String> {
                 label: format!("baked, 1:50m coasts, {tex_px} px"),
                 bake: true,
                 view: renderer_base_view,
+                chroma: None,
                 px: tex_px,
+                bytes: texture_bytes(tex_px),
             }],
             show: "base".into(),
             compare: None,

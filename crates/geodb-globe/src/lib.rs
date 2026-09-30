@@ -22,6 +22,7 @@ pub mod source;
 pub mod texture;
 pub mod tiles;
 pub mod view;
+pub mod ycc;
 
 #[cfg(all(target_arch = "wasm32", not(feature = "mini")))]
 mod app;
