@@ -15,6 +15,7 @@ const ID_FT6X36: u8 = 0xCD;
 pub struct Touch {
     i2c: I2c<'static, Blocking, Master>,
     addr: u8,
+    #[allow(dead_code)]
     pub chip: u8,
 }
 

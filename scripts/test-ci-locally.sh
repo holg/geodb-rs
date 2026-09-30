@@ -97,6 +97,20 @@ else
     exit 1
 fi
 
+# The STM32F769I-DISCO firmware has a workspace of its own (thumbv7em, needs geodb.fw from make_image)
+echo -e "${YELLOW}Step 2b: Firmware (fmt, clippy, build)...${NC}"
+if rustup target list --installed 2>/dev/null | grep -q thumbv7em-none-eabihf && [[ -f firmware/stm32f769i-disco/geodb.fw ]]; then
+    if (cd firmware/stm32f769i-disco && { cargo fmt -- --check || { [[ "$AUTO_FIX" == true ]] && cargo fmt; }; } && cargo clippy --release -- -D warnings && cargo build --release); then
+        echo -e "${GREEN}✓ firmware passed${NC}\n"
+    else
+        echo -e "${RED}✗ firmware failed (fmt, clippy or build)${NC}\n"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠ thumbv7em target or firmware/stm32f769i-disco/geodb.fw missing, skipping firmware${NC}"
+    echo -e "${YELLOW}  rustup target add thumbv7em-none-eabihf; cargo run --release -p geodb-fw-core --features std --example make_image${NC}\n"
+fi
+
 # Run cargo build
 echo -e "${YELLOW}Step 3: Running cargo build...${NC}"
 # Exclude geodb-py as it requires maturin to build

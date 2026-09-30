@@ -310,7 +310,6 @@ async fn main(spawner: Spawner) {
     let mut vel = (0.0f32, 0.0f32); // px/s
     let mut stamp = Instant::now();
     let mut frames = 0u32;
-    let mut draw_ms = 0u32;
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
     // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
@@ -457,7 +456,7 @@ async fn main(spawner: Spawner) {
                 fps = if fps == 0 { now } else { (fps * 3 + now) / 4 };
             }
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
-            draw_ms = draw_and_show(
+            let draw_ms = draw_and_show(
                 &mut disp,
                 &mut front,
                 &img,
@@ -614,7 +613,7 @@ async fn resolve(
             bytes: [0; 40],
             len: 0,
         };
-        let _ = write!(ask, "?{la},{lo}\n");
+        let _ = writeln!(ask, "?{la},{lo}");
         let mut reply = [0u8; 96];
         let got = link.ask(&ask.bytes[..ask.len], &mut reply).await?;
         let Ok(text) = core::str::from_utf8(&reply[..got]) else {

@@ -76,7 +76,7 @@ fn sdram_mpu() {
 
 /// Bring up the SDRAM, map it as normal memory and verify a few words. Returns the base pointer.
 pub fn init_sdram(mut sdram: Sdram) -> *mut u32 {
-    let ptr = sdram.init(&mut embassy_time::Delay) as *mut u32;
+    let ptr = sdram.init(&mut embassy_time::Delay);
     assert_eq!(ptr as usize, SDRAM_BASE, "unexpected SDRAM base");
     sdram_mpu();
     // walking pattern over a few KB at both ends
@@ -395,9 +395,11 @@ impl embedded_hal_02::blocking::delay::DelayMs<u32> for BlockDelay {
 
 pub struct Display {
     pub ltdc: Ltdc<'static, LTDC, DSI>,
+    #[allow(dead_code)] // kept alive: dropping the host would stop the link
     pub dsi: DsiHost<'static, DSIHOST>,
     pub fb: [Framebuffer; 2],
     pub panel: PanelKind,
+    #[allow(dead_code)]
     pub ids: [u8; 3],
     /// BL_CTRL (PI14): held high for as long as the display lives.
     pub backlight: Option<Output<'static>>,
