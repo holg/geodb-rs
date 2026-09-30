@@ -138,32 +138,51 @@ impl GlobeSearchIndex {
         let names = globe.names.as_ref();
         let folder =
             Folder::new(std::iter::once(globe.fold.clone()).chain(globe.fold_more.clone()));
-        let fold_key = |s: &str| folder.fold(s);
+        // A name's folded form, and where a transliteration pads syllables
+        // with spaces also the form typed without them ("Dong Jing" and
+        // "dongjing" for 東京).
+        let add = |f: &mut Vec<String>, s: &str| {
+            f.push(folder.fold(s));
+            f.extend(folder.compact(s));
+        };
         let countries = Blob::build(globe.countries.iter().enumerate().map(|(i, c)| {
-            let mut f = vec![fold_key(&c.name), c.iso2.to_ascii_lowercase()];
+            let mut f = Vec::new();
+            add(&mut f, &c.name);
+            f.push(c.iso2.to_ascii_lowercase());
             if let Some(m) = meta.and_then(|m| m.countries.get(i)) {
                 f.extend(m.iso3.as_deref().map(str::to_ascii_lowercase));
-                f.extend(m.native_name.as_deref().map(&fold_key));
-                f.extend(m.translations.iter().map(|(_, t)| fold_key(t)));
+                if let Some(t) = m.native_name.as_deref() {
+                    add(&mut f, t);
+                }
+                for (_, t) in &m.translations {
+                    add(&mut f, t);
+                }
             }
             f
         }));
         let states = Blob::build(globe.states.iter().enumerate().map(|(i, s)| {
-            let mut f = vec![fold_key(&s.name)];
+            let mut f = Vec::new();
+            add(&mut f, &s.name);
             if let Some(m) = meta.and_then(|m| m.states.get(i)) {
-                f.extend(m.native_name.as_deref().map(&fold_key));
+                if let Some(t) = m.native_name.as_deref() {
+                    add(&mut f, t);
+                }
                 f.extend(m.full_code.as_deref().map(str::to_ascii_lowercase));
             }
             f
         }));
         let cities = Blob::build(globe.cities.iter().enumerate().map(|(i, c)| {
-            let mut f = vec![fold_key(&c.name)];
+            let mut f = Vec::new();
+            add(&mut f, &c.name);
             if let Some(n) = meta.and_then(|m| m.city_names(i)) {
-                f.extend(n.aliases.iter().map(|a| fold_key(a)));
-                f.extend(n.regions.iter().map(|r| fold_key(r)));
+                for t in n.aliases.iter().chain(&n.regions) {
+                    add(&mut f, t);
+                }
             }
             if let Some(n) = names {
-                f.extend(n.all(i).map(&fold_key));
+                for t in n.all(i) {
+                    add(&mut f, t);
+                }
             }
             f
         }));
@@ -365,6 +384,8 @@ mod tests {
             )
         };
         assert!(japan(&with.smart_search(&g, "ri ben")));
+        // Typed without the space the transliteration pads with.
+        assert!(japan(&with.smart_search(&g, "riben")));
         assert!(!japan(&plain.smart_search(&g, "ri ben")));
         assert!(japan(&plain.smart_search(&g, "日本")));
         g.detach_layer(crate::globe_layers::LayerKind::Fold);

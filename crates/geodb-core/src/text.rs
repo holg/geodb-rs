@@ -303,6 +303,23 @@ impl Folder {
         out
     }
 
+    /// [`fold`](Self::fold) without the padding spaces between transliterated
+    /// syllables ("dongjing" for 東京, which folds to "dong jing"), when that
+    /// differs: how the same name is typed without the spaces.
+    pub fn compact(&self, s: &str) -> Option<String> {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            if c.is_ascii() {
+                out.push(c.to_ascii_lowercase());
+            } else if let Some(t) = self.tables.iter().find_map(|t| t.get(c)) {
+                out.push_str(t.trim_end_matches(' '));
+            } else {
+                out.extend(c.to_lowercase());
+            }
+        }
+        (out != self.fold(s)).then_some(out)
+    }
+
     /// Bytes held in memory.
     pub fn heap_bytes(&self) -> usize {
         self.tables.iter().map(FoldTable::heap_bytes).sum()
@@ -362,6 +379,12 @@ mod fold_tests {
                 .collect();
             assert_eq!(folder.fold(&t), fold_key(&t), "{t:?}");
         }
+        // Without the padding between syllables.
+        let folder = Folder::new([FoldTable::from_texts(["東京", "泸定", "München"], None)]);
+        assert_eq!(folder.fold("東京"), "dong jing");
+        assert_eq!(folder.compact("東京").as_deref(), Some("dongjing"));
+        assert_eq!(folder.compact("泸定 x").as_deref(), Some("luding x"));
+        assert_eq!(folder.compact("München"), None, "nothing padded");
         // Round trip through the file format.
         let mut w = crate::globe_db::Writer::default();
         FoldTable::from_texts(texts, None).write(&mut w).unwrap();
