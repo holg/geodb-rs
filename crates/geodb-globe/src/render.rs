@@ -19,7 +19,8 @@ struct Globals {
     sun: [f32; 4],
     viewport: [f32; 4],
     query: [f32; 4],
-    /// Detail patch: west longitude, north latitude, span (degrees), on.
+    /// Detail patch: west longitude, north latitude, span, projection (0 off,
+    /// 1 geographic, 2 Mercator).
     patch: [f32; 4],
 }
 
@@ -60,8 +61,9 @@ pub struct Renderer {
     placeholder_view: wgpu::TextureView,
     /// Split position as a fraction of the width, when comparing.
     split: Option<f32>,
-    /// Detail patch: texture, west longitude, north latitude, span.
-    patch: Option<(wgpu::TextureView, f32, f32, f32)>,
+    /// Detail patch: texture and its `detail` uniform (see
+    /// [`crate::tiles::Window::uniform`]).
+    patch: Option<(wgpu::TextureView, [f32; 4])>,
     globals: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -555,9 +557,9 @@ impl Renderer {
     }
 
     /// A detail patch over the surface: `view` (transparent where it has no
-    /// pixels) covers `span` degrees east and south of (`west`, `north`).
-    /// `None` removes it.
-    pub fn set_patch(&mut self, patch: Option<(wgpu::TextureView, f32, f32, f32)>) {
+    /// pixels) placed by `uniform` (west, north, span, projection; see
+    /// [`crate::tiles::Window::uniform`]). `None` removes it.
+    pub fn set_patch(&mut self, patch: Option<(wgpu::TextureView, [f32; 4])>) {
         self.patch = patch;
         self.rebind();
     }
@@ -714,10 +716,7 @@ impl Renderer {
         scene: &Scene,
     ) {
         let eye = cam.eye();
-        let (qc, qr) = scene
-            .query
-            .map(|(c, r)| (c, r.cos()))
-            .unwrap_or((Vec3::Y, 2.0));
+        let (qc, qr) = scene.query.unwrap_or((Vec3::Y, -1.0));
         let globals = Globals {
             view_proj: cam.view_proj().to_cols_array_2d(),
             camera: [eye.x, eye.y, eye.z, cam.dist as f32],
@@ -729,10 +728,7 @@ impl Renderer {
                 self.split.unwrap_or(0.5),
             ],
             query: [qc.x, qc.y, qc.z, qr],
-            patch: self
-                .patch
-                .as_ref()
-                .map_or([0.0, 0.0, 1.0, 0.0], |p| [p.1, p.2, p.3, 1.0]),
+            patch: self.patch.as_ref().map_or([0.0, 0.0, 1.0, 0.0], |p| p.1),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));

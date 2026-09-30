@@ -84,6 +84,13 @@
         #where { padding: 8px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
         .coord { font-variant-numeric: tabular-nums; color: var(--accent); }
         #list { flex: 1; overflow-y: auto; margin: 0 -6px; }
+        #tilecredit {
+            position: fixed; left: 50%; bottom: 6px; transform: translateX(-50%);
+            font-size: 11px; color: #ddd; background: rgba(0, 0, 0, 0.55);
+            padding: 1px 8px; border-radius: 4px;
+        }
+        #tilecredit:empty { display: none; }
+        #tilecredit a { color: #9cf; }
         #hud {
             position: fixed; left: 16px; bottom: 14px; font-size: 12px;
             color: var(--muted); font-variant-numeric: tabular-nums; pointer-events: none;
@@ -172,7 +179,7 @@
         .netnote { font-size: 11px; color: var(--muted); margin: 2px 0 4px; }
         .netnote.online { color: #ffb840; }
         tr.addon td { color: #6fdc8c; }
-        tr.addon.unloaded td { color: var(--muted); text-decoration: line-through; }
+        tr.addon.unloaded td { color: var(--muted); }
         button.x { padding: 0 5px; margin-left: 4px; font-size: 11px; line-height: 16px; }
         tr.addon td:last-child { color: var(--text); }
         .errtab td:last-child { text-align: left; white-space: normal; }
@@ -192,6 +199,7 @@
 <div id="crosshair"></div>
 <div id="status">Loading…</div>
 <div id="hud"></div>
+<div id="tilecredit"></div>
 <div id="pop"></div>
 <aside id="panel">
     <div>
@@ -247,7 +255,8 @@
         cities: <a href="https://github.com/dr5hn/countries-states-cities-database">dr5hn</a> (CC-BY-4.0) ·
         coastlines: <a href="https://www.naturalearthdata.com/">Natural Earth</a> ·
         imagery: <a href="https://earthobservatory.nasa.gov/features/BlueMarble">NASA Blue Marble</a> ·
-        detail tiles: <a href="https://nasa-gibs.github.io/gibs-api-docs/">NASA GIBS</a> (Blue Marble, Landsat WELD, MODIS Terra/Aqua, VIIRS)
+        detail tiles: <a href="https://nasa-gibs.github.io/gibs-api-docs/">NASA GIBS</a> (Blue Marble, Landsat WELD, MODIS Terra/Aqua, VIIRS),
+        street map: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (ODbL)
     </footer>
 </aside>
 </body>

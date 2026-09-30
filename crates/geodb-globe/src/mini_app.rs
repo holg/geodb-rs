@@ -855,7 +855,8 @@ impl App {
         let px = h * Self::device_pixel_ratio();
         let ground_km = 2.0 * self.cam.altitude_km() * (f64::from(self.cam.fov_y) / 2.0).tan();
         let deg_per_px = ground_km / 111.32 / px.max(1.0);
-        let Some(level) = level_for(deg_per_px, SOURCES[si].max_level) else {
+        let (lat, lon) = (self.cam.lat, self.cam.lon);
+        let Some(level) = level_for(&SOURCES[si], deg_per_px, lat) else {
             // Far out: the global texture is as sharp.
             if self.tiles.front.take().is_some() {
                 self.renderer.set_patch(None);
@@ -864,14 +865,13 @@ impl App {
             }
             return;
         };
-        let (lat, lon) = (self.cam.lat, self.cam.lon);
         let fits = |w: &Window| w.level == level && w.centred_on(lat, lon);
         if self.tiles.front.as_ref().is_some_and(fits)
             || self.tiles.loading.as_ref().is_some_and(fits)
         {
             return;
         }
-        let window = Window::around(lat, lon, level, self.tiles.n);
+        let window = Window::around(&SOURCES[si], lat, lon, level, self.tiles.n);
         self.tiles.generation += 1;
         self.tiles.loading = Some(window);
         self.tiles.job = Some((window, self.tiles.generation));
@@ -1303,7 +1303,6 @@ struct LayerCost {
     heap_added: f64,
     /// GPU memory the layer added (textures).
     gpu_added: f64,
-    unloaded: bool,
 }
 
 /// What loading cost: the start, then each layer as an add-on.
@@ -1317,7 +1316,11 @@ struct CostSheet {
     base_wasm: f64,
     file_len: usize,
     startup: String,
+    /// What is loaded now, in load order.
     layers: Vec<LayerCost>,
+    /// Unloaded again: (file, times), and the bytes fetched for them.
+    unloaded: Vec<(String, usize)>,
+    unloaded_wire: f64,
     /// GPU texture bytes now (earth surfaces).
     gpu_now: f64,
 }
@@ -1369,32 +1372,46 @@ fn render_cost(doc: &Document, c: &CostSheet, src: &dyn GlobeSource) {
             format!("+{}{}", fmt_bytes(l.wire), unpacked(l.wire, l.unpacked))
         };
         html.push_str(&format!(
-            "<tr class=\"{}\"><td>{} {}</td><td>{wire}{}</td></tr>",
-            if l.unloaded {
-                "addon unloaded"
-            } else {
-                "addon"
-            },
-            if l.unloaded { "−" } else { "+" },
+            "<tr class=\"addon\"><td>+ {}</td><td>{wire}{}</td></tr>",
             escape(&l.file),
-            muted(
-                format!(
-                    "· fetch {:.0} ms · {} {:.0} ms{}{}",
-                    l.fetch_ms,
-                    l.action,
-                    l.attach_ms,
-                    if l.heap_added > 0.0 {
-                        format!(" · memory +{}", fmt_bytes(l.heap_added))
-                    } else {
-                        String::new()
-                    },
-                    if l.gpu_added > 0.0 {
-                        format!(" · GPU +{}", fmt_bytes(l.gpu_added))
-                    } else {
-                        String::new()
-                    }
-                ) + if l.unloaded { " · unloaded" } else { "" }
-            )
+            muted(format!(
+                "· fetch {:.0} ms · {} {:.0} ms{}{}",
+                l.fetch_ms,
+                l.action,
+                l.attach_ms,
+                if l.heap_added > 0.0 {
+                    format!(" · memory +{}", fmt_bytes(l.heap_added))
+                } else {
+                    String::new()
+                },
+                if l.gpu_added > 0.0 {
+                    format!(" · GPU +{}", fmt_bytes(l.gpu_added))
+                } else {
+                    String::new()
+                }
+            ))
+        ));
+    }
+    if !c.unloaded.is_empty() {
+        let names: Vec<String> = c
+            .unloaded
+            .iter()
+            .map(|(f, n)| {
+                if *n > 1 {
+                    format!("{} ×{n}", escape(f))
+                } else {
+                    escape(f)
+                }
+            })
+            .collect();
+        html.push_str(&format!(
+            "<tr class=\"addon unloaded\"><td>unloaded again</td><td>{}{}</td></tr>",
+            names.join(", "),
+            if c.single.is_some() {
+                String::new()
+            } else {
+                muted(format!("({} fetched for them)", fmt_bytes(c.unloaded_wire)))
+            }
         ));
     }
     if !c.layers.is_empty() {
@@ -1424,6 +1441,19 @@ fn render_cost(doc: &Document, c: &CostSheet, src: &dyn GlobeSource) {
                 format!("(file {})", fmt_bytes(c.file_len as f64))
             })
         ),
+    ));
+    let index = src.index_bytes();
+    html.push_str(&row(
+        "search index",
+        &if index > 0 {
+            format!(
+                "{}{}",
+                fmt_bytes(index as f64),
+                muted("(built on the first search, again after a layer change)".into())
+            )
+        } else {
+            muted("not built yet (on the first search)".into())
+        },
     ));
     html.push_str(&row(
         "heap in use",
@@ -1601,15 +1631,24 @@ fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, d
          <option value=\"\">off: everything local, no external requests</option>{sources}\
          </select></label>"
     ));
-    // Say plainly where data comes from: tiles are fetched from NASA.
-    html.push_str(if tiles.is_some() {
-        "<div class=\"netnote online\">⚠ Online: detail tiles are fetched from NASA GIBS \
-         (gibs.earthdata.nasa.gov) over the network while you move. Not available offline; \
-         a downloaded single file keeps only the tiles shown when it was saved.</div>"
-    } else {
-        "<div class=\"netnote\">Offline-capable: everything shown comes from this page's own \
-         files, no external requests.</div>"
-    });
+    // Say plainly where data comes from: tiles are fetched over the network.
+    match tiles.map(|i| &crate::tiles::SOURCES[i]) {
+        Some(t) => html.push_str(&format!(
+            "<div class=\"netnote online\">⚠ Online: detail tiles are fetched from {} over the \
+             network while you move. Not available offline; {}</div>",
+            t.host,
+            if t.offline_copy {
+                "a downloaded single file keeps only the tiles shown when it was saved."
+            } else {
+                "a downloaded single file keeps none of them (the OpenStreetMap tile policy \
+                 asks for no offline copies) and fetches them again when online."
+            }
+        )),
+        None => html.push_str(
+            "<div class=\"netnote\">Offline-capable: everything shown comes from this page's \
+             own files, no external requests.</div>",
+        ),
+    }
     if let Some((i, date)) = tiles.zip(date) {
         if crate::tiles::SOURCES[i].dated {
             html.push_str(&format!(
@@ -1656,9 +1695,10 @@ fn surface_changed(a: &mut App) {
         surface, renderer, ..
     } = a;
     surface.apply(renderer);
-    let patch = a.tiles.front.map_or(0.0, |w| {
-        f64::from(w.n * crate::tiles::TILE_PX).powi(2) * 4.0
-    });
+    let patch = a
+        .tiles
+        .front
+        .map_or(0.0, |w| f64::from(w.size_px()).powi(2) * 4.0);
     a.cost.gpu_now = a.surface.gpu_bytes() + patch;
     render_surface(&a.doc, &a.surface, max, a.tiles.source, Some(&a.tiles.date));
     render_cost(&a.doc, &a.cost, a.source);
@@ -1740,7 +1780,6 @@ async fn load_coast_detail(app: Rc<RefCell<App>>, width: u32) {
         attach_ms: bake_ms,
         heap_added: (heap_in_use() - heap).max(0.0),
         gpu_added: texture_bytes(width),
-        unloaded: false,
     });
     surface_changed(&mut a);
     set_html(
@@ -1861,11 +1900,14 @@ async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
                     depth_or_array_layers: 1,
                 },
             );
-            // Free the decoded pixels now, not at the next GC.
+            // Free the decoded pixels now, not at the next GC. The WebGL2
+            // backend copies at the next submit: flush before closing.
             if level > 0 {
+                queue.submit(std::iter::empty());
                 bitmap.close();
             }
         }
+        queue.submit(std::iter::empty());
         full.close();
         Ok(texture.create_view(&Default::default()))
     }
@@ -1904,7 +1946,6 @@ async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
         attach_ms: decode_ms,
         heap_added: 0.0,
         gpu_added: texture_bytes(width),
-        unloaded: false,
     });
     surface_changed(&mut a);
     set_html(
@@ -1969,7 +2010,6 @@ async fn load_lines(app: Rc<RefCell<App>>) {
         attach_ms: upload_ms,
         heap_added: 0.0,
         gpu_added: gpu,
-        unloaded: false,
     });
     surface_changed(&mut a);
     set_html(&doc, "layerstatus", "1:10m coastlines drawn as lines.");
@@ -2151,8 +2191,8 @@ async fn join_all<T>(
 /// Fetches the tiles of `window` into a new patch texture (8 at a time)
 /// and shows it when complete, unless a newer request replaced it.
 async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generation: u32) {
-    use crate::tiles::{tile_span, url, SOURCES, TILE_PX};
-    let (device, queue, doc, source, date) = {
+    use crate::tiles::{url, SOURCES};
+    let (device, queue, doc, source, date, lat) = {
         let a = app.borrow();
         let Some(si) = a.tiles.source else {
             return;
@@ -2163,9 +2203,10 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
             a.doc.clone(),
             SOURCES[si],
             a.tiles.date.clone(),
+            a.cam.lat,
         )
     };
-    let size = window.n * TILE_PX;
+    let (size, px) = (window.size_px(), window.px);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("detail tiles"),
         size: wgpu::Extent3d {
@@ -2184,7 +2225,7 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
     });
     let list = window.tiles();
     let total = list.len();
-    let metres = tile_span(window.level) / f64::from(TILE_PX) * 111_320.0;
+    let metres = window.metres_per_px(lat);
     let (mut done, mut bytes, mut urls) = (0usize, 0f64, Vec::new());
     let t = now();
     for chunk in list.chunks(8) {
@@ -2212,8 +2253,8 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
                             texture: &texture,
                             mip_level: 0,
                             origin: wgpu::Origin3d {
-                                x: x * TILE_PX,
-                                y: y * TILE_PX,
+                                x: x * px,
+                                y: y * px,
                                 z: 0,
                             },
                             aspect: wgpu::TextureAspect::All,
@@ -2221,11 +2262,14 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
                             premultiplied_alpha: false,
                         },
                         wgpu::Extent3d {
-                            width: TILE_PX.min(image.width()),
-                            height: TILE_PX.min(image.height()),
+                            width: px.min(image.width()),
+                            height: px.min(image.height()),
                             depth_or_array_layers: 1,
                         },
                     );
+                    // The WebGL2 backend copies at the next submit: flush
+                    // before freeing the pixels.
+                    queue.submit(std::iter::empty());
                     image.close();
                     Some((u, b.len()))
                 }) as TileFuture
@@ -2240,7 +2284,7 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
             &doc,
             "layerstatus",
             &format!(
-                "Detail tiles: level {} ({metres:.0} m/px), {done}/{total}…",
+                "Detail tiles: level {} ({metres:.1} m/px), {done}/{total}…",
                 window.level
             ),
         );
@@ -2249,26 +2293,22 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
     if a.tiles.generation != generation {
         return;
     }
-    let (west, north, span) = window.bounds();
     a.renderer.set_patch(Some((
         texture.create_view(&Default::default()),
-        west as f32,
-        north as f32,
-        span as f32,
+        window.uniform(),
     )));
     a.tiles.front = Some(window);
     a.tiles.loading = None;
-    a.tiles.front_urls = urls;
+    // Kept for the single-file download, where the source allows it.
+    a.tiles.front_urls = if source.offline_copy {
+        urls
+    } else {
+        Vec::new()
+    };
     a.tiles.fetched += done;
     a.tiles.bytes += bytes;
     let (fetched, total_bytes) = (a.tiles.fetched, a.tiles.bytes);
-    if let Some(row) = a
-        .cost
-        .layers
-        .iter_mut()
-        .rev()
-        .find(|l| l.key == "tiles" && !l.unloaded)
-    {
+    if let Some(row) = a.cost.layers.iter_mut().rev().find(|l| l.key == "tiles") {
         row.file = format!(
             "detail tiles: {}{} ({fetched} tiles so far)",
             source.label,
@@ -2289,7 +2329,7 @@ async fn load_tiles(app: Rc<RefCell<App>>, window: crate::tiles::Window, generat
         &doc,
         "layerstatus",
         &format!(
-            "Detail tiles: {}{}, level {} ({metres:.0} m/px), {done} tiles, {} in {:.0} ms.",
+            "Detail tiles: {}{}, level {} ({metres:.1} m/px), {done} tiles, {} in {:.0} ms.",
             source.label,
             if source.dated {
                 format!(" of {date}")
@@ -2335,27 +2375,54 @@ fn set_tiles(a: &mut App, si: Option<usize>) {
             attach_ms: 0.0,
             heap_added: 0.0,
             gpu_added: 0.0,
-            unloaded: false,
         });
         set_html(
             &a.doc,
             "layerstatus",
-            "Detail tiles: zoom in (below ~1500 km) to load them.",
+            if crate::tiles::SOURCES[si].always {
+                "Detail tiles: loading the map around the view…"
+            } else {
+                "Detail tiles: zoom in (below ~1500 km) to load them."
+            },
         );
     }
+    // The tiles' credit on the map itself (required by OpenStreetMap).
+    set_html(
+        &a.doc,
+        "tilecredit",
+        &si.map_or(String::new(), |i| tile_credit(&crate::tiles::SOURCES[i])),
+    );
     surface_changed(a);
 }
 
-/// Marks the last loaded row of `key` as unloaded.
-fn mark_unloaded(cost: &mut CostSheet, key: &str) {
-    if let Some(l) = cost
-        .layers
-        .iter_mut()
-        .rev()
-        .find(|l| l.key == key && !l.unloaded)
-    {
-        l.unloaded = true;
+/// The attribution line shown over the globe while `t`'s tiles are on.
+fn tile_credit(t: &crate::tiles::TileSource) -> String {
+    if t.key == "osm" {
+        "© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" \
+         rel=\"noopener\">OpenStreetMap</a> contributors"
+            .into()
+    } else {
+        format!(
+            "{} (<a href=\"https://nasa-gibs.github.io/gibs-api-docs/\" target=\"_blank\" \
+             rel=\"noopener\">GIBS</a>)",
+            escape(t.credit)
+        )
     }
+}
+
+/// Moves the row of `key` (when loaded) to the unloaded list.
+fn mark_unloaded(cost: &mut CostSheet, key: &str) {
+    let Some(i) = cost.layers.iter().rposition(|l| l.key == key) else {
+        return;
+    };
+    let l = cost.layers.remove(i);
+    // The tile row names its source and count; the list keeps the source.
+    let name = l.file.split(" (").next().unwrap_or(&l.file).to_string();
+    match cost.unloaded.iter_mut().find(|(f, _)| *f == name) {
+        Some((_, n)) => *n += 1,
+        None => cost.unloaded.push((name, 1)),
+    }
+    cost.unloaded_wire += l.wire;
 }
 
 /// The optional layers: a load button each (or what was loaded), and the
@@ -2415,6 +2482,7 @@ async fn load_layer(app: Rc<RefCell<App>>, file: String) {
     };
     let fetch_ms = now() - t;
     let t = now();
+    let heap_before = src.heap_bytes();
     let what = match src.attach_layer(&bytes) {
         Ok(w) => w,
         Err(e) => {
@@ -2433,16 +2501,9 @@ async fn load_layer(app: Rc<RefCell<App>>, file: String) {
         .map_or(bytes.len() as f64, |n| n.1);
     {
         let mut a = app.borrow_mut();
-        let before: usize = a.cost.base_heap
-            + a.cost
-                .layers
-                .iter()
-                .map(|l| l.heap_added as usize)
-                .sum::<usize>();
-        let heap_added = src.heap_bytes().saturating_sub(before) as f64;
+        let heap_added = src.heap_bytes().saturating_sub(heap_before) as f64;
         a.cost.layers.push(LayerCost {
             key: file.clone(),
-            unloaded: false,
             file: file.clone(),
             wire,
             unpacked: bytes.len() as f64,
@@ -3288,6 +3349,8 @@ async fn run() -> Result<(), String> {
              texture {tex_px} px {bake_ms:.0} · <b>{ready_ms:.0} ms</b>"
         ),
         layers: Vec::new(),
+        unloaded: Vec::new(),
+        unloaded_wire: 0.0,
         gpu_now: 0.0,
     };
     render_cost(&doc, &cost, globe);

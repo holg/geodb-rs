@@ -7,10 +7,10 @@ struct Globals {
     // x, y: viewport size in physical pixels; z: 1 = compare (split);
     // w: split position as a fraction of the width
     viewport: vec4<f32>,
-    // xyz: query centre on the unit sphere, w: cos(query radius) (> 1 = none)
+    // xyz: query centre on the unit sphere, w: query radius in radians (< 0 = none)
     query: vec4<f32>,
-    // Detail patch ("patch" is reserved in WGSL): x west longitude, y north latitude, z span (degrees),
-    // w 1 = on
+    // Detail patch ("patch" is reserved in WGSL): x west longitude, y north latitude (degrees),
+    // z span (degrees; Mercator: of the grid, 1 = the world), w 0 off, 1 geographic, 2 Mercator
     detail: vec4<f32>,
 };
 
@@ -61,11 +61,20 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     var albedo = mix(left, right, use_right);
 
     // Detail tiles on the shown (left) side: where the patch has pixels.
-    let lon = i.uv.x * 360.0 - 180.0;
-    let lat = 90.0 - i.uv.y * 180.0;
+    // Latitude and longitude of the point itself: the mesh's interpolated
+    // uv drifts by hundreds of metres inside a 1.4 degree triangle, which
+    // shows at street level.
+    let lon = degrees(atan2(n.x, n.z));
+    let lat = degrees(asin(clamp(n.y, -1.0, 1.0)));
+    let merc = g.detail.w > 1.5;
     let dl = lon - g.detail.x;
-    let pu = (dl - 360.0 * floor(dl / 360.0)) / g.detail.z;
-    let pv = (g.detail.y - lat) / g.detail.z;
+    let pu = (dl - 360.0 * floor(dl / 360.0)) / (g.detail.z * select(1.0, 360.0, merc));
+    // Mercator: the grid distance from the north edge, as the log of a tan
+    // ratio (more precise in f32 than subtracting two grid positions).
+    let quarter = 0.7853982;
+    let phi = radians(clamp(lat, -85.05113, 85.05113));
+    let merc_v = log(tan(quarter + radians(g.detail.y) * 0.5) / tan(quarter + phi * 0.5)) / (6.2831853 * g.detail.z);
+    let pv = select((g.detail.y - lat) / g.detail.z, merc_v, merc);
     let pc = textureSampleLevel(patch_tex, earth_sampler, clamp(vec2<f32>(pu, pv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
     let inside = g.detail.w > 0.5 && pu >= 0.0 && pu <= 1.0 && pv >= 0.0 && pv <= 1.0;
     albedo = mix(albedo, pc.rgb, select(0.0, pc.a, inside) * (1.0 - use_right));
@@ -95,10 +104,12 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     col = mix(col, vec3<f32>(0.55, 0.7, 1.0), line * 0.10);
 
     // Query radius: a soft disc with a crisp ring.
-    let ang = acos(clamp(dot(n, g.query.xyz), -1.0, 1.0));
-    let r = acos(clamp(g.query.w, -1.0, 1.0));
-    let fw = max(fwidth(ang), 1e-6) * 1.5;
-    let enabled = select(0.0, 1.0, g.query.w <= 1.0);
+    // The angle from the chord: acos of a dot product cannot resolve less
+    // than ~2 km in f32 (noise when zoomed in).
+    let ang = 2.0 * asin(min(length(n - g.query.xyz) * 0.5, 1.0));
+    let r = g.query.w;
+    let fw = max(fwidth(ang), 1e-7) * 1.5;
+    let enabled = select(0.0, 1.0, r >= 0.0);
     let ring = (1.0 - smoothstep(0.0, fw, abs(ang - r))) * enabled;
     let fill = (1.0 - smoothstep(r - fw, r, ang)) * enabled;
     let accent = vec3<f32>(1.0, 0.78, 0.3);

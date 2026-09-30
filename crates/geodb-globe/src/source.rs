@@ -27,7 +27,12 @@ pub trait GlobeSource {
     /// Worst position error in metres (0 when coordinates are stored exactly).
     fn position_error_m(&self) -> f64;
     /// Heap bytes held by the data (structures and text).
+    /// Bytes the data holds (without the search index).
     fn heap_bytes(&self) -> usize;
+    /// Bytes of the search index (0 until the first search builds it).
+    fn index_bytes(&self) -> usize {
+        0
+    }
     fn nearby(&self, lat: f64, lon: f64, radius_km: f64, spread: usize, limit: usize) -> Nearby;
     fn search(&self, query: &str, limit: usize) -> Vec<Target>;
     fn texture_seeds(&self) -> Vec<Seed>;
@@ -268,8 +273,11 @@ impl GlobeSource for MiniDb {
                     .sum::<usize>()
                 + m.states.len() * 160
         });
-        let index = self.index.borrow().as_ref().map_or(0, |i| i.heap_bytes());
-        mini::heap_bytes(&g) + exact + meta + names + index
+        mini::heap_bytes(&g) + exact + meta + names
+    }
+
+    fn index_bytes(&self) -> usize {
+        self.index.borrow().as_ref().map_or(0, |i| i.heap_bytes())
     }
 
     fn nearby(&self, lat: f64, lon: f64, radius_km: f64, spread: usize, limit: usize) -> Nearby {
@@ -497,10 +505,8 @@ impl GlobeSource for MiniDb {
             .borrow_mut()
             .attach_layer(bytes)
             .map_err(|e| e.to_string())?;
-        // New names, codes or aliases: search over them from now on.
-        *self.index.borrow_mut() = Some(geodb_core::globe_search::GlobeSearchIndex::build(
-            &self.globe(),
-        ));
+        // New names, codes or aliases: the next search indexes them.
+        *self.index.borrow_mut() = None;
         Ok(kind.label())
     }
 
@@ -512,15 +518,13 @@ impl GlobeSource for MiniDb {
             "cities.names" => LayerKind::Names,
             other => return Err(format!("no layer {other}")),
         };
-        // Drop the index first (it holds folded copies), then the layer.
+        // Drop the index (it holds folded copies; the next search builds
+        // it again), then the layer.
         *self.index.borrow_mut() = None;
         self.globe.borrow_mut().detach_layer(kind);
         if kind == LayerKind::Coords {
             self.positions.set(Positions::Geoid);
         }
-        *self.index.borrow_mut() = Some(geodb_core::globe_search::GlobeSearchIndex::build(
-            &self.globe(),
-        ));
         Ok(())
     }
 

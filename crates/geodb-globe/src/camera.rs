@@ -3,7 +3,7 @@
 use crate::geo::{self, EARTH_RADIUS_KM};
 use glam::{Mat4, Vec3, Vec4};
 
-pub const MIN_DIST: f64 = 1.008; // ~50 km altitude
+pub const MIN_DIST: f64 = 1.0003; // ~2 km altitude (street-level map tiles)
 pub const MAX_DIST: f64 = 8.0;
 const MAX_LAT: f64 = 85.0;
 
