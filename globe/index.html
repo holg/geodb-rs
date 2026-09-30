@@ -17,13 +17,14 @@ const webgpu = !webgl2 && await (async () => {
     try { return !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { return false; }
 })();
 const build = webgpu
-    ? { name: "webgpu", js: "./geodb-globe-57577e9daecc0011.js", wasm: "./geodb-globe-57577e9daecc0011_bg.wasm" }
-    : { name: "webgl2", js: "./geodb-globe-bd39db764fe809e1.js", wasm: "./geodb-globe-bd39db764fe809e1_bg.wasm" };
+    ? { name: "webgpu", js: "./geodb-globe-30316618144edfc.js", wasm: "./geodb-globe-30316618144edfc_bg.wasm" }
+    : { name: "webgl2", js: "./geodb-globe-572ede6aa2eb746f.js", wasm: "./geodb-globe-572ede6aa2eb746f_bg.wasm" };
 window.__GEODB_BUILD = build.name;
 window.__GEODB_FILES = { js: build.js, wasm: build.wasm };
 const { default: init } = await import(build.js);
 await init({ module_or_path: build.wasm });
 </script>
+    
     
     
     
