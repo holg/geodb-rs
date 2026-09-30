@@ -190,30 +190,52 @@ class Precompressed(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(OUT), **kwargs)
 
+    def do_HEAD(self):
+        self.send_file(head=True)
+
     def do_GET(self):
+        self.send_file(head=False)
+
+    def send_file(self, head: bool) -> None:
+        """Like nginx with br/gzip_static: the precompressed file when the
+        client accepts it, an ETag, 304 for a matching If-None-Match (the
+        browser revalidates every load), HEAD with the encoded Content-Length."""
         path = self.path.split("?")[0].lstrip("/") or "index.html"
         f = OUT / path
         if not f.is_file() or f.suffix not in TYPES:
-            return super().do_GET()
+            return super().do_HEAD() if head else super().do_GET()
         accept = self.headers.get("Accept-Encoding", "")
+        chosen, encoding = f, None
         for enc, ext in (("br", ".br"), ("gzip", ".gz")):
             if enc in accept and (OUT / (path + ext)).is_file():
-                body, encoding = (OUT / (path + ext)).read_bytes(), enc
+                chosen, encoding = OUT / (path + ext), enc
                 break
-        else:
-            body, encoding = f.read_bytes(), None
+        st = chosen.stat()
+        etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+        if encoding:
+            etag = etag[:-1] + f'-{encoding}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        body = chosen.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", TYPES[f.suffix])
         if encoding:
             self.send_header("Content-Encoding", encoding)
         self.send_header("Vary", "Accept-Encoding")
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "no-cache")
         # Cross-origin isolation: performance.now() gets 5 µs instead of
         # 100 µs, so the query benchmark can time single queries.
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if not head:
+            self.wfile.write(body)
 
 
 def local_addresses() -> list[str]:

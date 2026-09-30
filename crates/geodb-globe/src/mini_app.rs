@@ -280,6 +280,10 @@ fn network() -> Vec<(String, f64, f64)> {
             continue;
         };
         let name = r.name();
+        // The size probes of `measure_cached` are not files of the page.
+        if name.ends_with(PROBE) {
+            continue;
+        }
         let file = name.rsplit('/').next().unwrap_or(&name);
         let file = file.split('?').next().unwrap_or(file);
         let label = if file.ends_with(".wasm") {
@@ -302,20 +306,86 @@ fn network() -> Vec<(String, f64, f64)> {
         } else {
             continue;
         };
-        // Cached responses report 0 on the wire; show the encoded size then.
-        let wire = if r.transfer_size() > 0.0 {
-            r.transfer_size()
+        // A cached or revalidated (304) response has no body on the wire:
+        // its transfer size is only headers (~300 B). Use the size a HEAD
+        // request measured (see `measure_cached`).
+        let wire = if r.encoded_body_size() > 0.0 {
+            r.transfer_size().max(r.encoded_body_size())
         } else {
-            r.encoded_body_size()
+            CACHED_SIZES
+                .with(|m| m.borrow().get(&name).copied())
+                .unwrap_or(r.transfer_size())
+        };
+        let decoded = if r.decoded_body_size() > 0.0 {
+            r.decoded_body_size()
+        } else {
+            wire
         };
         // The release loads one of two builds (web_release.py): say which.
         let label = match global("__GEODB_BUILD").as_string() {
             Some(build) if label == "wasm" => format!("wasm ({build} build)"),
             _ => label.to_string(),
         };
-        out.push((label, wire, r.decoded_body_size()));
+        out.push((label, wire, decoded));
     }
     out
+}
+
+/// Query added to the size probes (the server ignores it).
+const PROBE: &str = "?size-probe";
+
+thread_local! {
+    /// URL -> bytes on the wire, for responses the browser served from its
+    /// cache (see [`measure_cached`]).
+    static CACHED_SIZES: RefCell<HashMap<String, f64>> = RefCell::new(HashMap::new());
+}
+
+/// Measures the files a cached page load did not transfer: a HEAD request
+/// that skips the cache returns the size the server sends (nginx: the
+/// precompressed file's length), without the body. Call before [`network`].
+async fn measure_cached() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(perf) = window.performance() else {
+        return;
+    };
+    let names: Vec<String> = perf
+        .get_entries_by_type("resource")
+        .iter()
+        .filter_map(|e| e.dyn_into::<web_sys::PerformanceResourceTiming>().ok())
+        .filter(|r| r.encoded_body_size() == 0.0)
+        .map(|r| r.name())
+        .filter(|n| !n.ends_with(PROBE))
+        .filter(|n| !CACHED_SIZES.with(|m| m.borrow().contains_key(n)))
+        .collect();
+    for name in names {
+        let init = web_sys::RequestInit::new();
+        init.set_method("HEAD");
+        init.set_cache(web_sys::RequestCache::NoStore);
+        let probe = format!("{name}{PROBE}");
+        let Ok(promise) = window
+            .fetch_with_str_and_init(&probe, &init)
+            .dyn_into::<js_sys::Promise>()
+        else {
+            continue;
+        };
+        let Ok(resp) = wasm_bindgen_futures::JsFuture::from(promise).await else {
+            continue;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            continue;
+        };
+        let length = resp
+            .headers()
+            .get("content-length")
+            .ok()
+            .flatten()
+            .and_then(|l| l.parse::<f64>().ok());
+        if let Some(length) = length.filter(|l| *l > 0.0) {
+            CACHED_SIZES.with(|m| m.borrow_mut().insert(name, length));
+        }
+    }
 }
 
 impl App {
@@ -1819,6 +1889,7 @@ async fn load_coast_detail(app: Rc<RefCell<App>>, width: u32) {
     let tex = texture::bake(&src.texture_seeds(), &land, &lakes, width);
     drop((land, lakes));
     let bake_ms = now() - t;
+    measure_cached().await;
     let wire = network()
         .into_iter()
         .find(|(label, _, _)| label == FILE)
@@ -1994,6 +2065,7 @@ async fn load_imagery(app: Rc<RefCell<App>>, width: u32) {
     };
     let decode_ms = now() - t;
     // Bytes on the wire per tile (Resource Timing), else the file sizes.
+    measure_cached().await;
     let net = network();
     let wire: f64 = tiles
         .iter()
@@ -2080,15 +2152,16 @@ async fn load_lines(app: Rc<RefCell<App>>) {
         }
     };
     let refs: Vec<&[crate::coast::Ring]> = layers.iter().map(Vec::as_slice).collect();
-    let mut a = app.borrow_mut();
-    let gpu = a.renderer.set_coastlines(&refs) as f64;
+    let gpu = app.borrow_mut().renderer.set_coastlines(&refs) as f64;
     drop(refs);
     drop(layers);
     let upload_ms = now() - t;
+    measure_cached().await;
     let wire = network()
         .into_iter()
         .find(|(label, _, _)| label == FILE)
         .map_or(bytes.len() as f64, |n| n.1);
+    let mut a = app.borrow_mut();
     a.surface.lines = Some(gpu);
     a.surface.lines_on = true;
     a.cost.layers.push(LayerCost {
@@ -2612,6 +2685,7 @@ async fn load_layer(app: Rc<RefCell<App>>, file: String) {
         }
     };
     let attach_ms = now() - t;
+    measure_cached().await;
     let wire = network()
         .into_iter()
         .find(|(label, _, _)| label == &file)
@@ -3444,6 +3518,7 @@ async fn run() -> Result<(), String> {
     status("");
 
     // Cost table: network, memory, start-up; layers add rows later.
+    measure_cached().await;
     let net = network();
     let single = global("__GEODB_FILE_BYTES").as_f64();
     let mut base = net;
