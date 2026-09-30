@@ -53,13 +53,13 @@
 <main>
     <h1>GeoDB <span>Globe</span></h1>
     <p class="lead">153,000 cities with search and a spatial index, on a 3D globe in your browser.
-        About 1.3 MB to start. Rust compiled to WebAssembly, drawn with WebGPU, or WebGL2 where WebGPU is missing.</p>
+        0.3 MB to start, 1.3 MB with all cities. Rust compiled to WebAssembly, drawn with WebGPU, or WebGL2 where WebGPU is missing.</p>
 
     <div class="cards">
         <a class="card" href="globe/">
             <h2>Open the globe</h2>
-            <p>Search, radius and nearest queries on the CPU and GPU. Optional data layers, and a cost table that shows what each one adds.</p>
-            <span class="size">~1.3 MB to start</span>
+            <p>The globe and its coastlines first, 0.3 MB. The 153,000 cities (+1 MB) load when you search, click the globe or press the button; more layers on top, each one a row in the cost table.</p>
+            <span class="size">0.3 MB to start</span>
         </a>
         <a class="card" href="globe/?detail=max">
             <h2>Everything, deepest detail</h2>
@@ -91,7 +91,7 @@
     <h3>URL parameters</h3>
     <ul>
         <li><code>?webgl2</code> forces the WebGL2 build, even where WebGPU works.</li>
-        <li><code>?layers=coords,meta,names</code> loads data layers at start. <code>?positions=exact</code> queries on exact coordinates instead of geoids.</li>
+        <li><code>?load=cities</code> loads the cities at start (else on demand); <code>?layers=coords,meta,names,fold,foldhan,foldhangul</code> loads data layers (with the cities) at start. <code>?positions=exact</code> queries on exact coordinates instead of geoids.</li>
         <li><code>?imagery=4k,8k,16k</code> and <code>?lines=10m</code> load the Earth detail layers. <code>?show=</code> and <code>?compare=</code> pick what is shown and what the split view compares it with.</li>
         <li><code>?tiles=osm|landsat|bluemarble|modis|modis-aqua|viirs</code> turns on detail tiles; <code>&amp;date=YYYY-MM-DD</code> picks the day for the daily ones.</li>
         <li><code>?at=lat,lon,distance</code> sets the view (distance 1 is the surface).</li>

@@ -14,6 +14,7 @@ use crate::places::{Nearby, Target};
 use crate::texture::Seed;
 use geodb_core::globe_db::{CompactGlobeDb, GLOBE_MAGIC};
 pub use geodb_core::globe_layers::Positions;
+use geodb_core::text::FoldScript;
 use std::cell::{Cell, Ref, RefCell};
 
 /// One loaded dataset, behind the same interface.
@@ -50,6 +51,15 @@ pub trait GlobeSource {
 
     // ---- optional layers (geodb-mini): load more data later
 
+    /// Whether the cities are loaded: `false` for a source that starts
+    /// empty and takes its base file later ([`load_base`](Self::load_base)).
+    fn has_base(&self) -> bool {
+        true
+    }
+    /// Loads the base file into a source that started without it.
+    fn load_base(&self, _bytes: &[u8]) -> Result<(), String> {
+        Err("this data has no separate base file".into())
+    }
     /// Layers this data can load: (file name, what it adds, loaded?).
     fn layers(&self) -> Vec<(&'static str, &'static str, bool)> {
         Vec::new()
@@ -157,7 +167,6 @@ pub struct MiniDb {
     globe: RefCell<CompactGlobeDb>,
     /// Smart-search blobs for the loaded layers; rebuilt when one attaches.
     index: RefCell<Option<geodb_core::globe_search::GlobeSearchIndex>>,
-    pub geoid_bits: u8,
     positions: Cell<Positions>,
 }
 
@@ -165,11 +174,28 @@ impl MiniDb {
     pub fn from_bytes(bytes: &[u8]) -> Result<MiniDb, String> {
         let globe = CompactGlobeDb::from_bytes(bytes).map_err(|e| e.to_string())?;
         Ok(MiniDb {
-            geoid_bits: globe.geoid_bits,
             globe: RefCell::new(globe),
             index: RefCell::new(None),
             positions: Cell::new(Positions::Geoid),
         })
+    }
+
+    /// No cities yet: the page starts with this and loads `cities.globe`
+    /// (see [`GlobeSource::load_base`]) after its first frame.
+    pub fn empty() -> MiniDb {
+        MiniDb {
+            globe: RefCell::new(CompactGlobeDb {
+                geoid_bits: 32,
+                ..CompactGlobeDb::default()
+            }),
+            index: RefCell::new(None),
+            positions: Cell::new(Positions::Geoid),
+        }
+    }
+
+    /// Precision of the geoids.
+    pub fn geoid_bits(&self) -> u8 {
+        self.globe.borrow().geoid_bits
     }
 
     /// The database, with whatever layers are attached.
@@ -188,6 +214,12 @@ impl GlobeSource for MiniDb {
     }
 
     fn capabilities(&self) -> Vec<(&'static str, String)> {
+        if !self.has_base() {
+            return vec![(
+                "cities",
+                "not loaded: this page fetched only the app and the coastlines; the cities load on demand (search, click the globe, or the button below)".to_string(),
+            )];
+        }
         let g = self.globe();
         let mut rows = vec![
             ("format", "compact geoid-only file (.globe)".to_string()),
@@ -195,8 +227,8 @@ impl GlobeSource for MiniDb {
                 "positions",
                 format!(
                     "{}-bit geoids (within {}), decoded on the fly{}",
-                    self.geoid_bits,
-                    fmt_error(geoid_error_m(self.geoid_bits)),
+                    self.geoid_bits(),
+                    fmt_error(geoid_error_m(self.geoid_bits())),
                     if g.exact.is_some() {
                         "; exact coordinates loaded"
                     } else {
@@ -245,7 +277,7 @@ impl GlobeSource for MiniDb {
     fn position_error_m(&self) -> f64 {
         match self.positions() {
             Positions::Exact => 0.0,
-            Positions::Geoid => geoid_error_m(self.geoid_bits),
+            Positions::Geoid => geoid_error_m(self.geoid_bits()),
         }
     }
 
@@ -273,7 +305,12 @@ impl GlobeSource for MiniDb {
                     .sum::<usize>()
                 + m.states.len() * 160
         });
-        let fold = g.fold.heap_bytes() + g.fold_more.as_ref().map_or(0, |f| f.heap_bytes());
+        let fold = g.fold.heap_bytes()
+            + g.fold_more
+                .iter()
+                .flatten()
+                .map(|f| f.heap_bytes())
+                .sum::<usize>();
         mini::heap_bytes(&g) + exact + meta + names + fold
     }
 
@@ -394,7 +431,7 @@ impl GlobeSource for MiniDb {
             format!(
                 "{} ± {}",
                 fmt_position(lat, lon),
-                fmt_error(geoid_error_m(self.geoid_bits))
+                fmt_error(geoid_error_m(self.geoid_bits()))
             ),
         ));
         if let Some(&(elat, elon)) = g.exact.as_ref().and_then(|e| e.get(i)) {
@@ -452,9 +489,9 @@ impl GlobeSource for MiniDb {
             "geoid",
             format!(
                 "{:#0w$x} ({} bits)",
-                geoid >> (64 - u32::from(self.geoid_bits)),
-                self.geoid_bits,
-                w = usize::from(self.geoid_bits / 4) + 2
+                geoid >> (64 - u32::from(self.geoid_bits())),
+                self.geoid_bits(),
+                w = usize::from(self.geoid_bits() / 4) + 2
             ),
         ));
         rows
@@ -483,7 +520,28 @@ impl GlobeSource for MiniDb {
         )
     }
 
+    fn has_base(&self) -> bool {
+        !self.globe.borrow().cities.is_empty()
+    }
+
+    fn load_base(&self, bytes: &[u8]) -> Result<(), String> {
+        let globe = CompactGlobeDb::from_bytes(bytes).map_err(|e| e.to_string())?;
+        // The index and the layers belonged to the empty database.
+        *self.index.borrow_mut() = None;
+        *self.globe.borrow_mut() = globe;
+        self.positions.set(Positions::Geoid);
+        Ok(())
+    }
+
     fn layers(&self) -> Vec<(&'static str, &'static str, bool)> {
+        if !self.has_base() {
+            // Everything else needs the cities.
+            return vec![(
+                "cities.globe",
+                "the cities (about 1 MB): names, regions, the spatial index, search, queries",
+                false,
+            )];
+        }
         let g = self.globe();
         vec![
             ("cities.coords", "exact coordinates", g.exact.is_some()),
@@ -499,8 +557,18 @@ impl GlobeSource for MiniDb {
             ),
             (
                 "cities.fold",
-                "search across scripts: transliteration of the meta and names texts",
-                g.fold_more.is_some(),
+                "search Cyrillic, Arabic, Greek, kana and more by their Latin spelling",
+                g.fold_more[FoldScript::Other as usize].is_some(),
+            ),
+            (
+                "cities.foldhan",
+                "search Chinese (and Japanese kanji) by pinyin",
+                g.fold_more[FoldScript::Han as usize].is_some(),
+            ),
+            (
+                "cities.foldhangul",
+                "search Korean by its Latin spelling",
+                g.fold_more[FoldScript::Hangul as usize].is_some(),
             ),
         ]
     }
@@ -523,6 +591,8 @@ impl GlobeSource for MiniDb {
             "cities.meta" => LayerKind::Meta,
             "cities.names" => LayerKind::Names,
             "cities.fold" => LayerKind::Fold,
+            "cities.foldhan" => LayerKind::FoldHan,
+            "cities.foldhangul" => LayerKind::FoldHangul,
             other => return Err(format!("no layer {other}")),
         };
         // Drop the index (it holds folded copies; the next search builds

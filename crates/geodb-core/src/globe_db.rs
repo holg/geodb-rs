@@ -159,9 +159,9 @@ pub struct CompactGlobeDb {
     #[serde(default)]
     pub fold: FoldTable,
     /// The same for the characters only the meta and names layers have
-    /// (the fold layer).
+    /// (the fold layers), one table per [`FoldScript`](crate::text::FoldScript).
     #[serde(default)]
-    pub fold_more: Option<FoldTable>,
+    pub fold_more: [Option<FoldTable>; 3],
 }
 
 /// A city with its state and country.
@@ -266,7 +266,7 @@ impl CompactGlobeDb {
                 meta: None,
                 names: None,
                 fold,
-                fold_more: None,
+                fold_more: Default::default(),
             },
             order,
         )
@@ -606,7 +606,7 @@ impl CompactGlobeDb {
             meta: None,
             names: None,
             fold,
-            fold_more: None,
+            fold_more: Default::default(),
         })
     }
 

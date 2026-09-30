@@ -136,6 +136,10 @@ struct App {
     surface: Surface,
     /// Detail tiles around the view (NASA GIBS).
     tiles: Tiles,
+    /// The packed start-up coastlines, kept to bake the earth again once the
+    /// cities (their lights) are loaded, and the bake width.
+    coast: Vec<u8>,
+    tex_w: u32,
     /// Built on first use: the geoids uploaded for compute queries.
     gpu_index: Option<Rc<GpuGeoidIndex>>,
     /// WebGPU has compute shaders; WebGL2 does not.
@@ -298,6 +302,8 @@ fn network() -> Vec<(String, f64, f64)> {
             || file.ends_with(".meta")
             || file.ends_with(".names")
             || file.ends_with(".fold")
+            || file.ends_with(".foldhan")
+            || file.ends_with(".foldhangul")
             || file.ends_with(".webp")
             || file == "coast10m.bin"
         {
@@ -415,6 +421,16 @@ impl App {
 
     /// Queries the view and returns the time it took (ms).
     fn run_query(&mut self, lat: f64, lon: f64, list: bool) -> f64 {
+        if !self.source.has_base() {
+            set_html(
+                &self.doc,
+                "where",
+                "<span class=\"muted\">The cities load on demand: search, click the globe, \
+                 or use the button under Data.</span>",
+            );
+            set_html(&self.doc, "list", "");
+            return 0.0;
+        }
         let radius = self.cam.view_radius_km();
         let t = now();
         let nearby = self.source.nearby(lat, lon, radius, LABELS, MAX_MARKERS);
@@ -819,6 +835,9 @@ impl App {
         if !self.compute {
             return None;
         }
+        if !self.source.has_base() {
+            return None;
+        }
         if self.gpu_index.is_none() {
             let geoids = self.source.geoids();
             self.gpu_index = Some(Rc::new(GpuGeoidIndex::new(
@@ -837,6 +856,9 @@ impl App {
         let mut q: Vec<String> = Vec::new();
         if DATASETS.len() > 1 {
             q.push(format!("data={}", self.data.key));
+        }
+        if self.source.has_base() && self.data.key == "mini" {
+            q.push("load=cities".into());
         }
         let layers: Vec<&str> = self
             .source
@@ -891,7 +913,10 @@ impl App {
 
     /// Files a single-file copy needs for what is loaded now.
     fn loaded_files(&self) -> Vec<String> {
-        let mut files = vec![self.data.file.to_string(), "coast.bin".to_string()];
+        let mut files = vec!["coast.bin".to_string()];
+        if self.source.has_base() {
+            files.push(self.data.file.to_string());
+        }
         files.extend(
             self.source
                 .layers()
@@ -1012,16 +1037,17 @@ impl App {
         self.dirty = true;
     }
 
-    fn pointer_up(&mut self, id: i32, x: f64, y: f64) {
+    /// Returns whether it was a click (not a drag).
+    fn pointer_up(&mut self, id: i32, x: f64, y: f64) -> bool {
         self.pointers.remove(&id);
         if self.pointers.len() < 2 {
             self.pinch_dist = None;
         }
         let Some(press) = self.press.take() else {
-            return;
+            return false;
         };
         if press.moved || now() - press.t > 500.0 {
-            return;
+            return false;
         }
         let (nx, ny) = self.ndc(x, y);
         if let Some((lat, lon)) = self.cam.pick(nx, ny) {
@@ -1035,6 +1061,7 @@ impl App {
                 dist,
             });
         }
+        true
     }
 
     /// The marker nearest to the pointer (CSS px), within reach.
@@ -2653,7 +2680,111 @@ fn render_layers(doc: &Document, src: &dyn GlobeSource) {
 }
 
 /// Fetches and attaches one layer, then refreshes what depends on it.
+/// Loads the cities (`cities.globe`) into a page that started without
+/// them: fetch, decode, bake the earth again with the city lights, and show
+/// what it cost as the first add-on row. Does nothing when they are there.
+async fn load_base_file(app: Rc<RefCell<App>>) {
+    let (src, doc, data) = {
+        let a = app.borrow();
+        (a.source, a.doc.clone(), a.data)
+    };
+    if src.has_base() {
+        return;
+    }
+    set_html(&doc, "layerstatus", "Loading the cities…");
+    let t = now();
+    let bytes = match fetch_bytes(data.file).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load the cities: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let t = now();
+    let heap_before = src.heap_bytes();
+    if let Err(e) = src.load_base(&bytes) {
+        set_html(
+            &doc,
+            "layerstatus",
+            &format!("Could not read the cities: {}", escape(&e)),
+        );
+        return;
+    }
+    let file_len = bytes.len();
+    drop(bytes);
+    measure_cached().await;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == "cities.globe")
+        .map_or(file_len as f64, |n| n.1);
+    let mut a = app.borrow_mut();
+    // The earth again, now with the lights of the cities.
+    let baked = mini::unpack_coast(&a.coast).map(|layers| {
+        let mut layers = layers.into_iter();
+        let (land, lakes) = (
+            layers.next().unwrap_or_default(),
+            layers.next().unwrap_or_default(),
+        );
+        let width = a.tex_w.min(a.renderer.max_texture_dimension());
+        texture::bake(&src.texture_seeds(), &land, &lakes, width)
+    });
+    if let Ok(tex) = baked {
+        let view = a.renderer.earth_view(&tex);
+        if let Some(base) = a.surface.list.iter_mut().find(|t| t.id == "base") {
+            base.view = view;
+            base.px = tex.width;
+            base.bytes = texture_bytes(tex.width);
+            base.label = format!("baked, 1:50m coasts, {} px", tex.width);
+        }
+    }
+    let decode_ms = now() - t;
+    a.gpu_index = None;
+    a.cost.file_len = file_len;
+    a.cost.base_heap = src.heap_bytes();
+    a.cost.layers.insert(
+        0,
+        LayerCost {
+            key: "cities.globe".into(),
+            file: "cities.globe (the cities: names, spatial index, search)".into(),
+            wire,
+            unpacked: file_len as f64,
+            fetch_ms,
+            action: "decode + bake",
+            attach_ms: decode_ms,
+            heap_added: src.heap_bytes().saturating_sub(heap_before) as f64,
+            gpu_added: 0.0,
+        },
+    );
+    let (cities, states, countries) = src.stats();
+    set_html(
+        &a.doc,
+        "stats",
+        &format!("{countries} countries · {states} regions · {cities} cities"),
+    );
+    let data = a.data;
+    render_data_panel(&a.doc, data, src, a.compute);
+    surface_changed(&mut a);
+    a.hide_popover();
+    a.pending_query = Some(0.0);
+    a.dirty = true;
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!("Loaded {cities} cities in {:.0} ms.", fetch_ms + decode_ms),
+    );
+}
+
 async fn load_layer(app: Rc<RefCell<App>>, file: String) {
+    // Every other layer is built for the cities file.
+    load_base_file(app.clone()).await;
+    if file == "cities.globe" {
+        return;
+    }
     load_layer_file(app.clone(), file.clone()).await;
     // The meta and names layers bring texts in other scripts: their
     // transliteration (the fold layer) comes along, as its own row.
@@ -3459,16 +3590,32 @@ async fn run() -> Result<(), String> {
 
     let t = now();
     let data = Dataset::chosen();
-    status(&format!("Fetching {} and the coastlines…", data.label));
-    let (globe_bytes, coast_bytes) =
-        futures_join(fetch_bytes(data.file), fetch_bytes("coast.bin")).await;
+    // geodb-mini starts without its cities: the app and the coastlines are
+    // all the first frame needs (~0.3 MB); `cities.globe` is the first
+    // add-on, loaded on demand (see `load_base_file`; `?load=cities` loads it
+    // at start).
+    let staged = data.key == "mini";
+    status(&if staged {
+        "Fetching the coastlines…".to_string()
+    } else {
+        format!("Fetching {} and the coastlines…", data.label)
+    });
+    let (globe_bytes, coast_bytes) = if staged {
+        (Ok(Vec::new()), fetch_bytes("coast.bin").await)
+    } else {
+        futures_join(fetch_bytes(data.file), fetch_bytes("coast.bin")).await
+    };
     let (globe_bytes, coast_bytes) = (globe_bytes?, coast_bytes?);
     let fetch_ms = now() - t;
 
     status("Decoding…");
     let t = now();
     // Whatever was loaded decides what the app can do.
-    let globe: &'static dyn GlobeSource = Box::leak(source::load(&globe_bytes)?);
+    let globe: &'static dyn GlobeSource = if staged {
+        Box::leak(Box::new(source::MiniDb::empty()))
+    } else {
+        Box::leak(source::load(&globe_bytes)?)
+    };
     let decode_ms = now() - t;
     let t = now();
     let mut coast = mini::unpack_coast(&coast_bytes)?.into_iter();
@@ -3478,12 +3625,17 @@ async fn run() -> Result<(), String> {
     );
     let coast_ms = now() - t;
     let (globe_len, coast_len) = (globe_bytes.len(), coast_bytes.len());
-    drop((globe_bytes, coast_bytes));
+    drop(globe_bytes);
+    let coast_kept = coast_bytes;
     let (cities, states, countries) = globe.stats();
     set_html(
         &doc,
         "stats",
-        &format!("{countries} countries · {states} regions · {cities} cities"),
+        &if globe.has_base() {
+            format!("{countries} countries · {states} regions · {cities} cities")
+        } else {
+            "cities: load on demand".to_string()
+        },
     );
 
     let canvas: HtmlCanvasElement = el(&doc, "globe");
@@ -3525,11 +3677,23 @@ async fn run() -> Result<(), String> {
     let presenter = Presenter::new(surface, &adapter, &device, size.0, size.1);
     // 2048 px keeps memory low; ?tex=4096 for a sharper earth.
     let tex_w: u32 = param("tex").and_then(|v| v.parse().ok()).unwrap_or(2048);
+    // The first frame has no city lights yet and is baked again when they
+    // arrive: a quarter of the pixels gets it there sooner.
+    let first_w = if staged && param("tex").is_none() {
+        tex_w.min(1024)
+    } else {
+        tex_w
+    };
     let mut bake_ms = 0.0;
     let mut tex_px = 0;
     let renderer = Renderer::new(&device, &queue, presenter.view_format, size, |max_width| {
         let t = now();
-        let tex = texture::bake(&globe.texture_seeds(), &land, &lakes, tex_w.min(max_width));
+        let tex = texture::bake(
+            &globe.texture_seeds(),
+            &land,
+            &lakes,
+            first_w.min(max_width),
+        );
         bake_ms = now() - t;
         tex_px = tex.width;
         tex
@@ -3629,6 +3793,8 @@ async fn run() -> Result<(), String> {
             lines: None,
             lines_on: true,
         },
+        coast: coast_kept,
+        tex_w,
         gpu_index: None,
         compute,
         pointers: HashMap::new(),
@@ -3708,8 +3874,15 @@ async fn run() -> Result<(), String> {
     for ev in ["pointerup", "pointercancel"] {
         let app = app.clone();
         listen(target, ev, true, move |e: web_sys::PointerEvent| {
-            app.borrow_mut()
-                .pointer_up(e.pointer_id(), e.offset_x() as f64, e.offset_y() as f64);
+            let clicked = app.borrow_mut().pointer_up(
+                e.pointer_id(),
+                e.offset_x() as f64,
+                e.offset_y() as f64,
+            );
+            // Looking around a spot needs the cities: load them on demand.
+            if clicked && !app.borrow().source.has_base() {
+                wasm_bindgen_futures::spawn_local(load_base_file(app.clone()));
+            }
         });
     }
     {
@@ -3789,6 +3962,11 @@ async fn run() -> Result<(), String> {
             if running2.get() {
                 return;
             }
+            if !app.borrow().source.has_base() {
+                // The queries run on the cities: load them, then Run again.
+                wasm_bindgen_futures::spawn_local(load_base_file(app.clone()));
+                return;
+            }
             let (cfg, src, gpu, doc) = {
                 let mut a = app.borrow_mut();
                 let cfg = BenchConfig::read(&a.doc);
@@ -3833,6 +4011,15 @@ async fn run() -> Result<(), String> {
 
     let input: HtmlInputElement = el(&doc, "search");
     let suggestions: Rc<RefCell<Vec<Target>>> = Rc::default();
+    {
+        // Searching needs the cities: load them on demand.
+        let app = app.clone();
+        listen(input.as_ref(), "focus", true, move |_: web_sys::Event| {
+            if !app.borrow().source.has_base() {
+                wasm_bindgen_futures::spawn_local(load_base_file(app.clone()));
+            }
+        });
+    }
     {
         let (app, sugg, inp) = (app.clone(), suggestions.clone(), input.clone());
         listen(input.as_ref(), "input", true, move |_: web_sys::Event| {
@@ -4050,13 +4237,17 @@ async fn run() -> Result<(), String> {
                 "meta".into(),
                 "names".into(),
                 "fold".into(),
+                "foldhan".into(),
+                "foldhangul".into(),
             ]
         } else {
             list("layers")
         }
         .into_iter()
         .filter_map(|l| match l.as_str() {
-            "coords" | "meta" | "names" | "fold" => Some(format!("cities.{l}")),
+            "coords" | "meta" | "names" | "fold" | "foldhan" | "foldhangul" => {
+                Some(format!("cities.{l}"))
+            }
             _ => None,
         })
         .collect();
@@ -4085,9 +4276,16 @@ async fn run() -> Result<(), String> {
             || show.is_some()
             || compare.is_some()
             || lines;
-        if any {
+        // The cities load on demand (the button, the search box, a click on
+        // the globe, running the queries): at start only when asked for
+        // with ?load=cities or by a parameter that needs them.
+        let cities = param("load").as_deref() == Some("cities") || !layers.is_empty();
+        if any || cities {
             let a = app.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                if cities {
+                    load_base_file(a.clone()).await;
+                }
                 for f in layers {
                     load_layer(a.clone(), f).await;
                 }

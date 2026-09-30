@@ -136,8 +136,9 @@ impl GlobeSearchIndex {
     pub fn build(globe: &CompactGlobeDb) -> GlobeSearchIndex {
         let meta = globe.meta.as_ref();
         let names = globe.names.as_ref();
-        let folder =
-            Folder::new(std::iter::once(globe.fold.clone()).chain(globe.fold_more.clone()));
+        let folder = Folder::new(
+            std::iter::once(globe.fold.clone()).chain(globe.fold_more.iter().flatten().cloned()),
+        );
         // A name's folded form, and where a transliteration pads syllables
         // with spaces also the form typed without them ("Dong Jing" and
         // "dongjing" for 東京).
@@ -369,12 +370,21 @@ mod tests {
         // the transliteration does too ("Ri Ben" for 日本, as `deunicode`).
         g.attach_layer(&f.meta).unwrap();
         let plain = GlobeSearchIndex::build(&g);
+        // Chinese characters have their own layer: without it "ri ben"
+        // finds nothing, with it 日本 does.
         g.attach_layer(&f.fold).unwrap();
-        assert!(g.fold_more.as_ref().is_some_and(|t| !t.is_empty()));
+        let other_only = GlobeSearchIndex::build(&g);
+        g.attach_layer(&f.fold_han).unwrap();
+        assert!(g.fold_more[crate::text::FoldScript::Han as usize]
+            .as_ref()
+            .is_some_and(|t| !t.is_empty()));
+        g.attach_layer(&f.fold_hangul).unwrap();
         let with = GlobeSearchIndex::build(&g);
         assert!(with.heap_bytes() > plain.heap_bytes());
         // Every text of the meta layer folds like the full transliteration.
-        let folder = crate::text::Folder::new([g.fold.clone(), g.fold_more.clone().unwrap()]);
+        let folder = crate::text::Folder::new(
+            std::iter::once(g.fold.clone()).chain(g.fold_more.iter().flatten().cloned()),
+        );
         for t in g.layer_texts() {
             assert_eq!(folder.fold(t), crate::text::fold_key(t), "{t}");
         }
@@ -388,8 +398,9 @@ mod tests {
         assert!(japan(&with.smart_search(&g, "riben")));
         assert!(!japan(&plain.smart_search(&g, "ri ben")));
         assert!(japan(&plain.smart_search(&g, "日本")));
-        g.detach_layer(crate::globe_layers::LayerKind::Fold);
-        assert!(g.fold_more.is_none());
+        assert!(!japan(&other_only.smart_search(&g, "ri ben")));
+        g.detach_layer(crate::globe_layers::LayerKind::FoldHan);
+        assert!(g.fold_more[crate::text::FoldScript::Han as usize].is_none());
 
         // The meta layer adds phone codes and ISO3.
         g.attach_layer(&f.meta).unwrap();

@@ -63,7 +63,7 @@ def main() -> None:
     glue = next(p for p in dist.glob("*.js"))
     # Data and the optional layers (loaded on demand, but inline too); the
     # names layer (~11 MB) only when asked for.
-    kinds = (".globe", ".bin", ".coords", ".meta", ".fold") + ((".names",) if args.with_names else ())
+    kinds = (".globe", ".bin", ".coords", ".meta", ".fold", ".foldhan", ".foldhangul") + ((".names",) if args.with_names else ())
     data = sorted(p for p in dist.iterdir() if p.suffix in kinds)
 
     # Drop trunk's loader, preloads and copied-file links.

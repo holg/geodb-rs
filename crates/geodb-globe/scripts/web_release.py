@@ -62,6 +62,8 @@ TYPES = {
     ".meta": "application/octet-stream",
     ".names": "application/octet-stream",
     ".fold": "application/octet-stream",
+    ".foldhan": "application/octet-stream",
+    ".foldhangul": "application/octet-stream",
     ".webp": "image/webp",
 }
 # Already compressed: served as they are.

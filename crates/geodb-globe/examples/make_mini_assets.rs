@@ -6,7 +6,8 @@
 //! - `cities.meta`: optional layer: population, type, timezones, codes,
 //!   country details
 //! - `cities.names`: optional layer: native names, 19 languages, Wikidata
-//! - `cities.fold`: optional layer: transliteration for searching the meta and names texts across scripts
+//! - `cities.fold`, `cities.foldhan`, `cities.foldhangul`: optional layers: transliteration for
+//!   searching the meta and names texts across scripts (other scripts, Chinese, Korean)
 //!   (population, type and names need the upstream per-city export at
 //!   `geodb-core/data/json-cities.json.gz`:
 //!   `geodb-cli build-globe --layers --download-extras` fetches it)
@@ -116,6 +117,8 @@ fn main() {
             ("cities.coords", &files.coords),
             ("cities.meta", &files.meta),
             ("cities.fold", &files.fold),
+            ("cities.foldhan", &files.fold_han),
+            ("cities.foldhangul", &files.fold_hangul),
             ("coast.bin", &coast),
         ]
         .into_iter()

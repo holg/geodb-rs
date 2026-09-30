@@ -260,6 +260,49 @@ impl FoldTable {
     }
 }
 
+/// The script groups the fold layers are split into: what a searcher
+/// needs for one script, without paying for the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoldScript {
+    /// Everything else: Cyrillic, Arabic, Greek, kana, Devanagari, ...
+    Other = 0,
+    /// Chinese characters (also Japanese kanji): about 3,600 in the data.
+    Han = 1,
+    /// Korean syllables: about 1,250.
+    Hangul = 2,
+}
+
+impl FoldScript {
+    pub const ALL: [FoldScript; 3] = [FoldScript::Other, FoldScript::Han, FoldScript::Hangul];
+
+    /// The group of `c`.
+    pub fn of(c: char) -> FoldScript {
+        match c as u32 {
+            0x2E80..=0x2FDF
+            | 0x3005..=0x3007
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2FA1F => FoldScript::Han,
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF => {
+                FoldScript::Hangul
+            }
+            _ => FoldScript::Other,
+        }
+    }
+}
+
+impl FoldTable {
+    /// The table split by [`FoldScript`] (indexed by `script as usize`).
+    pub fn partition(self) -> [FoldTable; 3] {
+        let mut out: [FoldTable; 3] = Default::default();
+        for (c, s) in self.entries {
+            out[FoldScript::of(c) as usize].entries.push((c, s));
+        }
+        out
+    }
+}
+
 /// [`fold_key`] from tables: what the compact globe search folds with.
 #[derive(Clone, Debug, Default)]
 pub struct Folder {

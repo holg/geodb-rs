@@ -66,8 +66,13 @@ pub enum LayerKind {
     Coords = 1,
     Meta = 2,
     Names = 3,
-    /// Transliteration of the characters of the meta and names layers.
+    /// Transliteration of the characters of the meta and names layers:
+    /// scripts other than Chinese and Korean.
     Fold = 4,
+    /// The same for Chinese characters (and Japanese kanji).
+    FoldHan = 5,
+    /// The same for Korean syllables.
+    FoldHangul = 6,
 }
 
 impl LayerKind {
@@ -77,6 +82,19 @@ impl LayerKind {
             LayerKind::Meta => "meta",
             LayerKind::Names => "names",
             LayerKind::Fold => "fold",
+            LayerKind::FoldHan => "fold (Chinese)",
+            LayerKind::FoldHangul => "fold (Korean)",
+        }
+    }
+
+    /// The script group of a fold layer.
+    pub fn fold_script(self) -> Option<crate::text::FoldScript> {
+        use crate::text::FoldScript;
+        match self {
+            LayerKind::Fold => Some(FoldScript::Other),
+            LayerKind::FoldHan => Some(FoldScript::Han),
+            LayerKind::FoldHangul => Some(FoldScript::Hangul),
+            _ => None,
         }
     }
 }
@@ -424,8 +442,11 @@ pub struct GlobeFiles {
     /// Only with [`CityExtras`].
     pub names: Option<Vec<u8>>,
     /// The transliteration of the meta and names layers' characters, for
-    /// the search (the base file carries its own).
+    /// the search (the base file carries its own): scripts other than
+    /// Chinese and Korean, Chinese characters, Korean syllables.
     pub fold: Vec<u8>,
+    pub fold_han: Vec<u8>,
+    pub fold_hangul: Vec<u8>,
     /// Cities matched in the extras (0 without them).
     pub matched: usize,
 }
@@ -751,10 +772,16 @@ pub fn build_globe_files<B: crate::traits::GeoBackend>(
     if let Some(names) = &names {
         back.attach_layer(names)?;
     }
-    let more = crate::text::FoldTable::from_texts(back.layer_texts(), Some(&back.fold));
-    let mut w = Writer::default();
-    more.write(&mut w)?;
-    let fold = pack(LayerKind::Fold, geoid_bits, print, n, &w.buf, compress)?;
+    let [other, han, hangul] =
+        crate::text::FoldTable::from_texts(back.layer_texts(), Some(&back.fold)).partition();
+    let fold_layer = |kind: LayerKind, table: &crate::text::FoldTable| -> Result<Vec<u8>> {
+        let mut w = Writer::default();
+        table.write(&mut w)?;
+        pack(kind, geoid_bits, print, n, &w.buf, compress)
+    };
+    let fold = fold_layer(LayerKind::Fold, &other)?;
+    let fold_han = fold_layer(LayerKind::FoldHan, &han)?;
+    let fold_hangul = fold_layer(LayerKind::FoldHangul, &hangul)?;
 
     Ok(GlobeFiles {
         base,
@@ -762,6 +789,8 @@ pub fn build_globe_files<B: crate::traits::GeoBackend>(
         meta,
         names,
         fold,
+        fold_han,
+        fold_hangul,
         matched,
     })
 }
@@ -809,6 +838,8 @@ impl CompactGlobeDb {
             2 => LayerKind::Meta,
             3 => LayerKind::Names,
             4 => LayerKind::Fold,
+            5 => LayerKind::FoldHan,
+            6 => LayerKind::FoldHangul,
             k => return Err(bad(&format!("unknown kind {k}"))),
         };
         let bits = bytes[7];
@@ -1008,8 +1039,9 @@ impl CompactGlobeDb {
                     wikidata,
                 });
             }
-            LayerKind::Fold => {
-                self.fold_more = Some(crate::text::FoldTable::read(&mut r)?);
+            LayerKind::Fold | LayerKind::FoldHan | LayerKind::FoldHangul => {
+                let script = kind.fold_script().unwrap_or(crate::text::FoldScript::Other);
+                self.fold_more[script as usize] = Some(crate::text::FoldTable::read(&mut r)?);
             }
         }
         if r.pos != r.buf.len() {
@@ -1024,7 +1056,11 @@ impl CompactGlobeDb {
             LayerKind::Coords => self.exact = None,
             LayerKind::Meta => self.meta = None,
             LayerKind::Names => self.names = None,
-            LayerKind::Fold => self.fold_more = None,
+            LayerKind::Fold | LayerKind::FoldHan | LayerKind::FoldHangul => {
+                if let Some(script) = kind.fold_script() {
+                    self.fold_more[script as usize] = None;
+                }
+            }
         }
     }
 
@@ -1246,15 +1282,22 @@ mod tests {
         // The fold layer folds every text of both layers like the full
         // transliteration does, and stays small.
         assert_eq!(globe.attach_layer(&f.fold).unwrap(), LayerKind::Fold);
-        let folder =
-            crate::text::Folder::new([globe.fold.clone(), globe.fold_more.clone().unwrap()]);
+        assert_eq!(globe.attach_layer(&f.fold_han).unwrap(), LayerKind::FoldHan);
+        assert_eq!(
+            globe.attach_layer(&f.fold_hangul).unwrap(),
+            LayerKind::FoldHangul
+        );
+        let folder = crate::text::Folder::new(
+            std::iter::once(globe.fold.clone()).chain(globe.fold_more.iter().flatten().cloned()),
+        );
         let mut checked = 0usize;
         for t in globe.layer_texts() {
             assert_eq!(folder.fold(t), crate::text::fold_key(t), "{t}");
             checked += 1;
         }
         assert!(checked > 1_000_000, "{checked} texts");
-        assert!(f.fold.len() < 20_000, "{} bytes", f.fold.len());
+        assert!(f.fold.len() < 4_000, "{} bytes", f.fold.len());
+        assert!(f.fold_han.len() > f.fold_hangul.len() && f.fold_han.len() < 20_000);
         assert_eq!(
             folder.fold("ミュンヘン"),
             crate::text::fold_key("ミュンヘン")

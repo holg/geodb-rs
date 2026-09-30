@@ -440,6 +440,8 @@ fn build_globe(
             ("coords", &files.coords),
             ("meta", &files.meta),
             ("fold", &files.fold),
+            ("foldhan", &files.fold_han),
+            ("foldhangul", &files.fold_hangul),
         ];
         if let Some(names) = &files.names {
             list.push(("names", names));
