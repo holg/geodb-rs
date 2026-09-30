@@ -92,8 +92,8 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 # List of URLs for allowed Git repositories
-# scopekit (private for now): geodb-globe's terminal/window UI.
-allow-git = ["ssh://git@github.com/holg/scopekit.git"]
+# None: scopekit (geodb-globe's terminal/window UI) comes from crates.io.
+allow-git = []
 
 [sources.allow-org]
 # GitHub organizations to allow
