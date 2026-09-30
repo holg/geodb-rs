@@ -21,6 +21,12 @@ embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b
   "executor-thread",
   "defmt",
 ] }
+embassy-net = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
+  "defmt",
+  "udp",
+  "dhcpv4",
+  "medium-ethernet",
+] }
 # embassy from git: `dsihost` (the MIPI-DSI host of the DISCO's panel) is not on crates.io yet.
 # One pinned revision for every embassy crate (the one the plantworks gateway uses).
 embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
@@ -31,12 +37,6 @@ embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579
   "time-driver-any",
   "exti",
   "single-bank",
-] }
-embassy-net = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
-  "defmt",
-  "udp",
-  "dhcpv4",
-  "medium-ethernet",
 ] }
 embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
   "defmt",
