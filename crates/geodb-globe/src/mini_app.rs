@@ -136,9 +136,10 @@ struct App {
     surface: Surface,
     /// Detail tiles around the view (NASA GIBS).
     tiles: Tiles,
-    /// The packed start-up coastlines, kept to bake the earth again once the
-    /// cities (their lights) are loaded, and the bake width.
-    coast: Vec<u8>,
+    /// The start-up picture of the earth (RGBA, width, height), kept to build
+    /// the earth again once the cities (their lights) are loaded, and the
+    /// width of that texture.
+    tiny: Option<(Vec<u8>, u32, u32)>,
     tex_w: u32,
     /// Built on first use: the geoids uploaded for compute queries.
     gpu_index: Option<Rc<GpuGeoidIndex>>,
@@ -913,7 +914,11 @@ impl App {
 
     /// Files a single-file copy needs for what is loaded now.
     fn loaded_files(&self) -> Vec<String> {
-        let mut files = vec!["coast.bin".to_string()];
+        let mut files = vec![if self.tiny.is_some() {
+            "earth-tiny.webp".to_string()
+        } else {
+            "coast.bin".to_string()
+        }];
         if self.source.has_base() {
             files.push(self.data.file.to_string());
         }
@@ -2366,6 +2371,36 @@ async fn work_done(queue: &wgpu::Queue) {
     .await;
 }
 
+/// Decodes an image with the browser and returns its pixels (RGBA, width,
+/// height): the wasm carries no image decoder.
+async fn decode_rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+    let bmp = bitmap(bytes).await?;
+    let (w, h) = (bmp.width(), bmp.height());
+    let doc = web_sys::window()
+        .and_then(|w| w.document())
+        .ok_or("no document")?;
+    let canvas: HtmlCanvasElement = doc
+        .create_element("canvas")
+        .map_err(|e| format!("{e:?}"))?
+        .dyn_into()
+        .map_err(|_| "not a canvas")?;
+    canvas.set_width(w);
+    canvas.set_height(h);
+    let ctx: web_sys::CanvasRenderingContext2d = canvas
+        .get_context("2d")
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or("no 2d context")?
+        .dyn_into()
+        .map_err(|_| "not a 2d context")?;
+    ctx.draw_image_with_image_bitmap(&bmp, 0.0, 0.0)
+        .map_err(|e| format!("{e:?}"))?;
+    bmp.close();
+    let data = ctx
+        .get_image_data(0.0, 0.0, f64::from(w), f64::from(h))
+        .map_err(|e| format!("{e:?}"))?;
+    Ok((data.data().0, w, h))
+}
+
 /// Decodes an image (JPEG, WebP) with the browser.
 async fn bitmap(bytes: &[u8]) -> Result<web_sys::ImageBitmap, String> {
     let window = web_sys::window().ok_or("no window")?;
@@ -2723,23 +2758,19 @@ async fn load_base_file(app: Rc<RefCell<App>>) {
         .find(|(label, _, _)| label == "cities.globe")
         .map_or(file_len as f64, |n| n.1);
     let mut a = app.borrow_mut();
-    // The earth again, now with the lights of the cities.
-    let baked = mini::unpack_coast(&a.coast).map(|layers| {
-        let mut layers = layers.into_iter();
-        let (land, lakes) = (
-            layers.next().unwrap_or_default(),
-            layers.next().unwrap_or_default(),
-        );
+    // The earth again from its picture, larger and with the lights of the
+    // cities.
+    let built = a.tiny.as_ref().map(|(rgba, w, h)| {
         let width = a.tex_w.min(a.renderer.max_texture_dimension());
-        texture::bake(&src.texture_seeds(), &land, &lakes, width)
+        texture::from_image(rgba, *w as usize, *h as usize, &src.texture_seeds(), width)
     });
-    if let Ok(tex) = baked {
+    if let Some(tex) = built {
         let view = a.renderer.earth_view(&tex);
         if let Some(base) = a.surface.list.iter_mut().find(|t| t.id == "base") {
             base.view = view;
             base.px = tex.width;
             base.bytes = texture_bytes(tex.width);
-            base.label = format!("baked, 1:50m coasts, {} px", tex.width);
+            base.label = format!("Blue Marble, {} px, with city lights", tex.width);
         }
     }
     let decode_ms = now() - t;
@@ -2754,7 +2785,7 @@ async fn load_base_file(app: Rc<RefCell<App>>) {
             wire,
             unpacked: file_len as f64,
             fetch_ms,
-            action: "decode + bake",
+            action: "decode + lights",
             attach_ms: decode_ms,
             heap_added: src.heap_bytes().saturating_sub(heap_before) as f64,
             gpu_added: 0.0,
@@ -3596,12 +3627,12 @@ async fn run() -> Result<(), String> {
     // at start).
     let staged = data.key == "mini";
     status(&if staged {
-        "Fetching the coastlines…".to_string()
+        "Fetching the earth…".to_string()
     } else {
         format!("Fetching {} and the coastlines…", data.label)
     });
     let (globe_bytes, coast_bytes) = if staged {
-        (Ok(Vec::new()), fetch_bytes("coast.bin").await)
+        (Ok(Vec::new()), fetch_bytes("earth-tiny.webp").await)
     } else {
         futures_join(fetch_bytes(data.file), fetch_bytes("coast.bin")).await
     };
@@ -3618,15 +3649,26 @@ async fn run() -> Result<(), String> {
     };
     let decode_ms = now() - t;
     let t = now();
-    let mut coast = mini::unpack_coast(&coast_bytes)?.into_iter();
-    let (land, lakes) = (
-        coast.next().unwrap_or_default(),
-        coast.next().unwrap_or_default(),
-    );
+    // A staged page starts from a tiny picture of the earth (11 KB); the
+    // others rasterize the packed coastlines.
+    let tiny = if staged {
+        Some(decode_rgba(&coast_bytes).await?)
+    } else {
+        None
+    };
+    let (land, lakes) = if staged {
+        (Vec::new(), Vec::new())
+    } else {
+        let mut coast = mini::unpack_coast(&coast_bytes)?.into_iter();
+        (
+            coast.next().unwrap_or_default(),
+            coast.next().unwrap_or_default(),
+        )
+    };
     let coast_ms = now() - t;
     let (globe_len, coast_len) = (globe_bytes.len(), coast_bytes.len());
     drop(globe_bytes);
-    let coast_kept = coast_bytes;
+    drop(coast_bytes);
     let (cities, states, countries) = globe.stats();
     set_html(
         &doc,
@@ -3677,23 +3719,23 @@ async fn run() -> Result<(), String> {
     let presenter = Presenter::new(surface, &adapter, &device, size.0, size.1);
     // 2048 px keeps memory low; ?tex=4096 for a sharper earth.
     let tex_w: u32 = param("tex").and_then(|v| v.parse().ok()).unwrap_or(2048);
-    // The first frame has no city lights yet and is baked again when they
-    // arrive: a quarter of the pixels gets it there sooner.
-    let first_w = if staged && param("tex").is_none() {
-        tex_w.min(1024)
-    } else {
-        tex_w
-    };
     let mut bake_ms = 0.0;
     let mut tex_px = 0;
     let renderer = Renderer::new(&device, &queue, presenter.view_format, size, |max_width| {
         let t = now();
-        let tex = texture::bake(
-            &globe.texture_seeds(),
-            &land,
-            &lakes,
-            first_w.min(max_width),
-        );
+        // The first frame is the picture as it is (no city lights yet); the
+        // texture is built again, larger and with the lights, when the
+        // cities are loaded.
+        let tex = match &tiny {
+            Some((rgba, w, h)) => texture::from_image(
+                rgba,
+                *w as usize,
+                *h as usize,
+                &globe.texture_seeds(),
+                (*w).min(max_width),
+            ),
+            None => texture::bake(&globe.texture_seeds(), &land, &lakes, tex_w.min(max_width)),
+        };
         bake_ms = now() - t;
         tex_px = tex.width;
         tex
@@ -3781,7 +3823,11 @@ async fn run() -> Result<(), String> {
         surface: Surface {
             list: vec![SurfaceTex {
                 id: "base".into(),
-                label: format!("baked, 1:50m coasts, {tex_px} px"),
+                label: if staged {
+                    format!("Blue Marble, {tex_px} px")
+                } else {
+                    format!("baked, 1:50m coasts, {tex_px} px")
+                },
                 bake: true,
                 view: renderer_base_view,
                 chroma: None,
@@ -3793,7 +3839,7 @@ async fn run() -> Result<(), String> {
             lines: None,
             lines_on: true,
         },
-        coast: coast_kept,
+        tiny,
         tex_w,
         gpu_index: None,
         compute,

@@ -217,7 +217,7 @@ impl GlobeSource for MiniDb {
         if !self.has_base() {
             return vec![(
                 "cities",
-                "not loaded: this page fetched only the app and the coastlines; the cities load on demand (search, click the globe, or the button below)".to_string(),
+                "not loaded: this page fetched only the app and a small picture of the earth; the cities load on demand (search, click the globe, or the button below)".to_string(),
             )];
         }
         let g = self.globe();

@@ -32,6 +32,59 @@ pub struct EarthTexture {
 const MASK_W: usize = 1024;
 const MASK_H: usize = 512;
 
+/// The earth from a picture (`rgba`, `w` x `h`, equirectangular, opaque):
+/// its colours, resampled to `width` px wide, and the lights of `cities`
+/// (the alpha channel) on what the picture shows as land. This is the
+/// start-up earth: the page ships a tiny Blue Marble picture instead of
+/// coastlines to rasterize, and needs no cities for it.
+pub fn from_image(rgba: &[u8], w: usize, h: usize, cities: &[Seed], width: u32) -> EarthTexture {
+    let width = (width as usize).max(2);
+    let height = width / 2;
+    let mut img = vec![0u8; width * height * 4];
+    // Bilinear, wrapped in longitude, clamped in latitude.
+    let texel = |x: isize, y: isize| -> &[u8] {
+        let (x, y) = (
+            x.rem_euclid(w as isize) as usize,
+            y.clamp(0, h as isize - 1) as usize,
+        );
+        &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4]
+    };
+    let lights = city_lights(cities, width, height);
+    for y in 0..height {
+        let fy = (y as f32 + 0.5) / height as f32 * h as f32 - 0.5;
+        let y0 = fy.floor();
+        let ty = fy - y0;
+        for x in 0..width {
+            let fx = (x as f32 + 0.5) / width as f32 * w as f32 - 0.5;
+            let x0 = fx.floor();
+            let tx = fx - x0;
+            let (a, b, c, d) = (
+                texel(x0 as isize, y0 as isize),
+                texel(x0 as isize + 1, y0 as isize),
+                texel(x0 as isize, y0 as isize + 1),
+                texel(x0 as isize + 1, y0 as isize + 1),
+            );
+            let i = y * width + x;
+            let mut rgb = [0f32; 3];
+            for k in 0..3 {
+                let top = f32::from(a[k]) * (1.0 - tx) + f32::from(b[k]) * tx;
+                let bottom = f32::from(c[k]) * (1.0 - tx) + f32::from(d[k]) * tx;
+                rgb[k] = top * (1.0 - ty) + bottom * ty;
+                img[i * 4 + k] = (rgb[k] + 0.5) as u8;
+            }
+            // Land: not the blue of the sea (ice and desert have b <= r).
+            let land = 1.0 - smoothstep(6.0, 30.0, rgb[2] - rgb[0]);
+            let light = lights[i] * (0.25 + 0.75 * land);
+            img[i * 4 + 3] = (light.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        }
+    }
+    EarthTexture {
+        width: width as u32,
+        height: height as u32,
+        mips: build_mips(img, width, height),
+    }
+}
+
 pub fn bake(cities: &[Seed], land: &[Ring], lakes: &[Ring], width: u32) -> EarthTexture {
     let width = width.max(256) as usize;
     let height = width / 2;
@@ -309,6 +362,54 @@ fn build_mips(level0: Vec<u8>, width: usize, height: usize) -> Vec<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_picture_becomes_the_earth_with_lights_on_land() {
+        // 8 x 4: sea (blue) with one land column (green) at x = 4.
+        let (w, h) = (8usize, 4usize);
+        let mut rgba = Vec::new();
+        for _ in 0..h {
+            for x in 0..w {
+                rgba.extend(if x == 4 {
+                    [60, 120, 50, 255]
+                } else {
+                    [20, 60, 140, 255]
+                });
+            }
+        }
+        // A city on the land column (lon 0..45 is x = 4) and one in the sea.
+        let on_land = Seed {
+            lat: 0.0,
+            lon: 20.0,
+            weight: 1.0,
+        };
+        let at_sea = Seed {
+            lat: 0.0,
+            lon: -100.0,
+            weight: 1.0,
+        };
+        let dark = from_image(&rgba, w, h, &[], 128);
+        assert_eq!((dark.width, dark.height, dark.mips.len()), (128, 64, 8));
+        assert!(
+            dark.mips[0].chunks(4).all(|p| p[3] == 0),
+            "no cities, no lights"
+        );
+        // The colours survive resampling (sea stays blue, land green).
+        let sea = &dark.mips[0][(32 * 128 + 10) * 4..][..3];
+        assert!(sea[2] > sea[0] + 60, "{sea:?}");
+        let land = &dark.mips[0][(32 * 128 + 72) * 4..][..3];
+        assert!(land[1] > land[2], "{land:?}");
+        let lit = from_image(&rgba, w, h, &[on_land, at_sea], 128);
+        let alpha = |x: usize, y: usize| lit.mips[0][(y * 128 + x) * 4 + 3];
+        // The land city (x ~ 71) lights up; the city at sea (x ~ 28) is dimmed.
+        let land_max = (64..80).map(|x| alpha(x, 32)).max().unwrap();
+        let sea_max = (0..56).map(|x| alpha(x, 32)).max().unwrap();
+        assert!(land_max > 60, "land light {land_max}");
+        assert!(
+            sea_max * 2 < land_max,
+            "sea light {sea_max} vs land {land_max}"
+        );
+    }
+
     use super::*;
 
     #[test]

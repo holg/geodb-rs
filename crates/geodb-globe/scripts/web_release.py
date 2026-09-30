@@ -151,6 +151,8 @@ def release(page: str) -> None:
         print(f"builds: webgpu {gpu_wasm}, webgl2 {gl_wasm}")
     for raw in RAW.iterdir():
         shutil.copy(raw, OUT / raw.name)
+    # The picture the page starts with (in git; not in the raw directory).
+    shutil.copy(GZIPPED / "earth-tiny.webp", OUT / "earth-tiny.webp")
     # Earth detail layers (scripts/fetch_detail.py), when made.
     for f in [DETAIL / "coast10m.bin", *sorted(DETAIL.glob("earth-*.webp"))]:
         if f.exists():
