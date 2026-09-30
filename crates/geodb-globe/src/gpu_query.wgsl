@@ -282,3 +282,82 @@ fn knn_merge(@builtin(global_invocation_id) id: vec3<u32>) {
         knn_out[q * MAX_K + m] = vec2<u32>(bitcast<u32>(bd[m]), bi[m]);
     }
 }
+
+// ------------------------------------------------- k nearest, indexed
+//
+// The same top-k passes over the work list instead of every city: a
+// segment (query, first city, count <= KNN_CHUNK) per workgroup, made on
+// the CPU from the Z-order ranges of a radius that should hold the k
+// nearest (the CPU checks that and retries with a larger radius). qinfo
+// holds (centre lo, centre hi, first segment, segment count) per query;
+// partial has one top-k per segment.
+
+@compute @workgroup_size(64)
+fn knn_seg_partial(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
+    let k = min(p.cap, MAX_K);
+    let s = wid.y * GRID + wid.x;
+    let live = s < p.nseg; // uniform across the workgroup
+    var bd: array<f32, 16>;
+    var bi: array<u32, 16>;
+    for (var m = 0u; m < MAX_K; m++) {
+        bd[m] = 2.0;
+        bi[m] = NONE;
+    }
+    if (live) {
+        let seg = segments[s];
+        let qa = split(qinfo[seg.x].xy);
+        let end = seg.y + seg.z;
+        for (var i = seg.y + li; i < end; i += KNN_WG) {
+            keep(&bd, &bi, k, hav(split(cities[i]), qa), i);
+        }
+    }
+    for (var m = 0u; m < MAX_K; m++) {
+        wg_best[li * MAX_K + m] = vec2<u32>(bitcast<u32>(bd[m]), bi[m]);
+    }
+    workgroupBarrier();
+    if (li == 0u && live) {
+        for (var m = 0u; m < MAX_K; m++) {
+            bd[m] = 2.0;
+            bi[m] = NONE;
+        }
+        for (var t = 0u; t < KNN_WG * MAX_K; t++) {
+            let e = wg_best[t];
+            if (e.y != NONE) {
+                keep(&bd, &bi, k, bitcast<f32>(e.x), e.y);
+            }
+        }
+        for (var m = 0u; m < MAX_K; m++) {
+            partial[s * MAX_K + m] = vec2<u32>(bitcast<u32>(bd[m]), bi[m]);
+        }
+    }
+}
+
+@compute @workgroup_size(64)
+fn knn_seg_merge(@builtin(global_invocation_id) id: vec3<u32>) {
+    let q = id.x;
+    if (q >= p.nq) {
+        return;
+    }
+    let k = min(p.cap, MAX_K);
+    let info = qinfo[q];
+    var bd: array<f32, 16>;
+    var bi: array<u32, 16>;
+    for (var m = 0u; m < MAX_K; m++) {
+        bd[m] = 2.0;
+        bi[m] = NONE;
+    }
+    for (var s = info.z; s < info.z + info.w; s++) {
+        for (var m = 0u; m < MAX_K; m++) {
+            let e = partial[s * MAX_K + m];
+            if (e.y != NONE) {
+                keep(&bd, &bi, k, bitcast<f32>(e.x), e.y);
+            }
+        }
+    }
+    for (var m = 0u; m < MAX_K; m++) {
+        knn_out[q * MAX_K + m] = vec2<u32>(bitcast<u32>(bd[m]), bi[m]);
+    }
+}

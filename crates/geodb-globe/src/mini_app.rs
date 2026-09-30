@@ -3792,12 +3792,22 @@ async fn run_bench(
             }
             sections[s].engines.push(Engine {
                 name: "GPU 1 by 1",
-                what: format!(
-                    "GpuGeoidIndex::nearest_each_async (no index yet: scans all geoids), one query per call: {} workgroups each \
-                     keep the top {K} of 4096 geoids, a second pass merges them; {K} (index, \
-                     km) read back; one GPU round trip each",
-                    cities.div_ceil(4096)
-                ),
+                what: if index.indexed() {
+                    format!(
+                        "GpuGeoidIndex::nearest_each_async, one query per call: the CPU picks a \
+                         radius from the Z-order index (ranges holding at least 4 × {K} \
+                         cities), a compute pass takes the top {K} of only those cities, the \
+                         CPU checks the {K}th is inside the circle (else again with 4× the \
+                         radius); {K} (index, km) read back; a GPU round trip per round"
+                    )
+                } else {
+                    format!(
+                        "GpuGeoidIndex::nearest_each_async, one query per call: {} workgroups \
+                         each keep the top {K} of 4096 geoids, a second pass merges them; {K} \
+                         (index, km) read back; one GPU round trip each",
+                        cities.div_ceil(4096)
+                    )
+                },
                 stats: Stats::of(&samples),
                 work_ms,
                 queries: got.len(),
@@ -3826,9 +3836,15 @@ async fn run_bench(
             sections[s].engines.push(Engine {
                 name: "GPU batch",
                 what: format!(
-                    "GpuGeoidIndex::nearest_each_async, {} queries per call: the same two \
-                     passes for all of them at once; {K} (index, km) per query read back",
-                    cfg.batch
+                    "GpuGeoidIndex::nearest_each_async, {} queries per call: the same passes for \
+                     all of them at once ({}); {K} (index, km) per query read back",
+                    cfg.batch,
+                    if index.indexed() {
+                        "over the ranges of the Z-order index, queries whose top k is not \
+                         inside their circle go again with a larger radius"
+                    } else {
+                        "over every city"
+                    }
                 ),
                 stats: Stats::of(&samples),
                 work_ms,

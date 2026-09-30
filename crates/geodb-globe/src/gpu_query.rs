@@ -40,6 +40,8 @@ pub struct GpuGeoidIndex {
     /// The indexed kernels (see [`set_scan`](Self::set_scan)).
     single_seg: wgpu::ComputePipeline,
     batch_seg: wgpu::ComputePipeline,
+    knn_seg_partial: wgpu::ComputePipeline,
+    knn_seg_merge: wgpu::ComputePipeline,
     /// The geoids in city order, when they are sorted (the Z-order index the
     /// CPU uses): empty otherwise, and every query scans all cities.
     geoids: Vec<u64>,
@@ -166,6 +168,8 @@ impl GpuGeoidIndex {
             batch: pipeline("radius_batch"),
             single_seg: pipeline("radius_single_seg"),
             batch_seg: pipeline("radius_batch_seg"),
+            knn_seg_partial: pipeline("knn_seg_partial"),
+            knn_seg_merge: pipeline("knn_seg_merge"),
             geoids: if sorted { geoids.to_vec() } else { Vec::new() },
             scan: std::cell::Cell::new(!sorted),
             segments,
@@ -551,9 +555,178 @@ impl GpuGeoidIndex {
     pub async fn nearest_each_async(&self, queries: &[u64], k: usize) -> Vec<Vec<(u32, f64)>> {
         let mut out = Vec::with_capacity(queries.len());
         for q in queries.chunks(Self::MAX_BATCH) {
-            out.extend(self.dispatch_knn(q, k.clamp(1, Self::MAX_K)).await);
+            let k = k.clamp(1, Self::MAX_K);
+            out.extend(if self.indexed() {
+                self.dispatch_knn_indexed(q, k).await
+            } else {
+                self.dispatch_knn(q, k).await
+            });
         }
         out
+    }
+
+    /// The radius (km) to start with for `k` nearest: doubling from 25 km
+    /// until the covering ranges hold at least 4 k cities (a circle then
+    /// most likely holds k), or the whole earth.
+    fn knn_start_radius(&self, center: u64, k: usize) -> f64 {
+        const WORLD_KM: f64 = 20_100.0;
+        let mut r = 25.0;
+        while r < WORLD_KM {
+            let total: u64 = self
+                .index_ranges(center, r)
+                .iter()
+                .map(|&(a, b)| u64::from(b - a))
+                .sum();
+            if total >= 4 * k as u64 {
+                break;
+            }
+            r *= 2.0;
+        }
+        r.min(WORLD_KM)
+    }
+
+    /// k nearest on the Z-order index. Per query the CPU picks a radius
+    /// ([`knn_start_radius`](Self::knn_start_radius)) and makes the work list
+    /// of its ranges; the GPU takes the top k of those cities. The result is
+    /// exact when the k-th is inside the circle (everything nearer is inside
+    /// it too, so it was tested); queries where it is not (fewer than k in
+    /// reach, or the k-th beyond the radius) run again with 4 times the
+    /// radius, at most a few rounds, the last one over the whole earth.
+    async fn dispatch_knn_indexed(&self, queries: &[u64], k: usize) -> Vec<Vec<(u32, f64)>> {
+        const CHUNK: u32 = 4096; // KNN_CHUNK in the shader
+        const R_KM: f64 = 6371.0;
+        const WORLD_KM: f64 = 20_100.0;
+        let n_all = queries.len();
+        let mut results: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n_all];
+        if n_all == 0 || self.n == 0 {
+            return results;
+        }
+        let mut radius: Vec<f64> = queries
+            .iter()
+            .map(|&g| self.knn_start_radius(g, k))
+            .collect();
+        let mut pending: Vec<usize> = (0..n_all).collect();
+        let storage = |label, size: u64| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: size.max(16),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+        fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
+            wgpu::BindGroupEntry {
+                binding,
+                resource: buffer.as_entire_binding(),
+            }
+        }
+        while !pending.is_empty() {
+            let nq = pending.len() as u32;
+            let mut segments: Vec<[u32; 4]> = Vec::new();
+            let mut info: Vec<[u32; 4]> = Vec::with_capacity(pending.len());
+            for (slot, &qi) in pending.iter().enumerate() {
+                let first = segments.len() as u32;
+                for (start, end) in self.index_ranges(queries[qi], radius[qi]) {
+                    let mut at = start;
+                    while at < end {
+                        let len = (end - at).min(CHUNK);
+                        segments.push([slot as u32, at, len, 0]);
+                        at += len;
+                    }
+                }
+                let [lo, hi] = halves(queries[qi]);
+                info.push([lo, hi, first, segments.len() as u32 - first]);
+            }
+            // Top k per query; nothing in reach at all stays empty.
+            let mut words = vec![u32::MAX; pending.len() * Self::MAX_K * 2];
+            if !segments.is_empty() {
+                let init = |label, contents: &[u8]| {
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some(label),
+                            contents,
+                            usage: wgpu::BufferUsages::STORAGE,
+                        })
+                };
+                let seg_buf = init("knn segments", bytemuck::cast_slice(&segments));
+                let info_buf = init("knn query info", bytemuck::cast_slice(&info));
+                let partial = storage(
+                    "knn partial",
+                    segments.len() as u64 * Self::MAX_K as u64 * 8,
+                );
+                let out = storage("knn results", u64::from(nq) * Self::MAX_K as u64 * 8);
+                self.queue.write_buffer(
+                    &self.params,
+                    0,
+                    bytemuck::bytes_of(&Params {
+                        center: [0; 2],
+                        h: 0.0,
+                        n: self.n,
+                        nq,
+                        cap: k as u32,
+                        nseg: segments.len() as u32,
+                        _pad: 0,
+                    }),
+                );
+                let first = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.knn_seg_partial.get_bind_group_layout(0),
+                    entries: &[
+                        entry(0, &self.cities),
+                        entry(1, &self.params),
+                        entry(6, &partial),
+                        entry(8, &seg_buf),
+                        entry(9, &info_buf),
+                    ],
+                });
+                let second = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.knn_seg_merge.get_bind_group_layout(0),
+                    entries: &[
+                        entry(1, &self.params),
+                        entry(6, &partial),
+                        entry(7, &out),
+                        entry(9, &info_buf),
+                    ],
+                });
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&self.knn_seg_partial);
+                    pass.set_bind_group(0, &first, &[]);
+                    let (x, y) = Self::grid(segments.len() as u32);
+                    pass.dispatch_workgroups(x, y, 1);
+                    pass.set_pipeline(&self.knn_seg_merge);
+                    pass.set_bind_group(0, &second, &[]);
+                    pass.dispatch_workgroups(nq.div_ceil(64), 1, 1);
+                }
+                let bytes = u64::from(nq) * Self::MAX_K as u64 * 8;
+                encoder.copy_buffer_to_buffer(&out, 0, &self.readback_knn, 0, bytes);
+                words = self.finish(encoder, &self.readback_knn, 0..bytes).await;
+            }
+            let mut again = Vec::new();
+            for (slot, &qi) in pending.iter().enumerate() {
+                let entries = &words[slot * Self::MAX_K * 2..][..Self::MAX_K * 2];
+                let kth = &entries[(k - 1) * 2..k * 2];
+                let inside = kth[1] != u32::MAX && f32::from_bits(kth[0]) <= threshold(radius[qi]);
+                if inside || radius[qi] >= WORLD_KM {
+                    results[qi] = entries
+                        .chunks(2)
+                        .take(k)
+                        .filter(|e| e[1] != u32::MAX)
+                        .map(|e| {
+                            let h = f64::from(f32::from_bits(e[0])).clamp(0.0, 1.0);
+                            (e[1], 2.0 * R_KM * h.sqrt().asin())
+                        })
+                        .collect();
+                } else {
+                    radius[qi] = (radius[qi] * 4.0).min(WORLD_KM);
+                    again.push(qi);
+                }
+            }
+            pending = again;
+        }
+        results
     }
 
     /// See [`nearest_each_async`](Self::nearest_each_async).
@@ -736,5 +909,68 @@ mod tests {
         let a = gpu.radius_counts_each(&many, &radii);
         gpu.set_scan(true);
         assert_eq!(a, gpu.radius_counts_each(&many, &radii));
+    }
+
+    #[test]
+    fn indexed_nearest_equals_scan_and_the_cpu_index() {
+        let Ok(dev) = scopekit::gpu::headless(scopekit::Backend::Auto) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let globe = CompactGlobeDb::from_db(crate::data::db());
+        let geoids: Vec<u64> = globe.cities.iter().map(|c| c.geoid).collect();
+        let gpu = GpuGeoidIndex::new(&dev.device, &dev.queue, dev.describe(), &geoids);
+        assert!(gpu.indexed());
+        // Dense (Europe, Tokyo), sparse (deep ocean, Sahara, Antarctica),
+        // both poles and the antimeridian, plus a spread over the globe: the
+        // sparse ones need the larger radii of the retry rounds.
+        let mut queries: Vec<(f64, f64)> = vec![
+            (48.14, 11.58),
+            (35.68, 139.69),
+            (-40.0, -140.0),
+            (25.0, 15.0),
+            (-89.9, 0.0),
+            (89.9, 10.0),
+            (-17.7, 179.99),
+            (0.0, -179.99),
+            (-75.0, -100.0),
+            (0.0, -30.0),
+        ];
+        for i in 0..400 {
+            queries.push((
+                -80.0 + (i * 37 % 160) as f64 + 0.37,
+                -180.0 + (i * 53 % 360) as f64 + 0.11,
+            ));
+        }
+        let centres: Vec<u64> = queries.iter().map(|q| generate_geoid(q.0, q.1)).collect();
+        for k in [1usize, 10, 16] {
+            let indexed = gpu.nearest_each(&centres, k);
+            gpu.set_scan(true);
+            let scanned = gpu.nearest_each(&centres, k);
+            gpu.set_scan(false);
+            assert_eq!(indexed.len(), scanned.len());
+            for (i, (a, b)) in indexed.iter().zip(&scanned).enumerate() {
+                // Ties may be taken in another order: compare the distances.
+                let (da, db): (Vec<f64>, Vec<f64>) = (
+                    a.iter().map(|e| e.1).collect(),
+                    b.iter().map(|e| e.1).collect(),
+                );
+                assert_eq!(da, db, "k={k} query {:?}", queries[i]);
+                assert_eq!(a.len(), k.min(geoids.len()));
+            }
+            // The CPU index: the same distances within f32 haversine error.
+            for (i, &(lat, lon)) in queries.iter().enumerate().take(30) {
+                let cpu = globe.nearest_at(lat, lon, k, geodb_core::globe_layers::Positions::Geoid);
+                for (c, g) in cpu.iter().zip(&indexed[i]) {
+                    assert!(
+                        (c.0 - g.1).abs() < 0.05,
+                        "k={k} {:?}: cpu {} gpu {}",
+                        queries[i],
+                        c.0,
+                        g.1
+                    );
+                }
+            }
+        }
     }
 }
