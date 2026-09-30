@@ -23,9 +23,17 @@ impl Touch {
     pub fn new(mut i2c: I2c<'static, Blocking, Master>) -> Option<Self> {
         for addr in [0x2Au8, 0x38] {
             let mut id = [0u8; 1];
-            if i2c.blocking_write_read(addr, &[REG_CHIP_ID], &mut id).is_ok() && (id[0] == ID_FT6206 || id[0] == ID_FT6X36) {
+            if i2c
+                .blocking_write_read(addr, &[REG_CHIP_ID], &mut id)
+                .is_ok()
+                && (id[0] == ID_FT6206 || id[0] == ID_FT6X36)
+            {
                 info!("touch: FT6x06 id {:#04x} at {:#04x}", id[0], addr);
-                return Some(Self { i2c, addr, chip: id[0] });
+                return Some(Self {
+                    i2c,
+                    addr,
+                    chip: id[0],
+                });
             }
         }
         info!("touch: no FT6x06 found");
@@ -35,7 +43,9 @@ impl Touch {
     /// Current finger position in screen pixels (landscape), or `None`.
     pub fn read(&mut self) -> Option<(u16, u16)> {
         let mut b = [0u8; 5]; // TD_STATUS, P1_XH, P1_XL, P1_YH, P1_YL
-        self.i2c.blocking_write_read(self.addr, &[REG_TD_STATUS], &mut b).ok()?;
+        self.i2c
+            .blocking_write_read(self.addr, &[REG_TD_STATUS], &mut b)
+            .ok()?;
         let touches = b[0] & 0x0F;
         if touches == 0 || touches > 2 {
             return None;

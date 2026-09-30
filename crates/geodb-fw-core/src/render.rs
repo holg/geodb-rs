@@ -109,6 +109,14 @@ impl Texture<'_> {
 /// The (lat, lon) degrees at the normalized disc point (nx, ny) (y up), or
 /// `None` outside the disc.
 pub fn unproject(view: View, nx: f32, ny: f32) -> Option<(f32, f32, f32)> {
+    let (lat, dlon, z) = unproject_rel(view, nx, ny)?;
+    Some((lat, view.lon + dlon, z))
+}
+
+/// [`unproject`] with the longitude relative to the view centre: it depends
+/// on the tilt (latitude) and the zoom only, not on where the globe is
+/// turned to, which is what makes a spinning globe cheap (`GlobeLut`).
+pub fn unproject_rel(view: View, nx: f32, ny: f32) -> Option<(f32, f32, f32)> {
     if nx * nx + ny * ny > 1.0 {
         return None;
     }
@@ -118,8 +126,8 @@ pub fn unproject(view: View, nx: f32, ny: f32) -> Option<(f32, f32, f32)> {
     let z = sqrtf(1.0 - rho2);
     let (s0, c0) = (sinf(view.lat * DEG_TO_RAD), cosf(view.lat * DEG_TO_RAD));
     let lat = asinf((z * s0 + ny * c0).clamp(-1.0, 1.0)) / DEG_TO_RAD;
-    let lon = view.lon + atan2f(nx, z * c0 - ny * s0) / DEG_TO_RAD;
-    Some((lat, lon, z))
+    let dlon = atan2f(nx, z * c0 - ny * s0) / DEG_TO_RAD;
+    Some((lat, dlon, z))
 }
 
 /// Where (lat, lon) lands on a globe of pixel `radius` centred at (cx, cy),
@@ -162,7 +170,6 @@ pub fn draw_globe(
     tex: &Texture<'_>,
     step: i32,
 ) {
-    const LIGHT: [f32; 3] = [-0.42, 0.50, 0.76];
     let step = step.max(1);
     let r = radius as f32;
     let mut by = (cy - radius).max(0);
@@ -202,6 +209,197 @@ pub fn draw_globe(
         }
         by += step;
     }
+}
+
+/// What one block of the globe needs from the view, computed once for a
+/// tilt and zoom: the texture row and the longitude offset (fixed point),
+/// and the shading. Turning the globe (spinning) changes none of it.
+#[derive(Clone, Copy)]
+pub struct LutCell {
+    /// Longitude offset from the view centre, in texels x 256.
+    du: i32,
+    /// Texture row x 256 ([`EMPTY`] = the block is outside the disc).
+    v: u16,
+    /// Brightness x 128.
+    shade: u8,
+    /// Strength of the blue rim, 0..255.
+    rim: u8,
+}
+
+const EMPTY: u16 = u16::MAX;
+
+impl LutCell {
+    pub const EMPTY: LutCell = LutCell {
+        du: 0,
+        v: EMPTY,
+        shade: 0,
+        rim: 0,
+    };
+}
+
+/// Blocks needed for a globe of pixel `radius` computed per `step` pixels.
+pub const fn lut_cells(radius: i32, step: i32) -> usize {
+    let n = (2 * radius / step + 2) as usize;
+    n * n
+}
+
+/// The globe computed once per tilt and zoom, drawn per frame with integer
+/// texture lookups only (no trigonometry): a spinning globe at speed.
+pub struct GlobeLut<'a> {
+    cells: &'a mut [LutCell],
+    /// (tilt, zoom, radius, step) the cells were computed for.
+    key: Option<(u32, u32, i32, i32, usize, usize)>,
+}
+
+impl<'a> GlobeLut<'a> {
+    /// `cells` must hold [`lut_cells`] for the globe to be drawn.
+    pub fn new(cells: &'a mut [LutCell]) -> Self {
+        Self { cells, key: None }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        radius: i32,
+        view: View,
+        step: i32,
+        tw: usize,
+        th: usize,
+    ) {
+        let n = (2 * radius / step + 2) as usize;
+        let r = radius as f32;
+        for row in 0..n {
+            for col in 0..n {
+                let (bx, by) = (
+                    cx - radius + col as i32 * step,
+                    cy - radius + row as i32 * step,
+                );
+                let (mut nx, mut ny) = (
+                    ((bx + step / 2) - cx) as f32 / r,
+                    -(((by + step / 2) - cy) as f32) / r,
+                );
+                // Blocks with no pixel inside the disc stay empty.
+                let (dx, dy) = ((bx + step / 2 - cx) as f32, (by + step / 2 - cy) as f32);
+                let reach = r + step as f32;
+                let cell = &mut self.cells[row * n + col];
+                if dx * dx + dy * dy > reach * reach {
+                    *cell = LutCell::EMPTY;
+                    continue;
+                }
+                let rho2 = nx * nx + ny * ny;
+                if rho2 > 1.0 {
+                    let k = 0.9999 / crate::fmath::sqrt(rho2);
+                    (nx, ny) = (nx * k, ny * k);
+                }
+                let Some((lat, dlon, z)) = unproject_rel(view, nx, ny) else {
+                    *cell = LutCell::EMPTY;
+                    continue;
+                };
+                let lambert = (nx * LIGHT[0] + ny * LIGHT[1] + z * LIGHT[2]).max(0.0);
+                let rim = (1.0 - z) * (1.0 - z) * (1.0 - z);
+                *cell = LutCell {
+                    du: floorf(dlon / 360.0 * tw as f32 * 256.0 + 0.5) as i32,
+                    v: ((90.0 - lat) / 180.0 * th as f32 * 256.0 - 128.0).clamp(0.0, 65534.0)
+                        as u16,
+                    shade: ((0.30 + 0.85 * lambert) * 128.0).clamp(0.0, 255.0) as u8,
+                    rim: (rim * 0.55 * 255.0).clamp(0.0, 255.0) as u8,
+                };
+            }
+        }
+    }
+
+    /// Draws the globe (rebuilding the table when the tilt or zoom changed).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &mut self,
+        fb: &mut Fb<'_>,
+        cx: i32,
+        cy: i32,
+        radius: i32,
+        view: View,
+        tex: &Texture<'_>,
+        step: i32,
+    ) {
+        let step = step.max(1);
+        let key = (
+            view.lat.to_bits(),
+            view.zoom.to_bits(),
+            radius,
+            step,
+            tex.w,
+            tex.h,
+        );
+        if self.key != Some(key) {
+            self.build(cx, cy, radius, view, step, tex.w, tex.h);
+            self.key = Some(key);
+        }
+        let n = (2 * radius / step + 2) as usize;
+        let wrap = (tex.w * 256) as i32;
+        let centre = floorf((view.lon + 180.0) / 360.0 * wrap as f32 - 128.0) as i32;
+        let rows = tex.h as i32;
+        for row in 0..n {
+            let by = cy - radius + row as i32 * step;
+            if by + step <= 0 || by >= fb.h as i32 {
+                continue;
+            }
+            for col in 0..n {
+                let c = self.cells[row * n + col];
+                if c.v == EMPTY {
+                    continue;
+                }
+                let bx = cx - radius + col as i32 * step;
+                let u = (centre + c.du).rem_euclid(wrap);
+                let rgb = sample_fixed(tex, u, i32::from(c.v), rows);
+                let (shade, rim) = (u32::from(c.shade), u32::from(c.rim));
+                let mut out = [0u8; 3];
+                for k in 0..3 {
+                    out[k] = (((rgb[k] * shade) >> 7) + ((GLOW[k] * rim) >> 8)).min(255) as u8;
+                }
+                let color = rgb565(out[0], out[1], out[2]);
+                for y in by..by + step {
+                    for x in bx..bx + step {
+                        let (dx, dy) = (x - cx, y - cy);
+                        if dx * dx + dy * dy <= radius * radius {
+                            fb.set(x, y, color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The rim's colour x 255 (0.30, 0.55, 1.0).
+const GLOW: [u32; 3] = [77, 140, 255];
+const LIGHT: [f32; 3] = [-0.42, 0.50, 0.76];
+
+/// Bilinear texel lookup in fixed point: `u` in texels x 256 (already
+/// wrapped), `v` in rows x 256. RGB channels 0..255.
+fn sample_fixed(tex: &Texture<'_>, u: i32, v: i32, rows: i32) -> [u32; 3] {
+    let (x0, fx) = ((u >> 8) as usize, (u & 255) as u32);
+    let (y0, fy) = ((v >> 8).min(rows - 1) as usize, (v & 255) as u32);
+    let x1 = if x0 + 1 == tex.w { 0 } else { x0 + 1 };
+    let y1 = (y0 + 1).min(rows as usize - 1);
+    let px = |x: usize, y: usize| -> [u32; 3] {
+        let at = (y * tex.w + x) * 2;
+        let c = u32::from(tex.px[at]) | u32::from(tex.px[at + 1]) << 8;
+        let (r, g, b) = ((c >> 11) & 31, (c >> 5) & 63, c & 31);
+        [
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+        ]
+    };
+    let (a, b, c, d) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+    let mut out = [0u32; 3];
+    for k in 0..3 {
+        let top = a[k] * (256 - fx) + b[k] * fx;
+        let bottom = c[k] * (256 - fx) + d[k] * fx;
+        out[k] = (top * (256 - fy) + bottom * fy) >> 16;
+    }
+    out
 }
 
 /// A filled dot of pixel radius `r`.
@@ -329,6 +527,126 @@ mod tests {
         assert!(green(buf[32 * 64 + 44]), "{:x}", buf[32 * 64 + 44]);
         // Outside the disc stays untouched.
         assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn the_table_draws_the_same_globe_and_spins_by_offset() {
+        // A varied 256 x 128 earth, smooth (and periodic) across the seam.
+        let mut px = vec![];
+        for y in 0..128u32 {
+            for x in 0..256u32 {
+                let a = x as f32 / 256.0 * core::f32::consts::TAU;
+                let (r, b) = (128.0 + 100.0 * a.cos(), 128.0 + 100.0 * (2.0 * a).sin());
+                px.extend(rgb565(r as u8, (y * 2) as u8, b as u8).to_le_bytes());
+            }
+        }
+        let tex = Texture {
+            w: 256,
+            h: 128,
+            px: &px,
+        };
+        for view in [
+            View::new(20.0, 80.0),
+            View {
+                lat: -35.0,
+                lon: -170.0,
+                zoom: 3.0,
+            },
+        ] {
+            let mut direct = vec![0u16; 100 * 100];
+            let mut fast = vec![0u16; 100 * 100];
+            draw_globe(
+                &mut Fb {
+                    px: &mut direct,
+                    w: 100,
+                    h: 100,
+                },
+                50,
+                50,
+                46,
+                view,
+                &tex,
+                2,
+            );
+            let mut cells = vec![LutCell::EMPTY; lut_cells(46, 2)];
+            let mut lut = GlobeLut::new(&mut cells);
+            lut.draw(
+                &mut Fb {
+                    px: &mut fast,
+                    w: 100,
+                    h: 100,
+                },
+                50,
+                50,
+                46,
+                view,
+                &tex,
+                2,
+            );
+            let (mut worst, mut off, mut lit) = (0i32, 0, 0);
+            for (a, b) in direct.iter().zip(&fast) {
+                if *a == 0 && *b == 0 {
+                    continue;
+                }
+                lit += 1;
+                for shift in [11, 5, 0] {
+                    let (ma, mb) = if shift == 5 {
+                        (0x3f, 0x3f)
+                    } else {
+                        (0x1f, 0x1f)
+                    };
+                    let (ca, cb) = (i32::from((a >> shift) & ma), i32::from((b >> shift) & mb));
+                    // channels to 8 bit for one scale
+                    let scale = if shift == 5 { 4 } else { 8 };
+                    worst = worst.max(((ca - cb) * scale).abs());
+                }
+                if a != b {
+                    off += 1;
+                }
+            }
+            assert!(lit > 4000, "{lit} pixels");
+            // Same picture up to rounding and the fixed-point lookup.
+            assert!(
+                worst <= 40,
+                "worst channel difference {worst} ({off} of {lit} differ)"
+            );
+        }
+        // Spinning is only a different offset: turning by exactly one texel
+        // shifts the picture's sampling by one texel.
+        let view = View::new(0.0, 0.0);
+        let mut cells = vec![LutCell::EMPTY; lut_cells(46, 2)];
+        let mut lut = GlobeLut::new(&mut cells);
+        let mut a = vec![0u16; 100 * 100];
+        lut.draw(
+            &mut Fb {
+                px: &mut a,
+                w: 100,
+                h: 100,
+            },
+            50,
+            50,
+            46,
+            view,
+            &tex,
+            2,
+        );
+        let key = lut.key;
+        let mut b = vec![0u16; 100 * 100];
+        lut.draw(
+            &mut Fb {
+                px: &mut b,
+                w: 100,
+                h: 100,
+            },
+            50,
+            50,
+            46,
+            View::new(0.0, 90.0),
+            &tex,
+            2,
+        );
+        assert_eq!(lut.key, key, "a turn does not rebuild the table");
+        assert_ne!(a, b);
     }
 
     #[test]

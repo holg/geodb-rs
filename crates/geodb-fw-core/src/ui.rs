@@ -6,7 +6,7 @@ use crate::fmath::{asin as asinf, atan2 as atan2f, cos as cosf, sin as sinf};
 use crate::geo::{DEG_TO_RAD, EARTH_RADIUS_KM};
 use crate::image::FwImage;
 use crate::query::Hit;
-use crate::render::{self, rgb565, Fb, Texture, View};
+use crate::render::{self, rgb565, Fb, GlobeLut, Texture, View};
 use core::fmt::Write;
 
 pub const WIDTH: usize = 800;
@@ -21,6 +21,7 @@ const RING: u16 = rgb565(255, 196, 70);
 const SCOPE: u16 = rgb565(10, 20, 38);
 const GRID: u16 = rgb565(44, 70, 110);
 const BUTTON: u16 = rgb565(18, 30, 58);
+const BUTTON_ON: u16 = rgb565(90, 60, 10);
 
 /// Globe placement on the screen.
 const GLOBE_X: i32 = 250;
@@ -30,6 +31,9 @@ const GLOBE_R: i32 = 224;
 pub const QUERY_KM: f32 = 1000.0;
 /// The globe is computed per block of this many pixels (the texture is coarse).
 const GLOBE_STEP: i32 = 2;
+
+/// Cells of the [`GlobeLut`] the globe needs.
+pub const LUT_CELLS: usize = render::lut_cells(GLOBE_R, GLOBE_STEP);
 /// Nearest cities listed.
 pub const LIST: usize = 10;
 
@@ -92,7 +96,13 @@ pub fn zoom_for(km: f32) -> f32 {
 
 /// Draws everything for the globe centred on `view`. Returns how many
 /// nearest cities are listed.
-pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
+pub fn draw(
+    fb: &mut Fb<'_>,
+    img: &FwImage<'_>,
+    view: View,
+    spin: Spin,
+    lut: Option<&mut GlobeLut<'_>>,
+) -> usize {
     fb.fill(BG);
     let r = GLOBE_R as f32;
     let scope = view.zoom >= SCOPE_ZOOM;
@@ -126,15 +136,12 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
         }
     } else {
         let (w, h, px) = img.texture();
-        render::draw_globe(
-            fb,
-            GLOBE_X,
-            GLOBE_Y,
-            GLOBE_R,
-            view,
-            &Texture { w, h, px },
-            GLOBE_STEP,
-        );
+        let tex = Texture { w, h, px };
+        match lut {
+            // Spinning: the table only needs the turn, no trigonometry per pixel.
+            Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, GLOBE_STEP),
+            None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, GLOBE_STEP),
+        }
     }
 
     // Every city in reach, as a dot (a pixel on the globe, larger on the scope). A wide view
@@ -211,6 +218,21 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
     }
     render::text(fb, x0, 94, line.as_str(), 1, DIM);
     render::text(fb, x0, 112, "nearest cities", 1, DIM);
+    let mut line = Line::new();
+    if spin.on {
+        let _ = write!(line, "spin {:.0} deg/s", spin.dps);
+    } else {
+        let _ = write!(line, "spin off");
+    }
+    let wd = render::text_width(line.as_str(), 1);
+    render::text(
+        fb,
+        792 - wd,
+        112,
+        line.as_str(),
+        1,
+        if spin.on { ACCENT } else { DIM },
+    );
     for (i, hit) in nearest[..n].iter().enumerate() {
         let y = 130 + i as i32 * 24;
         let idx = hit.index as usize;
@@ -232,8 +254,17 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
         let wd = render::text_width(dist.as_str(), 1);
         render::text(fb, 792 - wd, y + 4, dist.as_str(), 1, DIM);
     }
-    for (x, y, w, h, label) in BUTTONS {
-        fb.rect(x, y, w, h, BUTTON);
+    for (x, y, w, h, label, action) in BUTTONS {
+        let label = match action {
+            Action::SpinToggle if spin.on => "STOP",
+            _ => label,
+        };
+        let fill = if action == Action::SpinToggle && spin.on {
+            BUTTON_ON
+        } else {
+            BUTTON
+        };
+        fb.rect(x, y, w, h, fill);
         for k in 0..w {
             fb.set(x + k, y, GRID);
             fb.set(x + k, y + h - 1, GRID);
@@ -249,12 +280,40 @@ pub fn draw(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) -> usize {
     n
 }
 
-/// The touch buttons: x, y, width, height, label.
-pub const BUTTONS: [(i32, i32, i32, i32, &str); 3] = [
-    (500, 396, 84, 44, "-"),
-    (596, 396, 84, 44, "+"),
-    (692, 396, 100, 44, "WORLD"),
+/// The touch buttons: x, y, width, height, label, what a tap does.
+pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 6] = [
+    (500, 374, 104, 34, "SPIN", Action::SpinToggle),
+    (612, 374, 60, 34, "-", Action::SpinSlower),
+    (680, 374, 60, 34, "+", Action::SpinFaster),
+    (500, 414, 80, 34, "Z-", Action::ZoomOut),
+    (588, 414, 80, 34, "Z+", Action::ZoomIn),
+    (676, 414, 116, 34, "WORLD", Action::World),
 ];
+
+/// The globe turning by itself, and how fast (degrees per second).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Spin {
+    pub on: bool,
+    pub dps: f32,
+}
+
+impl Spin {
+    pub const MIN: f32 = 1.0;
+    pub const MAX: f32 = 180.0;
+
+    pub const fn new() -> Spin {
+        Spin {
+            on: false,
+            dps: 12.0,
+        }
+    }
+}
+
+impl Default for Spin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// What a tap does.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -263,6 +322,9 @@ pub enum Action {
     ZoomIn,
     ZoomOut,
     World,
+    SpinToggle,
+    SpinFaster,
+    SpinSlower,
     /// Look at this point (a tap on the globe).
     Center {
         lat: f32,
@@ -272,10 +334,10 @@ pub enum Action {
 
 /// The action of a tap at screen pixel (x, y).
 pub fn hit(view: View, x: i32, y: i32) -> Action {
-    for (i, &(bx, by, bw, bh, _)) in BUTTONS.iter().enumerate() {
-        // A finger is bigger than the button: 12 px of slack.
-        if x >= bx - 12 && x < bx + bw + 12 && y >= by - 12 && y < by + bh + 12 {
-            return [Action::ZoomOut, Action::ZoomIn, Action::World][i];
+    for &(bx, by, bw, bh, _, action) in BUTTONS.iter() {
+        // A finger is bigger than the button: a little slack (the rows are close).
+        if x >= bx - 4 && x < bx + bw + 4 && y >= by - 4 && y < by + bh + 4 {
+            return action;
         }
     }
     let (dx, dy) = (x - GLOBE_X, y - GLOBE_Y);
@@ -288,14 +350,20 @@ pub fn hit(view: View, x: i32, y: i32) -> Action {
     Action::None
 }
 
-/// Applies an action to the view.
-pub fn apply(view: &mut View, action: Action) {
+/// Applies an action to the view and the spin.
+pub fn apply(view: &mut View, spin: &mut Spin, action: Action) {
     let clamp = |z: f32| z.clamp(1.0, 4000.0);
     match action {
         Action::None => {}
         Action::ZoomIn => view.zoom = clamp(view.zoom * 2.0),
         Action::ZoomOut => view.zoom = clamp(view.zoom / 2.0),
         Action::World => view.zoom = 1.0,
+        Action::SpinToggle => spin.on = !spin.on,
+        Action::SpinFaster => {
+            spin.dps = (spin.dps * 1.5).clamp(Spin::MIN, Spin::MAX);
+            spin.on = true;
+        }
+        Action::SpinSlower => spin.dps = (spin.dps / 1.5).clamp(Spin::MIN, Spin::MAX),
         Action::Center { lat, lon } => {
             view.lat = lat.clamp(-89.5, 89.5);
             view.lon = wrap_lon(lon);
@@ -304,6 +372,14 @@ pub fn apply(view: &mut View, action: Action) {
                 view.zoom = clamp(view.zoom * 2.0);
             }
         }
+    }
+}
+
+/// Turns the globe for `dt_s` seconds of spinning (the Earth turns eastward:
+/// the view moves west).
+pub fn advance(view: &mut View, spin: Spin, dt_s: f32) {
+    if spin.on {
+        view.lon = wrap_lon(view.lon - spin.dps * dt_s);
     }
 }
 
@@ -349,10 +425,14 @@ mod tests {
     #[test]
     fn taps_and_drags_move_the_view() {
         let mut view = View::new(48.0, 11.0);
-        // The buttons.
-        assert_eq!(hit(view, 540, 420), Action::ZoomOut);
-        assert_eq!(hit(view, 640, 420), Action::ZoomIn);
-        assert_eq!(hit(view, 750, 420), Action::World);
+        let mut spin = Spin::new();
+        // The buttons: spin, slower, faster; zoom out / in, world.
+        assert_eq!(hit(view, 540, 390), Action::SpinToggle);
+        assert_eq!(hit(view, 640, 390), Action::SpinSlower);
+        assert_eq!(hit(view, 710, 390), Action::SpinFaster);
+        assert_eq!(hit(view, 540, 430), Action::ZoomOut);
+        assert_eq!(hit(view, 630, 430), Action::ZoomIn);
+        assert_eq!(hit(view, 740, 430), Action::World);
         assert_eq!(hit(view, 790, 20), Action::None);
         // A tap in the middle of the globe stays put and zooms in.
         match hit(view, GLOBE_X, GLOBE_Y) {
@@ -365,16 +445,16 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let tap = hit(view, GLOBE_X + 100, GLOBE_Y);
-        apply(&mut view, tap);
+        apply(&mut view, &mut spin, tap);
         assert!(view.lon > 11.0 && view.zoom == 2.0, "{view:?}");
-        apply(&mut view, Action::ZoomIn);
-        apply(&mut view, Action::ZoomIn);
+        apply(&mut view, &mut spin, Action::ZoomIn);
+        apply(&mut view, &mut spin, Action::ZoomIn);
         assert_eq!(view.zoom, 8.0);
-        apply(&mut view, Action::World);
+        apply(&mut view, &mut spin, Action::World);
         assert_eq!(view.zoom, 1.0);
         // Zoom is bounded.
         view.zoom = 3000.0;
-        apply(&mut view, Action::ZoomIn);
+        apply(&mut view, &mut spin, Action::ZoomIn);
         assert_eq!(view.zoom, 4000.0);
         // Dragging right moves the view west, down moves it north.
         let mut v = View::new(0.0, 0.0);
@@ -386,5 +466,40 @@ mod tests {
         let mut v = View::new(89.0, 179.0);
         pan(&mut v, -400, -400);
         assert!(v.lat <= 89.5 && v.lon.abs() <= 180.0, "{v:?}");
+    }
+
+    #[test]
+    fn spin_turns_the_globe_and_the_buttons_set_its_speed() {
+        let mut view = View::new(10.0, 0.0);
+        let mut spin = Spin::new();
+        assert!(!spin.on);
+        advance(&mut view, spin, 1.0);
+        assert_eq!(view.lon, 0.0, "off: nothing moves");
+        apply(&mut view, &mut spin, Action::SpinToggle);
+        assert!(spin.on && spin.dps == 12.0);
+        advance(&mut view, spin, 0.5);
+        assert!((view.lon + 6.0).abs() < 1e-4, "{}", view.lon);
+        // Faster and slower: 1.5x steps, bounded.
+        apply(&mut view, &mut spin, Action::SpinFaster);
+        assert_eq!(spin.dps, 18.0);
+        for _ in 0..30 {
+            apply(&mut view, &mut spin, Action::SpinFaster);
+        }
+        assert_eq!(spin.dps, Spin::MAX);
+        for _ in 0..40 {
+            apply(&mut view, &mut spin, Action::SpinSlower);
+        }
+        assert_eq!(spin.dps, Spin::MIN);
+        // The dateline wraps.
+        let mut view = View::new(0.0, -179.0);
+        advance(
+            &mut view,
+            Spin {
+                on: true,
+                dps: 10.0,
+            },
+            1.0,
+        );
+        assert!((view.lon - 171.0).abs() < 1e-4, "{}", view.lon);
     }
 }

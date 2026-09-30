@@ -38,7 +38,11 @@ st-flash write backup/factory-flash-2MB.bin 0x08000000
 ## The screen
 
 Touch: a **drag** pans the globe, a **tap on the globe** looks at that point
-(and zooms in), `-` / `+` / `WORLD` are buttons. Zoomed in (view under about
+(and zooms in). Buttons: `SPIN` (turns the globe; shows `STOP` while on), `-` / `+`
+(spin slower / faster, x1.5 per tap, 1..180 deg/s; `+` also starts the spin),
+`Z-` / `Z+` (zoom), `WORLD`. Spinning uses a per-tilt table in SDRAM
+(`render::GlobeLut`): the spin only shifts the longitude, so a frame is integer
+texture sampling and the panel refresh paces it. Zoomed in (view under about
 1000 km) the coarse earth picture says nothing and the screen switches to a
 *scope*: distance rings, every city as a dot, the ten nearest labelled. The
 whole screen is `geodb_fw_core::ui::draw`, so `make_image` renders exactly what

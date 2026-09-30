@@ -11,11 +11,17 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use defmt::info;
-use embassy_stm32::dsihost::{self, DsiColor, DsiHost, DsiHostMode, DsiHostPhyConfig, DsiHostPhyLanes, DsiVideoConfig, DsiVideoMode, PacketType};
 use embassy_stm32::dsihost::panel::DsiPanel;
+use embassy_stm32::dsihost::{
+    self, DsiColor, DsiHost, DsiHostMode, DsiHostPhyConfig, DsiHostPhyLanes, DsiVideoConfig,
+    DsiVideoMode, PacketType,
+};
 use embassy_stm32::fmc::Fmc;
 use embassy_stm32::gpio::Output;
-use embassy_stm32::ltdc::{Ltdc, LtdcConfiguration, LtdcLayer, LtdcLayerConfig, PixelFormat, PolarityActive, PolarityEdge, DSI};
+use embassy_stm32::ltdc::{
+    Ltdc, LtdcConfiguration, LtdcLayer, LtdcLayerConfig, PixelFormat, PolarityActive, PolarityEdge,
+    DSI,
+};
 use embassy_stm32::peripherals::{DSIHOST, FMC, LTDC};
 use embassy_time::{block_for, Duration, Timer};
 use embedded_display_controller::dsi::{DsiHostCtrlIo, DsiReadCommand, DsiWriteCommand};
@@ -52,7 +58,8 @@ fn sdram_mpu() {
         mpu.rnr.write(0);
         mpu.rbar.write(SDRAM_BASE as u32);
         // XN | AP=full access | TEX=001 S=1 C=0 B=0 (normal, non-cacheable) | SIZE=2^24 | ENABLE
-        mpu.rasr.write((1 << 28) | (0b011 << 24) | (0b001 << 19) | (1 << 18) | (23 << 1) | 1);
+        mpu.rasr
+            .write((1 << 28) | (0b011 << 24) | (0b001 << 19) | (1 << 18) | (23 << 1) | 1);
         mpu.ctrl.write((1 << 2) | 1); // PRIVDEFENA | ENABLE
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
@@ -71,9 +78,17 @@ pub fn init_sdram(mut sdram: Sdram) -> *mut u32 {
         words[i] = (i as u32).wrapping_mul(0x9E37_79B9);
     }
     for i in (0..1024).chain(n - 1024..n) {
-        assert_eq!(words[i], (i as u32).wrapping_mul(0x9E37_79B9), "SDRAM readback failed");
+        assert_eq!(
+            words[i],
+            (i as u32).wrapping_mul(0x9E37_79B9),
+            "SDRAM readback failed"
+        );
     }
-    info!("SDRAM ok: {} MB at {:#x}", SDRAM_SIZE / 1024 / 1024, ptr as usize);
+    info!(
+        "SDRAM ok: {} MB at {:#x}",
+        SDRAM_SIZE / 1024 / 1024,
+        ptr as usize
+    );
     ptr
 }
 
@@ -91,7 +106,9 @@ impl Framebuffer {
     /// # Safety
     /// `addr` must point at `FB_BYTES` of writable memory that nothing else uses.
     pub const unsafe fn at(addr: usize) -> Self {
-        Self { ptr: addr as *mut u16 }
+        Self {
+            ptr: addr as *mut u16,
+        }
     }
 
     pub fn as_ptr(&self) -> *const u16 {
@@ -126,7 +143,6 @@ impl PanelKind {
         }
     }
 }
-
 
 /// LTDC ↔ DSI-wrapper signalling the way ST's `HAL_LTDC_StructInitFromVideoConfig`
 /// derives it for DSI polarities "active high": HSYNC/VSYNC active high, DE active
@@ -178,7 +194,10 @@ impl DsiPanel for Detect {
         dsi_ltdc_config::<Self>()
     }
 
-    async fn init<DSI: dsihost::Instance>(dsi: &mut DsiHost<'_, DSI>, _color: DsiColor) -> Result<(), dsihost::Error> {
+    async fn init<DSI: dsihost::Instance>(
+        dsi: &mut DsiHost<'_, DSI>,
+        _color: DsiColor,
+    ) -> Result<(), dsihost::Error> {
         block_for(Duration::from_millis(20));
         for (i, reg) in [0xDAu8, 0xDB, 0xDC].iter().enumerate() {
             let mut b = [0u8; 1];
@@ -192,9 +211,17 @@ impl DsiPanel for Detect {
 }
 
 pub fn detected() -> ([u8; 3], PanelKind) {
-    let ids = [ID[0].load(Ordering::Relaxed), ID[1].load(Ordering::Relaxed), ID[2].load(Ordering::Relaxed)];
+    let ids = [
+        ID[0].load(Ordering::Relaxed),
+        ID[1].load(Ordering::Relaxed),
+        ID[2].load(Ordering::Relaxed),
+    ];
     // ST BSP: NT35510 answers 0x80 on RDID2 (DB); OTM8009A answers 0x40 on ID1 (DA).
-    let kind = if ids[1] == 0x80 { PanelKind::Nt35510 } else { PanelKind::Otm8009a };
+    let kind = if ids[1] == 0x80 {
+        PanelKind::Nt35510
+    } else {
+        PanelKind::Otm8009a
+    };
     (ids, kind)
 }
 
@@ -221,7 +248,10 @@ impl DsiPanel for Otm8009a {
         dsi_ltdc_config::<Self>()
     }
 
-    async fn init<DSI: dsihost::Instance>(dsi: &mut DsiHost<'_, DSI>, _color: DsiColor) -> Result<(), dsihost::Error> {
+    async fn init<DSI: dsihost::Instance>(
+        dsi: &mut DsiHost<'_, DSI>,
+        _color: DsiColor,
+    ) -> Result<(), dsihost::Error> {
         let mut io = DsiIo(dsi);
         let cfg = otm8009a::Otm8009AConfig {
             frame_rate: otm8009a::FrameRate::_60Hz,
@@ -259,7 +289,10 @@ impl DsiPanel for Nt35510 {
         dsi_ltdc_config::<Self>()
     }
 
-    async fn init<DSI: dsihost::Instance>(dsi: &mut DsiHost<'_, DSI>, _color: DsiColor) -> Result<(), dsihost::Error> {
+    async fn init<DSI: dsihost::Instance>(
+        dsi: &mut DsiHost<'_, DSI>,
+        _color: DsiColor,
+    ) -> Result<(), dsihost::Error> {
         // Byte-for-byte the legacy ST driver (stm32-nt35510 v1.0.0, the one the F769 board
         // package calls): `DSI_IO_WriteCmd(n, p)` sends a DCS short write P1 for n ≤ 1 — so the
         // "no parameter" commands go out WITH a 0x00 parameter — and a long write otherwise.
@@ -321,14 +354,19 @@ impl<T: dsihost::Instance> DsiHostCtrlIo for DsiIo<'_, '_, T> {
             DsiWriteCommand::DcsLongWrite { arg, data } => self.0.write_cmd(0, arg, data),
             DsiWriteCommand::GenericLongWrite { arg, data } => self.0.write_cmd(0, arg, data),
             // not used by the OTM8009A init sequence
-            DsiWriteCommand::GenericShortP0 | DsiWriteCommand::GenericShortP1 | DsiWriteCommand::GenericShortP2 => Ok(()),
+            DsiWriteCommand::GenericShortP0
+            | DsiWriteCommand::GenericShortP1
+            | DsiWriteCommand::GenericShortP2 => Ok(()),
             DsiWriteCommand::SetMaximumReturnPacketSize(_) => Ok(()),
         }
     }
 
     fn read(&mut self, command: DsiReadCommand, buf: &mut [u8]) -> Result<(), Self::Error> {
         match command {
-            DsiReadCommand::DcsShort { arg } => self.0.read(0, PacketType::DcsShortPktRead(arg), buf.len() as u16, buf),
+            DsiReadCommand::DcsShort { arg } => {
+                self.0
+                    .read(0, PacketType::DcsShortPktRead(arg), buf.len() as u16, buf)
+            }
             _ => Ok(()),
         }
     }
@@ -418,7 +456,11 @@ fn fix_video_timing<P: DsiPanel>() {
 
 /// Reset the panel, start LTDC + DSI in video mode, detect and init the
 /// controller, and hand back both framebuffers (fb0 is on screen, cleared).
-pub async fn init_display(mut ltdc: Ltdc<'static, LTDC, DSI>, mut dsi: DsiHost<'static, DSIHOST>, reset: &mut Output<'static>) -> Result<Display, dsihost::Error> {
+pub async fn init_display(
+    mut ltdc: Ltdc<'static, LTDC, DSI>,
+    mut dsi: DsiHost<'static, DSIHOST>,
+    reset: &mut Output<'static>,
+) -> Result<Display, dsihost::Error> {
     // XRES pulse (ST: 20 ms low, 10 ms after release)
     reset.set_low();
     Timer::after_millis(20).await;
@@ -456,7 +498,14 @@ pub async fn init_display(mut ltdc: Ltdc<'static, LTDC, DSI>, mut dsi: DsiHost<'
     dsi.start_panel::<Detect>(&phy, &mode).await?;
     fix_video_timing::<Detect>();
     let (ids, panel) = detected();
-    info!("DSI up (v{:#x}); panel IDs {:#04x} {:#04x} {:#04x} → {}", dsi.get_version(), ids[0], ids[1], ids[2], panel);
+    info!(
+        "DSI up (v{:#x}); panel IDs {:#04x} {:#04x} {:#04x} → {}",
+        dsi.get_version(),
+        ids[0],
+        ids[1],
+        ids[2],
+        panel
+    );
 
     match panel {
         PanelKind::Nt35510 => dsi.init_panel::<Nt35510>(DsiColor::Rgb888).await?,
@@ -464,7 +513,9 @@ pub async fn init_display(mut ltdc: Ltdc<'static, LTDC, DSI>, mut dsi: DsiHost<'
             // different porches: put the LTDC back into its reset state (embassy's
             // `init` asserts it), re-time it and the DSI video mode, then init
             ltdc.disable();
-            embassy_stm32::pac::LTDC.gcr().write_value(embassy_stm32::pac::ltdc::regs::Gcr(0x2220));
+            embassy_stm32::pac::LTDC
+                .gcr()
+                .write_value(embassy_stm32::pac::ltdc::regs::Gcr(0x2220));
             ltdc.init(&Otm8009a::ltdc_config());
             ltdc.init_layer(&layer(), None);
             ltdc.init_buffer(LtdcLayer::Layer1, fb0.as_ptr().cast());
@@ -483,7 +534,15 @@ pub async fn init_display(mut ltdc: Ltdc<'static, LTDC, DSI>, mut dsi: DsiHost<'
     {
         let mut fb = fb0.fb();
         fb.fill(rgb565(0x60, 0x60, 0x60));
-        for (i, c) in [rgb565(255, 255, 255), rgb565(255, 0, 0), rgb565(0, 255, 0), rgb565(0, 0, 255)].iter().enumerate() {
+        for (i, c) in [
+            rgb565(255, 255, 255),
+            rgb565(255, 0, 0),
+            rgb565(0, 255, 0),
+            rgb565(0, 0, 255),
+        ]
+        .iter()
+        .enumerate()
+        {
             fb.rect(100 + i as i32 * 160, 100, 120, 280, *c);
         }
     }
@@ -494,12 +553,22 @@ pub async fn init_display(mut ltdc: Ltdc<'static, LTDC, DSI>, mut dsi: DsiHost<'
     let mut rb = [0u8; 5];
     for (i, reg) in [0x0Au8, 0x0B, 0x0C, 0x52, 0x54].iter().enumerate() {
         let mut b = [0u8; 1];
-        rb[i] = match dsi.read(0, PacketType::DcsShortPktRead(*reg), 1, &mut b) { Ok(()) => b[0], Err(_) => 0xEE };
+        rb[i] = match dsi.read(0, PacketType::DcsShortPktRead(*reg), 1, &mut b) {
+            Ok(()) => b[0],
+            Err(_) => 0xEE,
+        };
     }
     info!("panel readback: RDDPM={:#04x} MADCTL={:#04x} COLMOD={:#04x} RDDISBV={:#04x} RDCTRLD={:#04x} (0xEE = read failed)", rb[0], rb[1], rb[2], rb[3], rb[4]);
     Timer::after_millis(2500).await;
     dump_status("2.5 s later");
-    Ok(Display { ltdc, dsi, fb: [fb0, fb1], panel, ids, backlight: None })
+    Ok(Display {
+        ltdc,
+        dsi,
+        fb: [fb0, fb1],
+        panel,
+        ids,
+        backlight: None,
+    })
 }
 
 /// Layer registers are shadowed: make the layer config + framebuffer address
@@ -507,7 +576,8 @@ pub async fn init_display(mut ltdc: Ltdc<'static, LTDC, DSI>, mut dsi: DsiHost<'
 fn reload_now() {
     let l = embassy_stm32::pac::LTDC;
     l.layer(0).cr().modify(|w| w.set_len(true));
-    l.srcr().write(|w| w.set_imr(embassy_stm32::pac::ltdc::vals::Imr::Reload));
+    l.srcr()
+        .write(|w| w.set_imr(embassy_stm32::pac::ltdc::vals::Imr::Reload));
 }
 
 /// LTDC / DSI register snapshot for bring-up: is the controller scanning, does the
