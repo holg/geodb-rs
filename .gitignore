@@ -170,3 +170,8 @@ crates/geodb-globe/.tls/
 # Upstream per-city export (25 MB), read to build the globe layers:
 # geodb-cli build-globe --layers --download-extras
 crates/geodb-core/data/json-cities.json.gz
+
+# Firmware: the generated image and previews (crates/geodb-fw-core --example make_image)
+firmware/*/geodb.fw
+firmware/*/preview*.png
+firmware/*/target/

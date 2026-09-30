@@ -1,0 +1,26 @@
+[package]
+name = "geodb-fw-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "no_std core of the geodb firmware: a zero-copy city image, geoid queries and a software globe renderer"
+publish = false
+
+[features]
+default = []
+# The image builder (needs alloc); the reader and the renderer never do.
+std = []
+
+[dependencies]
+font8x8 = { version = "0.3", default-features = false }
+libm = "0.2"
+
+[dev-dependencies]
+deunicode = { workspace = true }
+geodb-core = { path = "../geodb-core", default-features = false, features = ["compact"] }
+png = "0.18"
+
+[[example]]
+name = "make_image"
+required-features = ["std"]
