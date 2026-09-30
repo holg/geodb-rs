@@ -8,8 +8,8 @@ use core::f32::consts::{FRAC_2_PI, FRAC_PI_2, PI};
 
 // Cody-Waite split of pi/2.
 const PIO2_HI: f32 = 1.570_312_5;
-const PIO2_MID: f32 = 4.837_512_969_970_703e-4;
-const PIO2_LO: f32 = 7.549_789_948_768_648e-8;
+const PIO2_MID: f32 = 4.837_513e-4;
+const PIO2_LO: f32 = 7.549_79e-8;
 
 /// sin and cos of `x` (radians) together.
 pub fn sin_cos(x: f32) -> (f32, f32) {
