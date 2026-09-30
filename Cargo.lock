@@ -174,7 +174,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -3439,7 +3439,8 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scopekit"
 version = "0.1.0"
-source = "git+https://github.com/holg/scopekit?rev=2275f3459e47ad3648b2cb603258fc30aac068e9#2275f3459e47ad3648b2cb603258fc30aac068e9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f48427bb3e0e418cec266cd8ee33f9aa3319668f19c7ea8e2fb1172a42cdb69"
 dependencies = [
  "arboard",
  "crossterm",
