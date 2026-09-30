@@ -17,8 +17,8 @@ const webgpu = !webgl2 && await (async () => {
     try { return !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { return false; }
 })();
 const build = webgpu
-    ? { name: "webgpu", js: "./geodb-globe-eb14a33d460c86d6.js", wasm: "./geodb-globe-eb14a33d460c86d6_bg.wasm" }
-    : { name: "webgl2", js: "./geodb-globe-9484f5623cded2de.js", wasm: "./geodb-globe-9484f5623cded2de_bg.wasm" };
+    ? { name: "webgpu", js: "./geodb-globe-3595490f9e4657ea.js", wasm: "./geodb-globe-3595490f9e4657ea_bg.wasm" }
+    : { name: "webgl2", js: "./geodb-globe-95bed54731f68837.js", wasm: "./geodb-globe-95bed54731f68837_bg.wasm" };
 window.__GEODB_BUILD = build.name;
 window.__GEODB_FILES = { js: build.js, wasm: build.wasm };
 const { default: init } = await import(build.js);
@@ -69,7 +69,7 @@ await init({ module_or_path: build.wasm });
                 linear-gradient(#fff, #fff) center / 100% 1px no-repeat;
         }
         #panel {
-            position: fixed; top: 16px; right: 16px; bottom: 16px; width: 340px;
+            position: fixed; top: 16px; right: 16px; bottom: 16px; width: 400px;
             display: flex; flex-direction: column; gap: 10px; padding: 14px;
             background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
             backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -134,7 +134,7 @@ await init({ module_or_path: build.wasm });
             .hint, footer { display: none; }
         }
     
-        #panel { width: 400px; overflow-y: auto; }
+        #panel { overflow-y: auto; }
         #list { flex: none; max-height: 30vh; }
         li.foot { font-size: 11px; cursor: default; }
         li.foot:hover { background: none; }
@@ -212,6 +212,34 @@ await init({ module_or_path: build.wasm });
         .speed { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
         .speed input { flex: 1; accent-color: var(--accent); }
         #spin-value { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+
+        /* Hide the panel, or pop it out into its own window (same page, same wasm) */
+        .pbtns { position: absolute; top: 8px; right: 10px; display: flex; gap: 4px; z-index: 3; }
+        .pbtns button, #panel-show {
+            font: inherit; font-size: 12px; cursor: pointer; color: var(--text);
+            background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line);
+            border-radius: 6px; padding: 2px 8px;
+        }
+        #panel h1 { padding-right: 70px; }
+        #panel-show {
+            display: none; position: fixed; top: 12px; right: 12px; z-index: 5;
+            padding: 7px 12px; font-size: 13px; background: var(--panel);
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+        }
+        body.nopanel #panel, body.popped #panel { display: none; }
+        body.popped #pop { z-index: 9; }
+        body.nopanel #panel-show, body.popped #panel-show { display: block; }
+        /* In its own window the panel fills it. */
+        body.popwin { overflow: hidden; background: var(--panel); margin: 0; }
+        body.popwin #panel {
+            position: static; width: auto; height: 100vh; max-height: none; box-sizing: border-box;
+            border: 0; border-radius: 0; display: flex;
+        }
+        body.popwin #panel-pop { display: none; }
+        @media (max-width: 720px) {
+            #panel-pop { display: none; }
+            #panel-show { top: auto; bottom: 12px; }
+        }
     </style>
 </head>
 <body>
@@ -222,7 +250,9 @@ await init({ module_or_path: build.wasm });
 <div id="hud"></div>
 <div id="tilecredit"></div>
 <div id="pop"></div>
+<button id="panel-show" title="Show the panel">☰ Panel</button>
 <aside id="panel">
+    <div class="pbtns"><button id="panel-pop" title="Open the panel in its own window (same page, nothing loaded twice)">⧉ Pop out</button><button id="panel-hide" title="Hide the panel">✕</button></div>
     <div>
         <h1>GeoDB <span>Globe Mini</span> <em id="badge"></em></h1>
         <div id="stats"></div>
@@ -280,5 +310,59 @@ await init({ module_or_path: build.wasm });
         street map: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (ODbL)
     </footer>
 </aside>
+<script>
+// Hide the panel (remembered), or pop it out into its own window: the panel
+// element is moved there, so its handlers still run in this page and share
+// its wasm, memory and loaded data. The app finds its elements in either.
+(() => {
+    const body = document.body;
+    const panel = document.getElementById("panel");
+    const show = document.getElementById("panel-show");
+    const store = {
+        get: () => { try { return localStorage.getItem("geodb-panel"); } catch { return null; } },
+        set: (v) => { try { localStorage.setItem("geodb-panel", v); } catch { /* private mode */ } },
+    };
+    let win = null;
+    const label = () => { show.textContent = win ? "⧉ Bring the panel back" : "☰ Panel"; };
+    const setHidden = (h) => { body.classList.toggle("nopanel", h); store.set(h ? "hidden" : "shown"); };
+    if (store.get() === "hidden" || new URLSearchParams(location.search).get("panel") === "hide") {
+        body.classList.add("nopanel");
+    }
+    const bringBack = () => {
+        if (!win) return;
+        const w = win;
+        win = null;
+        window.__GEODB_PANEL_DOC = undefined;
+        body.classList.remove("popped");
+        if (panel.ownerDocument !== document) body.appendChild(document.adoptNode(panel));
+        label();
+        try { if (!w.closed) w.close(); } catch { /* already gone */ }
+    };
+    document.getElementById("panel-hide").onclick = () => (win ? bringBack() : setHidden(true));
+    show.onclick = () => (win ? bringBack() : setHidden(false));
+    document.getElementById("panel-pop").onclick = () => {
+        if (win && !win.closed) { win.focus(); return; }
+        const w = window.open("", "geodb-panel", "popup=yes,width=440,height=" + Math.min(screen.availHeight || 900, 900));
+        if (!w) {
+            const s = document.getElementById("layerstatus");
+            if (s) s.textContent = "The browser blocked the pop-up window: allow pop-ups for this page.";
+            return;
+        }
+        const d = w.document;
+        d.title = document.title + " · panel";
+        d.head.innerHTML = '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
+        for (const style of document.querySelectorAll("style")) d.head.appendChild(style.cloneNode(true));
+        d.body.className = "popwin";
+        d.body.appendChild(d.adoptNode(panel));
+        win = w;
+        window.__GEODB_PANEL_DOC = d;
+        body.classList.add("popped");
+        label();
+        w.addEventListener("pagehide", bringBack);
+    };
+    window.addEventListener("pagehide", () => { try { if (win) win.close(); } catch { /* gone */ } });
+    label();
+})();
+</script>
 </body>
 </html>
