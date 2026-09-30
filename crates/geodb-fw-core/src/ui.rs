@@ -386,10 +386,15 @@ pub fn advance(view: &mut View, spin: Spin, dt_s: f32) {
 /// Drags the view by (dx, dy) screen pixels: the point under the finger
 /// stays under it.
 pub fn pan(view: &mut View, dx: i32, dy: i32) {
+    pan_f(view, dx as f32, dy as f32);
+}
+
+/// [`pan`] in fractional pixels (a coasting globe moves less than a pixel a frame).
+pub fn pan_f(view: &mut View, dx: f32, dy: f32) {
     let deg_per_px = view.span() / DEG_TO_RAD / GLOBE_R as f32;
     let cos_lat = crate::fmath::cos(view.lat * DEG_TO_RAD).max(0.05);
-    view.lon = wrap_lon(view.lon - dx as f32 * deg_per_px / cos_lat);
-    view.lat = (view.lat + dy as f32 * deg_per_px).clamp(-89.5, 89.5);
+    view.lon = wrap_lon(view.lon - dx * deg_per_px / cos_lat);
+    view.lat = (view.lat + dy * deg_per_px).clamp(-89.5, 89.5);
 }
 
 fn wrap_lon(mut lon: f32) -> f32 {

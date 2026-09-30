@@ -217,67 +217,106 @@ async fn main(_spawner: Spawner) {
     draw_and_show(&mut disp, &mut front, &img, view, spin, &mut lut, &mut red).await;
     green.set_high();
 
-    // ---- touch: a tap is a button or a point on the globe, a drag pans; while spinning the
-    // screen is redrawn back to back, paced by the panel's refresh ----
-    let mut down: Option<(u16, u16)> = None;
-    let mut last = (0u16, 0u16);
+    // ---- touch: the globe is grabbed like a heavy trackball: it follows the finger while it is
+    // down, keeps rolling (and slows down) after a flick. A short touch is a tap: a button or a
+    // point on the globe. The screen is redrawn back to back while anything moves. ----
+    const FRICTION: f32 = 2.5; // 1/s: the roll decays as exp(-FRICTION t)
+    const STOP_PX_S: f32 = 12.0;
+    let mut grab: Option<Grab> = None;
+    let mut vel = (0.0f32, 0.0f32); // px/s
     let mut stamp = Instant::now();
     let mut frames = 0u32;
+    let mut draw_ms = 0u32;
     let mut since = Instant::now();
     loop {
-        if !spin.on {
-            Timer::after_millis(30).await;
+        let moving = spin.on || grab.is_some() || vel.0.abs() + vel.1.abs() > STOP_PX_S;
+        if !moving {
+            Timer::after_millis(20).await;
         }
+        let dt = (stamp.elapsed().as_micros() as f32 / 1.0e6).min(0.25);
+        stamp = Instant::now();
         let now = touch.as_mut().and_then(|t| t.read());
         let mut redraw = spin.on;
-        match (down, now) {
+        match (grab, now) {
             (None, Some(pos)) => {
-                down = Some(pos);
-                last = pos;
+                vel = (0.0, 0.0);
+                grab = Some(Grab {
+                    start: pos,
+                    last: pos,
+                    dragging: false,
+                });
             }
-            (Some(_), Some(pos)) => last = pos,
-            (Some(start), None) => {
-                down = None;
+            (Some(mut g), Some(pos)) => {
                 let (dx, dy) = (
-                    i32::from(last.0) - i32::from(start.0),
-                    i32::from(last.1) - i32::from(start.1),
+                    i32::from(pos.0) - i32::from(g.last.0),
+                    i32::from(pos.1) - i32::from(g.last.1),
                 );
-                if dx.abs() + dy.abs() < 16 {
-                    let action = ui::hit(view, i32::from(start.0), i32::from(start.1));
-                    info!("tap {},{}", start.0, start.1);
+                let far = (i32::from(pos.0) - i32::from(g.start.0)).abs()
+                    + (i32::from(pos.1) - i32::from(g.start.1)).abs();
+                if far >= 12 {
+                    g.dragging = true;
+                }
+                if g.dragging && dt > 0.0 {
+                    ui::pan(&mut view, dx, dy);
+                    // a smoothed finger speed, for the flick
+                    let k = (dt * 20.0).min(1.0);
+                    vel.0 += (dx as f32 / dt - vel.0) * k;
+                    vel.1 += (dy as f32 / dt - vel.1) * k;
+                    redraw = true;
+                }
+                g.last = pos;
+                grab = Some(g);
+            }
+            (Some(g), None) => {
+                grab = None;
+                if g.dragging {
+                    info!("flick {},{} px/s", vel.0 as i32, vel.1 as i32);
+                } else {
+                    vel = (0.0, 0.0);
+                    let action = ui::hit(view, i32::from(g.start.0), i32::from(g.start.1));
+                    info!("tap {},{}", g.start.0, g.start.1);
                     if action != ui::Action::None {
                         ui::apply(&mut view, &mut spin, action);
                         redraw = true;
                     }
-                } else {
-                    info!("drag {},{}", dx, dy);
-                    ui::pan(&mut view, dx, dy);
-                    redraw = true;
                 }
             }
-            (None, None) => {}
+            (None, None) => {
+                if vel.0.abs() + vel.1.abs() > STOP_PX_S {
+                    ui::pan_f(&mut view, vel.0 * dt, vel.1 * dt);
+                    let decay = 1.0 - (FRICTION * dt).min(1.0);
+                    vel = (vel.0 * decay, vel.1 * decay);
+                    redraw = true;
+                } else {
+                    vel = (0.0, 0.0);
+                }
+            }
         }
-        let dt = stamp.elapsed().as_micros() as f32 / 1.0e6;
-        stamp = Instant::now();
         if spin.on {
-            ui::advance(&mut view, spin, dt.min(0.5));
+            ui::advance(&mut view, spin, dt);
         }
         if redraw {
-            draw_and_show(&mut disp, &mut front, &img, view, spin, &mut lut, &mut red).await;
-            if spin.on {
-                frames += 1;
-                if frames == 30 {
-                    let ms = since.elapsed().as_millis() as u32;
-                    info!("spin {} deg/s: {} ms per frame", spin.dps as u32, ms / 30);
-                    frames = 0;
-                    since = Instant::now();
-                }
-            } else {
+            draw_ms =
+                draw_and_show(&mut disp, &mut front, &img, view, spin, &mut lut, &mut red).await;
+            frames += 1;
+            if frames == 30 {
+                let ms = since.elapsed().as_millis() as u32;
+                info!("moving: {} ms per frame ({} ms drawing)", ms / 30, draw_ms);
                 frames = 0;
                 since = Instant::now();
             }
+        } else {
+            frames = 0;
+            since = Instant::now();
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct Grab {
+    start: (u16, u16),
+    last: (u16, u16),
+    dragging: bool,
 }
 
 /// Draws the screen into the back buffer, then makes it the one on the panel.
@@ -289,10 +328,9 @@ async fn draw_and_show(
     spin: ui::Spin,
     lut: &mut GlobeLut<'_>,
     red: &mut Output<'static>,
-) {
+) -> u32 {
     red.set_high();
     let back = 1 - *front;
-    let t = Instant::now();
     let cycles = DWT::cycle_count();
     ui::draw(&mut disp.fb[back].fb(), img, view, spin, Some(lut));
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;
@@ -306,15 +344,6 @@ async fn draw_and_show(
     } else {
         warn!("display: buffer swap failed");
     }
-    if !spin.on {
-        info!(
-            "screen at {}, {} zoom {}: drawn in {} ms ({} ms with the swap)",
-            (view.lat * 1000.0) as i32,
-            (view.lon * 1000.0) as i32,
-            (view.zoom * 10.0) as u32,
-            ms,
-            t.elapsed().as_millis()
-        );
-    }
     red.set_low();
+    ms
 }
