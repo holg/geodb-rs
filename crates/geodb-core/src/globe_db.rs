@@ -35,7 +35,7 @@
 use crate::error::{GeoError, Result};
 use crate::spatial::{decode_geoid, generate_geoid, haversine_distance, RadiusBounds};
 #[cfg(not(feature = "legacy_model"))]
-use crate::text::fold_key;
+use crate::text::{fold_key, FoldTable};
 #[cfg(not(feature = "legacy_model"))]
 use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};
@@ -154,6 +154,14 @@ pub struct CompactGlobeDb {
     /// attached (see [`crate::globe_layers`]).
     #[serde(default)]
     pub names: Option<crate::globe_layers::GlobeNames>,
+    /// Transliteration of the characters of the names in this file (see
+    /// [`FoldTable`]): what the search folds with, instead of `deunicode`.
+    #[serde(default)]
+    pub fold: FoldTable,
+    /// The same for the characters only the meta and names layers have
+    /// (the fold layer).
+    #[serde(default)]
+    pub fold_more: Option<FoldTable>,
 }
 
 /// A city with its state and country.
@@ -235,11 +243,19 @@ impl CompactGlobeDb {
         let mut order: Vec<u32> = (0..cities.len() as u32).collect();
         order.sort_unstable_by_key(|&i| (cities[i as usize].geoid, i));
         let mut slots: Vec<Option<GlobeCity>> = cities.into_iter().map(Some).collect();
-        let cities = order
+        let cities: Vec<GlobeCity> = order
             .iter()
             .filter_map(|&i| slots[i as usize].take())
             .collect();
 
+        let fold = FoldTable::from_texts(
+            countries
+                .iter()
+                .map(|c| c.name.as_str())
+                .chain(states.iter().map(|s| s.name.as_str()))
+                .chain(cities.iter().map(|c| c.name.as_str())),
+            None,
+        );
         (
             Self {
                 countries,
@@ -249,6 +265,8 @@ impl CompactGlobeDb {
                 exact: None,
                 meta: None,
                 names: None,
+                fold,
+                fold_more: None,
             },
             order,
         )
@@ -430,6 +448,10 @@ impl CompactGlobeDb {
         for c in &self.cities {
             w.text(&c.name)?;
         }
+        // The fold table (files from before it end at the names).
+        if !self.fold.is_empty() {
+            self.fold.write(&mut w)?;
+        }
 
         let mut out = Vec::with_capacity(w.buf.len() / 3);
         out.extend_from_slice(GLOBE_MAGIC);
@@ -567,6 +589,11 @@ impl CompactGlobeDb {
                 rank: ranks[i],
             });
         }
+        let fold = if r.pos < r.buf.len() {
+            FoldTable::read(&mut r)?
+        } else {
+            FoldTable::default()
+        };
         if r.pos != r.buf.len() {
             return Err(bad("trailing data"));
         }
@@ -578,6 +605,8 @@ impl CompactGlobeDb {
             exact: None,
             meta: None,
             names: None,
+            fold,
+            fold_more: None,
         })
     }
 

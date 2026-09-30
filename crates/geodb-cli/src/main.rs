@@ -436,7 +436,11 @@ fn build_globe(
         if let Some(x) = extras {
             println!("  Extras: matched {} of {} cities", files.matched, x.len());
         }
-        let mut list = vec![("coords", &files.coords), ("meta", &files.meta)];
+        let mut list = vec![
+            ("coords", &files.coords),
+            ("meta", &files.meta),
+            ("fold", &files.fold),
+        ];
         if let Some(names) = &files.names {
             list.push(("names", names));
         }

@@ -6,6 +6,7 @@
 //! - `cities.meta`: optional layer: population, type, timezones, codes,
 //!   country details
 //! - `cities.names`: optional layer: native names, 19 languages, Wikidata
+//! - `cities.fold`: optional layer: transliteration for searching the meta and names texts across scripts
 //!   (population, type and names need the upstream per-city export at
 //!   `geodb-core/data/json-cities.json.gz`:
 //!   `geodb-cli build-globe --layers --download-extras` fetches it)
@@ -65,8 +66,19 @@ fn main() {
         .map(|b| b.parse().expect("BITS: an even number 32..=64"))
         .unwrap_or(32);
     let globe = CompactGlobeDb::from_db(data::db());
-    let land = rings(&root.join("assets/ne_50m_land.geojson.gz"));
-    let lakes = rings(&root.join("assets/ne_50m_lakes.geojson.gz"));
+    // The start-up bake is 2048 px wide (0.18 degrees a pixel): outlines
+    // within 0.03 degrees and islands under 0.15 degrees change no pixel
+    // visibly and take half the bytes.
+    let land = coast::simplify(
+        &rings(&root.join("assets/ne_50m_land.geojson.gz")),
+        0.03,
+        0.15,
+    );
+    let lakes = coast::simplify(
+        &rings(&root.join("assets/ne_50m_lakes.geojson.gz")),
+        0.03,
+        0.15,
+    );
     let (cities, states, countries) = globe.stats();
     let points: usize = land.iter().chain(&lakes).map(Vec::len).sum();
     println!(
@@ -103,6 +115,7 @@ fn main() {
             ("cities.globe", &files.base),
             ("cities.coords", &files.coords),
             ("cities.meta", &files.meta),
+            ("cities.fold", &files.fold),
             ("coast.bin", &coast),
         ]
         .into_iter()

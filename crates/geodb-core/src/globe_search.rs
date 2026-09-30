@@ -1,7 +1,8 @@
 //! Smart search for the compact globe database: the same folding
-//! ([`fold_key`](crate::text::fold_key): deunicode + lowercase, so "München",
-//! "Munchen" and "munchen" match, and "ミュンヘン" folds to "myunhen") and the
-//! same scores as `GeoDb::smart_search`, over search blobs built from
+//! ([`fold_key`](crate::text::fold_key): transliteration + lowercase, so
+//! "München", "Munchen" and "munchen" match, and "ミュンヘン" folds to
+//! "myunhen") but from the files' own [`FoldTable`](crate::text::FoldTable)s
+//! instead of `deunicode`, and the same scores as `GeoDb::smart_search`, over search blobs built from
 //! whatever the [`CompactGlobeDb`] has loaded:
 //!
 //! - base: country, state and city names, ISO2 codes
@@ -13,7 +14,7 @@
 //! query is one substring scan per level and a binary search per hit.
 
 use crate::globe_db::CompactGlobeDb;
-use crate::text::fold_key;
+use crate::text::Folder;
 
 /// What a hit is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,17 +127,23 @@ pub struct GlobeSearchIndex {
     cities: Blob,
     /// Per country: phone code digits (meta layer), "" when unknown.
     phones: Vec<String>,
+    /// Folds names and queries alike, from the base file's table and the
+    /// fold layer's.
+    folder: Folder,
 }
 
 impl GlobeSearchIndex {
     pub fn build(globe: &CompactGlobeDb) -> GlobeSearchIndex {
         let meta = globe.meta.as_ref();
         let names = globe.names.as_ref();
+        let folder =
+            Folder::new(std::iter::once(globe.fold.clone()).chain(globe.fold_more.clone()));
+        let fold_key = |s: &str| folder.fold(s);
         let countries = Blob::build(globe.countries.iter().enumerate().map(|(i, c)| {
             let mut f = vec![fold_key(&c.name), c.iso2.to_ascii_lowercase()];
             if let Some(m) = meta.and_then(|m| m.countries.get(i)) {
                 f.extend(m.iso3.as_deref().map(str::to_ascii_lowercase));
-                f.extend(m.native_name.as_deref().map(fold_key));
+                f.extend(m.native_name.as_deref().map(&fold_key));
                 f.extend(m.translations.iter().map(|(_, t)| fold_key(t)));
             }
             f
@@ -144,7 +151,7 @@ impl GlobeSearchIndex {
         let states = Blob::build(globe.states.iter().enumerate().map(|(i, s)| {
             let mut f = vec![fold_key(&s.name)];
             if let Some(m) = meta.and_then(|m| m.states.get(i)) {
-                f.extend(m.native_name.as_deref().map(fold_key));
+                f.extend(m.native_name.as_deref().map(&fold_key));
                 f.extend(m.full_code.as_deref().map(str::to_ascii_lowercase));
             }
             f
@@ -156,7 +163,7 @@ impl GlobeSearchIndex {
                 f.extend(n.regions.iter().map(|r| fold_key(r)));
             }
             if let Some(n) = names {
-                f.extend(n.all(i).map(fold_key));
+                f.extend(n.all(i).map(&fold_key));
             }
             f
         }));
@@ -175,6 +182,7 @@ impl GlobeSearchIndex {
             states,
             cities,
             phones,
+            folder,
         }
     }
 
@@ -184,6 +192,7 @@ impl GlobeSearchIndex {
             + self.states.bytes()
             + self.cities.bytes()
             + self.phones.iter().map(String::len).sum::<usize>()
+            + self.folder.heap_bytes()
     }
 
     /// Hits for `query`, best first (ties in database order), scored as in
@@ -193,7 +202,7 @@ impl GlobeSearchIndex {
         if raw.is_empty() {
             return Vec::new();
         }
-        let q = fold_key(raw);
+        let q = self.folder.fold(raw);
         let mut out = Vec::new();
         let hit = |score, item| GlobeSmartHit { score, item };
 
@@ -286,6 +295,23 @@ mod tests {
         let mut g = CompactGlobeDb::from_bytes(&f.base).unwrap();
         let index = GlobeSearchIndex::build(&g);
 
+        // The base file's own table folds every name like the full
+        // transliteration, and is small.
+        let folder = crate::text::Folder::new([g.fold.clone()]);
+        for c in &g.cities {
+            assert_eq!(
+                folder.fold(&c.name),
+                crate::text::fold_key(&c.name),
+                "{}",
+                c.name
+            );
+        }
+        assert!(
+            g.fold.len() > 100 && g.fold.len() < 3000,
+            "{}",
+            g.fold.len()
+        );
+
         // Diacritics fold both ways.
         let hits = index.smart_search(&g, "sao paulo");
         assert!(
@@ -318,6 +344,31 @@ mod tests {
             g.countries[g.cities[first_city].country_id as usize].iso2,
             "DE"
         );
+
+        // The fold layer covers what the meta layer adds (native names in
+        // other scripts): without it only the exact script matches, with it
+        // the transliteration does too ("Ri Ben" for 日本, as `deunicode`).
+        g.attach_layer(&f.meta).unwrap();
+        let plain = GlobeSearchIndex::build(&g);
+        g.attach_layer(&f.fold).unwrap();
+        assert!(g.fold_more.as_ref().is_some_and(|t| !t.is_empty()));
+        let with = GlobeSearchIndex::build(&g);
+        assert!(with.heap_bytes() > plain.heap_bytes());
+        // Every text of the meta layer folds like the full transliteration.
+        let folder = crate::text::Folder::new([g.fold.clone(), g.fold_more.clone().unwrap()]);
+        for t in g.layer_texts() {
+            assert_eq!(folder.fold(t), crate::text::fold_key(t), "{t}");
+        }
+        let japan = |hits: &[GlobeSmartHit]| {
+            hits.iter().any(
+                |h| matches!(h.item, GlobeSmartItem::Country(i) if g.countries[i].iso2 == "JP"),
+            )
+        };
+        assert!(japan(&with.smart_search(&g, "ri ben")));
+        assert!(!japan(&plain.smart_search(&g, "ri ben")));
+        assert!(japan(&plain.smart_search(&g, "日本")));
+        g.detach_layer(crate::globe_layers::LayerKind::Fold);
+        assert!(g.fold_more.is_none());
 
         // The meta layer adds phone codes and ISO3.
         g.attach_layer(&f.meta).unwrap();

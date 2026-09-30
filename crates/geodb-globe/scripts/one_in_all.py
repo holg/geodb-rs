@@ -14,10 +14,14 @@ Writes crates/geodb-globe/dist-one/one-in-all.html (or one-in-all-flex.html).
 
 import argparse
 import base64
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import web_release  # noqa: E402  (SIZE_PROFILE)
 
 CRATE = Path(__file__).resolve().parent.parent
 # Fixed width, so writing the real size does not change the size.
@@ -29,6 +33,7 @@ def build(page: str, dist: Path) -> None:
         ["trunk", "build", page, "--release", "--dist", str(dist)],
         cwd=CRATE,
         check=True,
+        env={**os.environ, **web_release.SIZE_PROFILE},
     )
 
 
@@ -58,7 +63,7 @@ def main() -> None:
     glue = next(p for p in dist.glob("*.js"))
     # Data and the optional layers (loaded on demand, but inline too); the
     # names layer (~11 MB) only when asked for.
-    kinds = (".globe", ".bin", ".coords", ".meta") + ((".names",) if args.with_names else ())
+    kinds = (".globe", ".bin", ".coords", ".meta", ".fold") + ((".names",) if args.with_names else ())
     data = sorted(p for p in dist.iterdir() if p.suffix in kinds)
 
     # Drop trunk's loader, preloads and copied-file links.

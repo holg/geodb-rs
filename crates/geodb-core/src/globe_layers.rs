@@ -66,6 +66,8 @@ pub enum LayerKind {
     Coords = 1,
     Meta = 2,
     Names = 3,
+    /// Transliteration of the characters of the meta and names layers.
+    Fold = 4,
 }
 
 impl LayerKind {
@@ -74,6 +76,7 @@ impl LayerKind {
             LayerKind::Coords => "coords",
             LayerKind::Meta => "meta",
             LayerKind::Names => "names",
+            LayerKind::Fold => "fold",
         }
     }
 }
@@ -420,6 +423,9 @@ pub struct GlobeFiles {
     pub meta: Vec<u8>,
     /// Only with [`CityExtras`].
     pub names: Option<Vec<u8>>,
+    /// The transliteration of the meta and names layers' characters, for
+    /// the search (the base file carries its own).
+    pub fold: Vec<u8>,
     /// Cities matched in the extras (0 without them).
     pub matched: usize,
 }
@@ -738,11 +744,24 @@ pub fn build_globe_files<B: crate::traits::GeoBackend>(
         None => None,
     };
 
+    // The fold layer: what the meta and names layers' texts need beyond
+    // the base file's own table. Read the files back to see those texts.
+    let mut back = CompactGlobeDb::from_bytes(&base)?;
+    back.attach_layer(&meta)?;
+    if let Some(names) = &names {
+        back.attach_layer(names)?;
+    }
+    let more = crate::text::FoldTable::from_texts(back.layer_texts(), Some(&back.fold));
+    let mut w = Writer::default();
+    more.write(&mut w)?;
+    let fold = pack(LayerKind::Fold, geoid_bits, print, n, &w.buf, compress)?;
+
     Ok(GlobeFiles {
         base,
         coords,
         meta,
         names,
+        fold,
         matched,
     })
 }
@@ -789,6 +808,7 @@ impl CompactGlobeDb {
             1 => LayerKind::Coords,
             2 => LayerKind::Meta,
             3 => LayerKind::Names,
+            4 => LayerKind::Fold,
             k => return Err(bad(&format!("unknown kind {k}"))),
         };
         let bits = bytes[7];
@@ -988,6 +1008,9 @@ impl CompactGlobeDb {
                     wikidata,
                 });
             }
+            LayerKind::Fold => {
+                self.fold_more = Some(crate::text::FoldTable::read(&mut r)?);
+            }
         }
         if r.pos != r.buf.len() {
             return Err(bad("trailing data"));
@@ -1001,7 +1024,33 @@ impl CompactGlobeDb {
             LayerKind::Coords => self.exact = None,
             LayerKind::Meta => self.meta = None,
             LayerKind::Names => self.names = None,
+            LayerKind::Fold => self.fold_more = None,
         }
+    }
+
+    /// The texts the meta and names layers add to the search (aliases,
+    /// regions, native names, translations, codes): what the fold layer
+    /// covers.
+    pub fn layer_texts(&self) -> impl Iterator<Item = &str> + '_ {
+        let meta = self.meta.iter().flat_map(|m| {
+            let countries = m.countries.iter().flat_map(|c| {
+                c.native_name
+                    .as_deref()
+                    .into_iter()
+                    .chain(c.translations.iter().map(|(_, t)| t.as_str()))
+            });
+            let states = m.states.iter().filter_map(|s| s.native_name.as_deref());
+            let cities = m
+                .city_names
+                .iter()
+                .flat_map(|n| n.aliases.iter().chain(n.regions.iter()).map(String::as_str));
+            countries.chain(states).chain(cities)
+        });
+        let names = self
+            .names
+            .iter()
+            .flat_map(|n| (0..self.cities.len()).flat_map(move |i| n.all(i)));
+        meta.chain(names)
     }
 
     /// Worst position error of the geoids, in metres (0 when exact).
@@ -1193,6 +1242,23 @@ mod tests {
             .filter(|&i| meta.city_population(i).is_some())
             .count();
         assert!(with_pop > 100_000, "{with_pop} cities with population");
+
+        // The fold layer folds every text of both layers like the full
+        // transliteration does, and stays small.
+        assert_eq!(globe.attach_layer(&f.fold).unwrap(), LayerKind::Fold);
+        let folder =
+            crate::text::Folder::new([globe.fold.clone(), globe.fold_more.clone().unwrap()]);
+        let mut checked = 0usize;
+        for t in globe.layer_texts() {
+            assert_eq!(folder.fold(t), crate::text::fold_key(t), "{t}");
+            checked += 1;
+        }
+        assert!(checked > 1_000_000, "{checked} texts");
+        assert!(f.fold.len() < 20_000, "{} bytes", f.fold.len());
+        assert_eq!(
+            folder.fold("ミュンヘン"),
+            crate::text::fold_key("ミュンヘン")
+        );
     }
 
     #[test]

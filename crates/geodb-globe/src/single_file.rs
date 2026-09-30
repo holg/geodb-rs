@@ -59,7 +59,10 @@ pub fn gzip_inside(name: &str, bytes: &[u8]) -> Vec<u8> {
     };
     if name.ends_with(".globe") && bytes.starts_with(b"GDBG") {
         with_flag(8)
-    } else if (name.ends_with(".coords") || name.ends_with(".meta") || name.ends_with(".names"))
+    } else if (name.ends_with(".coords")
+        || name.ends_with(".meta")
+        || name.ends_with(".names")
+        || name.ends_with(".fold"))
         && bytes.starts_with(b"GDBL")
     {
         with_flag(20)

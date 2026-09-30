@@ -38,6 +38,7 @@ the real server too for per-query benchmark samples).
 
 import argparse
 import gzip
+import os
 import re
 import http.server
 import shutil
@@ -60,6 +61,7 @@ TYPES = {
     ".coords": "application/octet-stream",
     ".meta": "application/octet-stream",
     ".names": "application/octet-stream",
+    ".fold": "application/octet-stream",
     ".webp": "image/webp",
 }
 # Already compressed: served as they are.
@@ -67,9 +69,21 @@ NO_PRECOMPRESS = {".webp"}
 DETAIL = CRATE / "assets" / "detail"
 
 
+# The web builds are size-tuned: opt-level s with fat LTO and one codegen unit
+# is 12% smaller than the default release profile (brotli) and faster on
+# the CPU queries (opt-level z: 5% smaller still, but 26% slower).
+SIZE_PROFILE = {
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "s",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_PANIC": "abort",
+}
+
+
 def build(page: str, dist: Path | None = None) -> Path:
     dist = dist or CRATE / ("dist-flex" if page == "flex.html" else "dist-mini")
-    subprocess.run(["trunk", "build", page, "--release", "--dist", str(dist)], cwd=CRATE, check=True)
+    subprocess.run(["trunk", "build", page, "--release", "--dist", str(dist)], cwd=CRATE, check=True,
+                   env={**os.environ, **SIZE_PROFILE})
     return dist
 
 

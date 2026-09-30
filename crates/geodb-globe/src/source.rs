@@ -210,7 +210,7 @@ impl GlobeSource for MiniDb {
             ),
             (
                 "search",
-                "smart search as GeoDb: folded (deunicode), ISO codes; + aliases, phone codes \
+                "smart search as GeoDb: folded (transliteration tables in the files), ISO codes; + aliases, phone codes \
                  with meta; + native names and 19 languages with names"
                     .into(),
             ),
@@ -273,7 +273,8 @@ impl GlobeSource for MiniDb {
                     .sum::<usize>()
                 + m.states.len() * 160
         });
-        mini::heap_bytes(&g) + exact + meta + names
+        let fold = g.fold.heap_bytes() + g.fold_more.as_ref().map_or(0, |f| f.heap_bytes());
+        mini::heap_bytes(&g) + exact + meta + names + fold
     }
 
     fn index_bytes(&self) -> usize {
@@ -496,6 +497,11 @@ impl GlobeSource for MiniDb {
                 "native names, 19 languages, Wikidata",
                 g.names.is_some(),
             ),
+            (
+                "cities.fold",
+                "search across scripts: transliteration of the meta and names texts",
+                g.fold_more.is_some(),
+            ),
         ]
     }
 
@@ -516,6 +522,7 @@ impl GlobeSource for MiniDb {
             "cities.coords" => LayerKind::Coords,
             "cities.meta" => LayerKind::Meta,
             "cities.names" => LayerKind::Names,
+            "cities.fold" => LayerKind::Fold,
             other => return Err(format!("no layer {other}")),
         };
         // Drop the index (it holds folded copies; the next search builds

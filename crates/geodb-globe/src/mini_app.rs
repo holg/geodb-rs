@@ -297,6 +297,7 @@ fn network() -> Vec<(String, f64, f64)> {
         } else if file.ends_with(".coords")
             || file.ends_with(".meta")
             || file.ends_with(".names")
+            || file.ends_with(".fold")
             || file.ends_with(".webp")
             || file == "coast10m.bin"
         {
@@ -2653,6 +2654,26 @@ fn render_layers(doc: &Document, src: &dyn GlobeSource) {
 
 /// Fetches and attaches one layer, then refreshes what depends on it.
 async fn load_layer(app: Rc<RefCell<App>>, file: String) {
+    load_layer_file(app.clone(), file.clone()).await;
+    // The meta and names layers bring texts in other scripts: their
+    // transliteration (the fold layer) comes along, as its own row.
+    let (src, fold) = {
+        let a = app.borrow();
+        let loaded = a
+            .source
+            .layers()
+            .iter()
+            .any(|(f, _, on)| *f == "cities.fold" && *on);
+        (a.source, !loaded)
+    };
+    let has = |f: &str| src.layers().iter().any(|(n, _, on)| *n == f && *on);
+    if fold && (file == "cities.meta" || file == "cities.names") && has(&file) {
+        load_layer_file(app, "cities.fold".into()).await;
+    }
+}
+
+/// Fetches and attaches one layer file.
+async fn load_layer_file(app: Rc<RefCell<App>>, file: String) {
     let (src, doc) = {
         let a = app.borrow();
         (a.source, a.doc.clone())
@@ -4024,13 +4045,18 @@ async fn run() -> Result<(), String> {
                 .unwrap_or_default()
         };
         let layers: Vec<String> = if deepest {
-            vec!["coords".into(), "meta".into(), "names".into()]
+            vec![
+                "coords".into(),
+                "meta".into(),
+                "names".into(),
+                "fold".into(),
+            ]
         } else {
             list("layers")
         }
         .into_iter()
         .filter_map(|l| match l.as_str() {
-            "coords" | "meta" | "names" => Some(format!("cities.{l}")),
+            "coords" | "meta" | "names" | "fold" => Some(format!("cities.{l}")),
             _ => None,
         })
         .collect();
