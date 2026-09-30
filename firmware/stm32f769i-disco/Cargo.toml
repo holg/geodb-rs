@@ -16,11 +16,27 @@ defmt = "1.0"
 # disable-blocking-mode: never stall on a full RTT buffer. The DISCO's ST-LINK V2-1 drops the
 # SWD link now and then; with the channel in block-if-full mode the firmware would then hang.
 defmt-rtt = { version = "1.0", features = ["disable-blocking-mode"] }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = ["platform-cortex-m", "executor-thread", "defmt"] }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
+  "platform-cortex-m",
+  "executor-thread",
+  "defmt",
+] }
 # embassy from git: `dsihost` (the MIPI-DSI host of the DISCO's panel) is not on crates.io yet.
 # One pinned revision for every embassy crate (the one the plantworks gateway uses).
-embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = ["defmt", "stm32f769ni", "memory-x", "unstable-pac", "time-driver-any", "exti", "single-bank"] }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
+  "defmt",
+  "stm32f769ni",
+  "memory-x",
+  "unstable-pac",
+  "time-driver-any",
+  "exti",
+  "single-bank",
+] }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
+  "defmt",
+  "defmt-timestamp-uptime",
+  "tick-hz-32_768",
+] }
 embedded-display-controller = "0.2"
 embedded-hal-02 = { package = "embedded-hal", version = "0.2" }
 geodb-fw-core = { path = "../../crates/geodb-fw-core" }
