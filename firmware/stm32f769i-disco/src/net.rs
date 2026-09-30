@@ -19,6 +19,25 @@ static mut PACKETS: MaybeUninit<PacketQueue<4, 4>> = MaybeUninit::uninit();
 static mut STORAGE: MaybeUninit<StackStorage<'static>> = MaybeUninit::uninit();
 pub static DEVICE: StaticCell<Device> = StaticCell::new();
 
+extern "C" {
+    static mut __sethbuf: u32;
+    static mut __eethbuf: u32;
+}
+
+/// Zeroes the `.ethbuf` window. It is NOLOAD (cortex-m-rt only clears `.bss`), and the packet pool
+/// inside it is a zero-initialised static: left as it powers up it reads as "exhausted".
+///
+/// # Safety
+/// Call once, first, after the MPU region makes the window non-cacheable.
+pub unsafe fn clear_buffers() {
+    let mut at = core::ptr::addr_of_mut!(__sethbuf);
+    let end = core::ptr::addr_of_mut!(__eethbuf);
+    while at < end {
+        at.write_volatile(0);
+        at = at.add(1);
+    }
+}
+
 /// The stack storage, initialised once.
 ///
 /// # Safety

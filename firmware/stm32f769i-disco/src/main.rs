@@ -184,6 +184,8 @@ async fn main(spawner: Spawner) {
         stm32_fmc::devices::mt48lc4m32b2_6::Mt48lc4m32b2 {},
     );
     display::init_sdram(sdram);
+    // (the MPU now maps the Ethernet window non-cacheable)
+    unsafe { net::clear_buffers() };
 
     // ---- the panel: reset PJ15, TE PJ2, backlight enable PI14 (BL_CTRL: no DSI command lights the
     // panel while it is low) ----

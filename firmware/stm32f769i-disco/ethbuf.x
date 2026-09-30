@@ -11,8 +11,11 @@ SECTIONS
 {
   .ethbuf (NOLOAD) : ALIGN(32)
   {
+    __sethbuf = .;
     *(.ethbuf .ethbuf.*)
     /* the stack's global packet pool (xarxa-driver) */
     *(.bss._ZN12xarxa_driver3buf4POOL*)
+    . = ALIGN(4);
+    __eethbuf = .;
   } > ETH
 }
