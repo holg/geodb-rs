@@ -140,6 +140,9 @@ struct App {
     /// the earth again once the cities (their lights) are loaded, and the
     /// width of that texture.
     tiny: Option<(Vec<u8>, u32, u32)>,
+    /// The packed 1:50m coastlines while the coastline earth is loaded (the
+    /// other start earth, see `load_start_earth`).
+    coast: Option<Vec<u8>>,
     tex_w: u32,
     /// Built on first use: the geoids uploaded for compute queries.
     gpu_index: Option<Rc<GpuGeoidIndex>>,
@@ -861,6 +864,9 @@ impl App {
         if self.source.has_base() && self.data.key == "mini" {
             q.push("load=cities".into());
         }
+        if self.surface.staged && self.coast.is_some() {
+            q.push("earth=coast".into());
+        }
         let layers: Vec<&str> = self
             .source
             .layers()
@@ -914,11 +920,13 @@ impl App {
 
     /// Files a single-file copy needs for what is loaded now.
     fn loaded_files(&self) -> Vec<String> {
-        let mut files = vec![if self.tiny.is_some() {
-            "earth-tiny.webp".to_string()
-        } else {
-            "coast.bin".to_string()
-        }];
+        let mut files = Vec::new();
+        if self.tiny.is_some() {
+            files.push("earth-tiny.webp".to_string());
+        }
+        if self.coast.is_some() || !self.surface.staged {
+            files.push("coast.bin".to_string());
+        }
         if self.source.has_base() {
             files.push(self.data.file.to_string());
         }
@@ -1620,6 +1628,8 @@ struct Surface {
     /// GPU bytes of the vector coastlines, when loaded.
     lines: Option<f64>,
     lines_on: bool,
+    /// Starts from the tiny picture: the coastline earth can replace it.
+    staged: bool,
 }
 
 /// GPU bytes of a `w` x `w/2` RGBA8 texture with its mip chain.
@@ -1646,8 +1656,14 @@ impl Surface {
         self.list.push(tex);
     }
 
+    /// Whether `id` can go: the last baked earth (the one with the city
+    /// lights) stays.
+    fn removable(&self, id: &str) -> bool {
+        self.has(id) && self.list.iter().any(|t| t.bake && t.id != id)
+    }
+
     fn remove(&mut self, id: &str) {
-        if id != "base" {
+        if self.removable(id) || self.get(id).is_some_and(|t| !t.bake) {
             self.list.retain(|t| t.id != id);
         }
     }
@@ -1740,13 +1756,37 @@ impl Imagery {
 
 fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, date: Option<&str>) {
     let mut html = String::from("<div class=\"layers\">");
-    for t in s.list.iter().filter(|t| t.id != "base") {
-        html.push_str(&format!(
-            "<span class=\"layer on\">✓ {} <button class=\"x\" data-texture=\"unload:{}\" \
-             title=\"unload\">✕</button></span>",
-            escape(&t.label),
-            t.id
-        ));
+    for t in s.list.iter().filter(|t| t.id != "base" || s.staged) {
+        if s.removable(&t.id) || !t.bake {
+            html.push_str(&format!(
+                "<span class=\"layer on\">✓ {} <button class=\"x\" data-texture=\"unload:{}\" \
+                 title=\"unload\">✕</button></span>",
+                escape(&t.label),
+                t.id
+            ));
+        } else {
+            // The last baked earth: nothing to fall back to.
+            html.push_str(&format!(
+                "<span class=\"layer on\">✓ {}</span>",
+                escape(&t.label)
+            ));
+        }
+    }
+    // The two start earths replace each other: the 11 KB picture (1991) and
+    // the 61 KB coastline earth.
+    if s.staged {
+        if !s.has("coast-50m") {
+            html.push_str(
+                "<button data-texture=\"start:coast\">Load the coastline earth, 1:50m \
+                 (61 KB): replaces the picture</button>",
+            );
+        }
+        if !s.has("base") {
+            html.push_str(
+                "<button data-texture=\"start:picture\">Load the 1991 picture (11 KB): \
+                 replaces the coastline earth</button>",
+            );
+        }
     }
     match s.lines {
         Some(_) => html.push_str(
@@ -2715,6 +2755,158 @@ fn render_layers(doc: &Document, src: &dyn GlobeSource) {
 }
 
 /// Fetches and attaches one layer, then refreshes what depends on it.
+/// Swaps the start earth: `coast` loads the coastline earth (`coast.bin`,
+/// 61 KB, baked at 2048 px) and unloads the 11 KB picture; the other way
+/// loads the picture again and unloads the coastline earth.
+async fn load_start_earth(app: Rc<RefCell<App>>, coast: bool) {
+    let (file, id, other) = if coast {
+        ("coast.bin", "coast-50m", "base")
+    } else {
+        ("earth-tiny.webp", "base", "coast-50m")
+    };
+    let (src, doc, max, tex_w) = {
+        let a = app.borrow();
+        (
+            a.source,
+            a.doc.clone(),
+            a.renderer.max_texture_dimension(),
+            a.tex_w,
+        )
+    };
+    if app.borrow().surface.has(id) {
+        return;
+    }
+    set_html(&doc, "layerstatus", &format!("Loading {file}…"));
+    let t = now();
+    let bytes = match fetch_bytes(file).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let t = now();
+    let heap = heap_in_use();
+    let width = tex_w.min(max);
+    let (tex, tiny) = if coast {
+        let mut layers = match mini::unpack_coast(&bytes) {
+            Ok(l) => l.into_iter(),
+            Err(e) => {
+                set_html(
+                    &doc,
+                    "layerstatus",
+                    &format!("Could not read: {}", escape(&e)),
+                );
+                return;
+            }
+        };
+        let (land, lakes) = (
+            layers.next().unwrap_or_default(),
+            layers.next().unwrap_or_default(),
+        );
+        (
+            texture::bake(&src.texture_seeds(), &land, &lakes, width),
+            None,
+        )
+    } else {
+        match decode_rgba(&bytes).await {
+            Ok((rgba, w, h)) => (
+                texture::from_image(&rgba, w as usize, h as usize, &src.texture_seeds(), width),
+                Some((rgba, w, h)),
+            ),
+            Err(e) => {
+                set_html(
+                    &doc,
+                    "layerstatus",
+                    &format!("Could not read: {}", escape(&e)),
+                );
+                return;
+            }
+        }
+    };
+    let bake_ms = now() - t;
+    measure_cached().await;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == file)
+        .map_or(bytes.len() as f64, |n| n.1);
+    let mut a = app.borrow_mut();
+    let view = a.renderer.earth_view(&tex);
+    let (px, gpu) = (tex.width, texture_bytes(tex.width));
+    drop(tex);
+    let label = if coast {
+        format!("baked, 1:50m coasts, {px} px")
+    } else {
+        format!("Blue Marble picture, {px} px")
+    };
+    a.surface.add(SurfaceTex {
+        id: id.into(),
+        label,
+        bake: true,
+        view,
+        chroma: None,
+        px,
+        bytes: gpu,
+    });
+    a.cost.layers.push(LayerCost {
+        key: id.into(),
+        file: if coast {
+            "coast.bin (1:50m coastlines, baked)".into()
+        } else {
+            "earth-tiny.webp (Blue Marble picture)".into()
+        },
+        wire,
+        unpacked: bytes.len() as f64,
+        fetch_ms,
+        action: if coast { "bake" } else { "decode" },
+        attach_ms: bake_ms,
+        heap_added: (heap_in_use() - heap).max(0.0),
+        gpu_added: gpu,
+    });
+    // The other one goes: its texture and its pixels are freed.
+    if coast {
+        a.coast = Some(bytes);
+        a.tiny = None;
+        // The picture was fetched at start: it shows as unloaded (its 11 KB
+        // stay counted in the start rows).
+        let wire = a
+            .cost
+            .base
+            .iter()
+            .find(|b| b.0 == "earth-tiny.webp")
+            .map_or(0.0, |b| b.1);
+        a.cost
+            .unloaded
+            .push(("earth-tiny.webp (start picture)".into(), 1));
+        a.cost.unloaded_wire += wire;
+    } else {
+        a.tiny = tiny;
+        a.coast = None;
+        mark_unloaded(&mut a.cost, other);
+    }
+    a.surface.remove(other);
+    surface_changed(&mut a);
+    set_html(
+        &doc,
+        "layerstatus",
+        &format!(
+            "{} loaded ({}), {} unloaded.",
+            file,
+            fmt_bytes(wire),
+            if coast {
+                "the picture"
+            } else {
+                "the coastline earth"
+            }
+        ),
+    );
+}
+
 /// Loads the cities (`cities.globe`) into a page that started without
 /// them: fetch, decode, bake the earth again with the city lights, and show
 /// what it cost as the first add-on row. Does nothing when they are there.
@@ -2771,6 +2963,30 @@ async fn load_base_file(app: Rc<RefCell<App>>) {
             base.px = tex.width;
             base.bytes = texture_bytes(tex.width);
             base.label = format!("Blue Marble, {} px, with city lights", tex.width);
+        }
+    }
+    // The coastline earth, when that is the one loaded: baked again with
+    // the lights.
+    let coast_built = a
+        .coast
+        .as_ref()
+        .and_then(|b| mini::unpack_coast(b).ok())
+        .map(|layers| {
+            let mut layers = layers.into_iter();
+            let (land, lakes) = (
+                layers.next().unwrap_or_default(),
+                layers.next().unwrap_or_default(),
+            );
+            let width = a.tex_w.min(a.renderer.max_texture_dimension());
+            texture::bake(&src.texture_seeds(), &land, &lakes, width)
+        });
+    if let Some(tex) = coast_built {
+        let view = a.renderer.earth_view(&tex);
+        if let Some(c) = a.surface.list.iter_mut().find(|t| t.id == "coast-50m") {
+            c.view = view;
+            c.px = tex.width;
+            c.bytes = texture_bytes(tex.width);
+            c.label = format!("baked, 1:50m coasts, {} px, with city lights", tex.width);
         }
     }
     let decode_ms = now() - t;
@@ -3838,8 +4054,10 @@ async fn run() -> Result<(), String> {
             compare: None,
             lines: None,
             lines_on: true,
+            staged,
         },
         tiny,
+        coast: None,
         tex_w,
         gpu_index: None,
         compute,
@@ -4171,7 +4389,12 @@ async fn run() -> Result<(), String> {
                 return;
             };
             let px = |w: &str| w.split(':').nth(1).and_then(|p| p.parse::<u32>().ok());
-            if which.starts_with("coast:") {
+            if which == "start:coast" || which == "start:picture" {
+                wasm_bindgen_futures::spawn_local(load_start_earth(
+                    a.clone(),
+                    which == "start:coast",
+                ));
+            } else if which.starts_with("coast:") {
                 wasm_bindgen_futures::spawn_local(load_coast_detail(
                     a.clone(),
                     px(&which).unwrap_or(4096),
@@ -4316,7 +4539,9 @@ async fn run() -> Result<(), String> {
         let exact = deepest || param("positions").as_deref() == Some("exact");
         let lines = deepest || param("lines").is_some();
         let (show, compare) = (param("show"), param("compare"));
-        let any = !layers.is_empty()
+        let earth_coast = param("earth").as_deref() == Some("coast");
+        let any = earth_coast
+            || !layers.is_empty()
             || !coasts.is_empty()
             || !imagery.is_empty()
             || show.is_some()
@@ -4329,6 +4554,9 @@ async fn run() -> Result<(), String> {
         if any || cities {
             let a = app.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                if earth_coast {
+                    load_start_earth(a.clone(), true).await;
+                }
                 if cities {
                     load_base_file(a.clone()).await;
                 }
