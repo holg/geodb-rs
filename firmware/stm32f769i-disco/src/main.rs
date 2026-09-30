@@ -249,6 +249,7 @@ async fn main(spawner: Spawner) {
     }
     spawner.spawn(defmt::unwrap!(net::net_task(runner)));
     info!("ethernet: started, waiting for a cable and DHCP");
+    spawner.spawn(defmt::unwrap!(net::command_task(stack)));
     let mut udp = net::open_socket(stack);
     let mut status = Buf::new();
     let _ = status.write_str("net: no cable");
@@ -454,6 +455,7 @@ async fn main(spawner: Spawner) {
             if motion && gap > 0 {
                 let now = 1_000_000 / gap;
                 fps = if fps == 0 { now } else { (fps * 3 + now) / 4 };
+                net::FPS.store(fps, core::sync::atomic::Ordering::Relaxed);
             }
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
             let draw_ms = draw_and_show(
