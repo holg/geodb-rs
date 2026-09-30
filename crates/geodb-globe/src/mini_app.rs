@@ -179,15 +179,43 @@ fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// The element `id`: in the page, or, while the panel is popped out into its
+/// own window (the page script sets `__GEODB_PANEL_DOC`), in that window.
+fn find(doc: &Document, id: &str) -> Option<web_sys::Element> {
+    doc.get_element_by_id(id).or_else(|| {
+        let popup = global("__GEODB_PANEL_DOC");
+        if popup.is_undefined() || popup.is_null() {
+            return None;
+        }
+        // No `instanceof`: another window has its own Document class.
+        popup.unchecked_into::<Document>().get_element_by_id(id)
+    })
+}
+
+/// The event target as an element, whichever window it lives in (a plain
+/// `dyn_into` fails for elements of the panel's own window).
+fn element_of(t: Option<web_sys::EventTarget>) -> Option<web_sys::Element> {
+    let t = t?;
+    (t.unchecked_ref::<web_sys::Node>().node_type() == web_sys::Node::ELEMENT_NODE)
+        .then(|| t.unchecked_into())
+}
+
+/// `element_of`, when it is a `<tag>`.
+fn element_tagged<T: JsCast>(t: Option<web_sys::EventTarget>, tag: &str) -> Option<T> {
+    let e = element_of(t)?;
+    e.tag_name()
+        .eq_ignore_ascii_case(tag)
+        .then(|| e.unchecked_into())
+}
+
 fn el<T: JsCast>(doc: &Document, id: &str) -> T {
-    doc.get_element_by_id(id)
+    find(doc, id)
         .unwrap_or_else(|| panic!("missing #{id}"))
-        .dyn_into::<T>()
-        .unwrap_or_else(|_| panic!("#{id} has wrong type"))
+        .unchecked_into::<T>()
 }
 
 fn set_html(doc: &Document, id: &str, html: &str) {
-    if let Some(e) = doc.get_element_by_id(id) {
+    if let Some(e) = find(doc, id) {
         e.set_inner_html(html);
     }
 }
@@ -991,7 +1019,7 @@ impl App {
         if !self.spin {
             self.schedule_query();
         }
-        if let Some(b) = self.doc.get_element_by_id("spin") {
+        if let Some(b) = find(&self.doc, "spin") {
             b.set_text_content(Some(if self.spin { "Stop" } else { "Spin" }));
         }
         self.dirty = true;
@@ -1106,6 +1134,10 @@ impl App {
     }
 
     fn hover_list(&mut self, i: usize, item: &web_sys::Element) {
+        // Popped out into its own window: the box would have no place here.
+        if self.doc.get_element_by_id("panel").is_none() {
+            return;
+        }
         let r = item.get_bounding_client_rect();
         // Left of the panel, level with the row; show_popover keeps it on screen.
         let x = self
@@ -1209,7 +1241,7 @@ impl App {
             .fly_to(p.lat, p.lon, self.cam.target_dist().min(1.08));
         self.selected = Some(i);
         self.upload_markers();
-        if let Some(list) = self.doc.get_element_by_id("list") {
+        if let Some(list) = find(&self.doc, "list") {
             let items = list.children();
             for k in 0..items.length() {
                 if let Some(item) = items.item(k) {
@@ -1269,7 +1301,7 @@ fn listen<E: JsCast + wasm_bindgen::convert::FromWasmAbi + 'static>(
 }
 
 fn li_index(e: &web_sys::Event) -> Option<usize> {
-    let target = e.target()?.dyn_into::<web_sys::Element>().ok()?;
+    let target = element_of(e.target())?;
     target
         .closest("li")
         .ok()??
@@ -1392,7 +1424,7 @@ fn render_data_panel(doc: &Document, data: Dataset, src: &dyn GlobeSource, compu
     render_layers(doc, src);
     if !compute {
         for id in ["q-gpu1", "q-gpub"] {
-            if let Some(b) = doc.get_element_by_id(id) {
+            if let Some(b) = find(doc, id) {
                 let _ = b.set_attribute("disabled", "");
                 let _ = b.remove_attribute("checked");
             }
@@ -3134,7 +3166,7 @@ struct BenchConfig {
 }
 
 fn input(doc: &Document, id: &str) -> Option<HtmlInputElement> {
-    doc.get_element_by_id(id)?.dyn_into().ok()
+    find(doc, id).map(|e| e.unchecked_into())
 }
 
 fn number(doc: &Document, id: &str, default: f64) -> f64 {
@@ -3151,9 +3183,8 @@ fn checked(doc: &Document, id: &str) -> bool {
 impl BenchConfig {
     fn read(doc: &Document) -> BenchConfig {
         let min_km = number(doc, "q-min", 1.0).clamp(0.01, 20_000.0);
-        let near = doc
-            .get_element_by_id("q-where")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        let near = find(doc, "q-where")
+            .map(|e| e.unchecked_into::<web_sys::HtmlSelectElement>())
             .is_none_or(|s| s.value() != "any");
         BenchConfig {
             plan: QueryPlan {
@@ -4174,10 +4205,7 @@ async fn run() -> Result<(), String> {
         let app = app.clone();
         let list: web_sys::EventTarget = el::<web_sys::Element>(&doc, "list").into();
         listen(&list, "mouseover", true, move |e: web_sys::MouseEvent| {
-            let item = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                .and_then(|t| t.closest("li").ok().flatten());
+            let item = element_of(e.target()).and_then(|t| t.closest("li").ok().flatten());
             match (li_index(&e), item) {
                 (Some(i), Some(item)) => app.borrow_mut().hover_list(i, &item),
                 _ => app.borrow_mut().hide_popover(),
@@ -4243,7 +4271,7 @@ async fn run() -> Result<(), String> {
             running2.set(true);
             let toggle = |doc: &Document, busy: bool| {
                 for (id, off) in [("q-run", busy), ("q-stop", !busy)] {
-                    if let Some(b) = doc.get_element_by_id(id) {
+                    if let Some(b) = find(doc, id) {
                         let _ = if off {
                             b.set_attribute("disabled", "")
                         } else {
@@ -4327,9 +4355,7 @@ async fn run() -> Result<(), String> {
         let layers: web_sys::EventTarget = el::<web_sys::Element>(&doc, "layers").into();
         let a = app.clone();
         listen(&layers, "click", true, move |e: web_sys::MouseEvent| {
-            let target = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+            let target = element_of(e.target());
             if let Some(file) = target.as_ref().and_then(|t| t.get_attribute("data-layer")) {
                 wasm_bindgen_futures::spawn_local(load_layer(a.clone(), file));
             } else if let Some(file) = target.as_ref().and_then(|t| t.get_attribute("data-unload"))
@@ -4357,9 +4383,7 @@ async fn run() -> Result<(), String> {
         });
         let a = app.clone();
         listen(&layers, "change", true, move |e: web_sys::Event| {
-            let value = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+            let value = element_tagged::<web_sys::HtmlSelectElement>(e.target(), "select")
                 .map(|s| s.value());
             if let Some(v) = value {
                 let mut app = a.borrow_mut();
@@ -4381,10 +4405,7 @@ async fn run() -> Result<(), String> {
         let surface: web_sys::EventTarget = el::<web_sys::Element>(&doc, "surface").into();
         let a = app.clone();
         listen(&surface, "click", true, move |e: web_sys::MouseEvent| {
-            let which = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                .and_then(|t| t.get_attribute("data-texture"));
+            let which = element_of(e.target()).and_then(|t| t.get_attribute("data-texture"));
             let Some(which) = which else {
                 return;
             };
@@ -4427,9 +4448,7 @@ async fn run() -> Result<(), String> {
         });
         let a = app.clone();
         listen(&surface, "change", true, move |e: web_sys::Event| {
-            if let Some(check) = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            if let Some(check) = element_tagged::<HtmlInputElement>(e.target(), "input")
                 .filter(|i| i.id() == "show-lines" || i.id() == "tiles-date")
             {
                 if check.id() == "tiles-date" {
@@ -4449,9 +4468,7 @@ async fn run() -> Result<(), String> {
                 app.dirty = true;
                 return;
             }
-            let select = e
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
+            let select = element_tagged::<web_sys::HtmlSelectElement>(e.target(), "select");
             if let Some(select) = select {
                 let mut app = a.borrow_mut();
                 match select.id().as_str() {
