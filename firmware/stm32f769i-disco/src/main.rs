@@ -222,14 +222,25 @@ async fn main(_spawner: Spawner) {
 
     // ---- the globe table (per tilt/zoom, so a spin frame is only texture sampling) lives in SDRAM
     // behind the two framebuffers ----
-    let cells: &'static mut [LutCell] = unsafe {
-        let ptr = (display::SDRAM_BASE + 2 * display::FB_BYTES) as *mut LutCell;
-        for i in 0..ui::LUT_CELLS {
-            ptr.add(i).write(LutCell::EMPTY);
-        }
-        core::slice::from_raw_parts_mut(ptr, ui::LUT_CELLS)
+    let lut_table = |offset: usize, n: usize| -> GlobeLut<'static> {
+        let cells: &'static mut [LutCell] = unsafe {
+            let ptr = (display::SDRAM_BASE + offset) as *mut LutCell;
+            for i in 0..n {
+                ptr.add(i).write(LutCell::EMPTY);
+            }
+            core::slice::from_raw_parts_mut(ptr, n)
+        };
+        GlobeLut::new(cells)
     };
-    let mut lut = GlobeLut::new(cells);
+    let fine_at = 2 * display::FB_BYTES;
+    // (the fine table for rest and spin, the coarse one for a globe that is being dragged)
+    let mut lut = (
+        lut_table(fine_at, ui::LUT_CELLS),
+        lut_table(
+            fine_at + ui::LUT_CELLS * core::mem::size_of::<LutCell>(),
+            ui::MOVE_LUT_CELLS,
+        ),
+    );
 
     // ---- the first screen ----
     let mut view = View::new(30.0, 10.0);
@@ -386,7 +397,7 @@ async fn draw_and_show(
     img: &FwImage<'_>,
     view: View,
     spin: ui::Spin,
-    lut: &mut GlobeLut<'_>,
+    lut: &mut (GlobeLut<'_>, GlobeLut<'_>),
     red: &mut Output<'static>,
     quick: bool,
     extras: &[ui::Extra],
@@ -395,9 +406,16 @@ async fn draw_and_show(
     let back = 1 - *front;
     let cycles = DWT::cycle_count();
     if quick {
-        ui::draw_moving(&mut disp.fb[back].fb(), img, view, lut);
+        ui::draw_moving(&mut disp.fb[back].fb(), img, view, &mut lut.1);
     } else {
-        ui::draw(&mut disp.fb[back].fb(), img, view, spin, Some(lut), extras);
+        ui::draw(
+            &mut disp.fb[back].fb(),
+            img,
+            view,
+            spin,
+            Some(&mut lut.0),
+            extras,
+        );
     }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;
     let ok = disp

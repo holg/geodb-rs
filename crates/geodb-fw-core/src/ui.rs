@@ -34,6 +34,9 @@ const GLOBE_STEP: i32 = 2;
 
 /// Cells of the [`GlobeLut`] the globe needs.
 pub const LUT_CELLS: usize = render::lut_cells(GLOBE_R, GLOBE_STEP);
+/// A moving globe is drawn in coarser blocks (and so needs a table of its own).
+const MOVE_STEP: i32 = 4;
+pub const MOVE_LUT_CELLS: usize = render::lut_cells(GLOBE_R, MOVE_STEP);
 /// Nearest cities listed.
 pub const LIST: usize = 10;
 
@@ -150,7 +153,7 @@ pub fn name_of<'a>(img: &'a FwImage<'_>, extras: &'a [Extra], idx: usize) -> Opt
     })
 }
 
-/// Redraws only the globe (from the table) over an earlier [`draw`] of the
+/// Redraws only the globe (from the coarse table, [`MOVE_LUT_CELLS`] cells) over an earlier [`draw`] of the
 /// same buffer: the quick frame of a spinning or dragged globe. The side
 /// panel and the city dots keep their old state until the next full draw.
 /// Returns false (and draws nothing) on the scope view, which needs [`draw`].
@@ -160,7 +163,7 @@ pub fn draw_moving(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, lut: &mut Glo
     }
     let (w, h, px) = img.texture();
     let tex = Texture { w, h, px };
-    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, GLOBE_STEP);
+    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, MOVE_STEP);
     render::ring(fb, GLOBE_X, GLOBE_Y, 6, TEXT);
     true
 }
