@@ -178,6 +178,14 @@ fn dsi_ltdc_config<P: DsiPanel>() -> LtdcConfiguration {
 /// Controller IDs read over DSI before the panel init (DA / DB / DC).
 static ID: [AtomicU8; 3] = [AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0)];
 
+/// Vertical blanking of the NT35510 video timing. ST's BSP uses 120/150/150 lines, which makes the
+/// frame 900 lines long and the refresh about 35 Hz at this pixel clock (27.43 MHz, 870 clocks per
+/// line). The short set (1/15/16, as the OTM8009A gets) gives about 60 Hz. If the panel loses
+/// sync with the short set, put 120/150/150 back.
+const NT35510_VSYNC: u16 = 1;
+const NT35510_VBP: u16 = 15;
+const NT35510_VFP: u16 = 16;
+
 /// First pass: the DSI host is up, nothing is initialised yet — read the IDs.
 /// Timing constants are the NT35510 ones (the current board revision); an
 /// OTM8009A board gets re-timed after detection.
@@ -190,9 +198,9 @@ impl DsiPanel for Detect {
     const HSYNC: u16 = 2;
     const HBP: u16 = 34;
     const HFP: u16 = 34;
-    const VSYNC: u16 = 120;
-    const VBP: u16 = 150;
-    const VFP: u16 = 150;
+    const VSYNC: u16 = NT35510_VSYNC;
+    const VBP: u16 = NT35510_VBP;
+    const VFP: u16 = NT35510_VFP;
     const HSYNC_POLARITY: PolarityActive = PolarityActive::ActiveHigh;
     const VSYNC_POLARITY: PolarityActive = PolarityActive::ActiveHigh;
     const DATA_ENABLE_POLARITY: PolarityActive = PolarityActive::ActiveHigh;
@@ -285,9 +293,9 @@ impl DsiPanel for Nt35510 {
     const HSYNC: u16 = 2;
     const HBP: u16 = 34;
     const HFP: u16 = 34;
-    const VSYNC: u16 = 120;
-    const VBP: u16 = 150;
-    const VFP: u16 = 150;
+    const VSYNC: u16 = NT35510_VSYNC;
+    const VBP: u16 = NT35510_VBP;
+    const VFP: u16 = NT35510_VFP;
     const HSYNC_POLARITY: PolarityActive = PolarityActive::ActiveHigh;
     const VSYNC_POLARITY: PolarityActive = PolarityActive::ActiveHigh;
     const DATA_ENABLE_POLARITY: PolarityActive = PolarityActive::ActiveHigh;
