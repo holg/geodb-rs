@@ -315,6 +315,7 @@ async fn main(spawner: Spawner) {
     let mut frames = 0u32;
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
+    let mut last_state = Instant::now();
     // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
     let mut full = 0u8;
     let mut dirty = false; // quick frames left the panel and the dots stale
@@ -449,6 +450,20 @@ async fn main(spawner: Spawner) {
         }
         if full > 0 {
             redraw = true;
+        }
+        // the viewer on the host mirrors the screen from this: the view, a few bytes
+        if net_state == 2
+            && last_state.elapsed() >= Duration::from_millis(if motion { 15 } else { 500 })
+        {
+            last_state = Instant::now();
+            if let Some(socket) = udp.as_mut() {
+                let packet = ui::encode_state(view, spin);
+                let _ = with_timeout(
+                    Duration::from_millis(5),
+                    socket.send_to(&packet, net::STATE_BROADCAST),
+                )
+                .await;
+            }
         }
         if redraw {
             // a smoothed frame rate from the time between frames

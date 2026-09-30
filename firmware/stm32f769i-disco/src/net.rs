@@ -70,6 +70,10 @@ pub fn open_socket(stack: Stack<'static>) -> Option<UdpSocket<'static>> {
     Some(socket)
 }
 
+/// UDP port of the state packets for the viewer (`cargo run --example mirror`).
+pub const STATE_PORT: u16 = 7881;
+pub const STATE_BROADCAST: (Ipv4Addr, u16) = (Ipv4Addr::BROADCAST, STATE_PORT);
+
 pub const BROADCAST: (Ipv4Addr, u16) = (Ipv4Addr::BROADCAST, HOST_PORT);
 
 /// UDP port of the board's command server (see `scripts/board_ctl.py`).

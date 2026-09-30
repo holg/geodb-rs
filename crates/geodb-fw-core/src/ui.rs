@@ -393,6 +393,41 @@ pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 6] = [
     (676, 414, 116, 34, "WORLD", Action::World),
 ];
 
+/// Bytes of a state packet (see [`encode_state`]).
+pub const STATE_LEN: usize = 18;
+
+/// What the board tells the host viewer about a screen: `V`, latitude, longitude and zoom (f32 LE),
+/// spin on (u8), spin speed (f32 LE). The viewer runs [`draw`] on the same image and gets the
+/// same screen without any pixels crossing the wire.
+pub fn encode_state(view: View, spin: Spin) -> [u8; STATE_LEN] {
+    let mut p = [0u8; STATE_LEN];
+    p[0] = b'V';
+    p[1..5].copy_from_slice(&view.lat.to_le_bytes());
+    p[5..9].copy_from_slice(&view.lon.to_le_bytes());
+    p[9..13].copy_from_slice(&view.zoom.to_le_bytes());
+    p[13] = u8::from(spin.on);
+    p[14..18].copy_from_slice(&spin.dps.to_le_bytes());
+    p
+}
+
+/// The inverse of [`encode_state`]; `None` for anything else.
+pub fn decode_state(p: &[u8]) -> Option<(View, Spin)> {
+    if p.len() != STATE_LEN || p[0] != b'V' {
+        return None;
+    }
+    let f = |at: usize| f32::from_le_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]]);
+    let view = View {
+        lat: f(1),
+        lon: f(5),
+        zoom: f(9),
+    };
+    let spin = Spin {
+        on: p[13] != 0,
+        dps: f(14),
+    };
+    (view.lat.is_finite() && view.lon.is_finite() && view.zoom.is_finite()).then_some((view, spin))
+}
+
 /// The globe turning by itself, and how fast (degrees per second).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Spin {
@@ -529,6 +564,23 @@ fn truncate(s: &str, n: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_packets_round_trip() {
+        let view = View {
+            lat: 48.137,
+            lon: -11.575,
+            zoom: 3.5,
+        };
+        let spin = Spin {
+            on: true,
+            dps: 40.0,
+        };
+        let p = encode_state(view, spin);
+        assert_eq!(decode_state(&p), Some((view, spin)));
+        assert_eq!(decode_state(&p[..10]), None);
+        assert_eq!(decode_state(b"#hello hello hello"), None);
+    }
 
     #[test]
     fn taps_and_drags_move_the_view() {

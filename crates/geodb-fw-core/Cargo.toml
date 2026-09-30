@@ -18,8 +18,13 @@ font8x8 = { version = "0.3", default-features = false }
 [dev-dependencies]
 deunicode = { workspace = true }
 geodb-core = { path = "../geodb-core", default-features = false, features = ["compact"] }
+minifb = "0.28"
 png = "0.18"
 
 [[example]]
 name = "make_image"
+required-features = ["std"]
+
+[[example]]
+name = "mirror"
 required-features = ["std"]
