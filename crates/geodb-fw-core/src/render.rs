@@ -22,6 +22,13 @@ pub struct Texture<'a> {
     pub px: &'a [u8],
 }
 
+/// What the globe is drawn from: the earth picture and, for the contour lines, the elevation picture.
+#[derive(Clone, Copy)]
+pub struct Earth<'a> {
+    pub tex: Texture<'a>,
+    pub dem: Option<crate::relief::Dem<'a>>,
+}
+
 /// The point (degrees) at the centre of the globe, and how far in: zoom 1
 /// shows the whole hemisphere, zoom k the cap of angular radius asin(1 / k).
 #[derive(Debug, Clone, Copy, PartialEq)]

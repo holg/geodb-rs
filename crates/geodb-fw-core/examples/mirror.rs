@@ -223,7 +223,18 @@ fn main() {
             ui::advance(&mut now_view, spin, stamp.elapsed().as_secs_f32().min(0.2));
         }
         let mut fb = Fb { px: &mut buf, w, h };
-        ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);
+        ui::draw(
+            &mut fb,
+            &img,
+            now_view,
+            spin,
+            None,
+            &[],
+            &geodb_fw_core::render::Earth {
+                tex: earth,
+                dem: None,
+            },
+        );
         // the frame rates, rounded (the trend matters, not the digit) and their history
         let live = heard.is_some_and(|at| at.elapsed() < Duration::from_secs(2));
         let hud = format!(

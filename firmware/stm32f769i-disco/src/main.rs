@@ -718,7 +718,18 @@ async fn draw_and_show(
     let cycles = DWT::cycle_count();
     if quick {
         let mut fb = disp.fb[back].fb();
-        ui::draw_moving(&mut fb, img, view, spin, &mut lut.1, extras, &earth.coarse);
+        ui::draw_moving(
+            &mut fb,
+            img,
+            view,
+            spin,
+            &mut lut.1,
+            extras,
+            &geodb_fw_core::render::Earth {
+                tex: earth.coarse,
+                dem: None,
+            },
+        );
         ui::draw_fps(&mut fb, fps);
         ui::draw_status(&mut fb, status);
     } else {
@@ -729,7 +740,10 @@ async fn draw_and_show(
             spin,
             Some(&mut lut.0),
             extras,
-            &earth.full,
+            &geodb_fw_core::render::Earth {
+                tex: earth.full,
+                dem: None,
+            },
         );
     }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;

@@ -25,6 +25,7 @@ pub mod geo;
 pub mod image;
 pub mod link;
 pub mod query;
+pub mod relief;
 pub mod render;
 pub mod ui;
 

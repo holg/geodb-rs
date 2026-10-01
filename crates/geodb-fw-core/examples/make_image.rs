@@ -295,7 +295,18 @@ fn main() {
             w: ui::WIDTH,
             h: ui::HEIGHT,
         };
-        ui::draw(&mut fb, &img, view, ui::Spin::new(), None, &[], &earth);
+        ui::draw(
+            &mut fb,
+            &img,
+            view,
+            ui::Spin::new(),
+            None,
+            &[],
+            &geodb_fw_core::render::Earth {
+                tex: earth,
+                dem: None,
+            },
+        );
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let rgb: Vec<u8> = buf
             .iter()

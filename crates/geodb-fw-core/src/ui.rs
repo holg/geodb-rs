@@ -6,7 +6,7 @@ use crate::fmath::{asin as asinf, atan2 as atan2f, cos as cosf, sin as sinf};
 use crate::geo::{DEG_TO_RAD, EARTH_RADIUS_KM};
 use crate::image::FwImage;
 use crate::query::Hit;
-use crate::render::{self, rgb565, Fb, GlobeLut, Texture, View};
+use crate::render::{self, rgb565, Earth, Fb, GlobeLut, View};
 use core::fmt::Write;
 
 pub const WIDTH: usize = 800;
@@ -175,12 +175,12 @@ pub fn draw_moving(
     spin: Spin,
     lut: &mut GlobeLut<'_>,
     extras: &[Extra],
-    earth: &Texture<'_>,
+    earth: &Earth<'_>,
 ) -> bool {
     if view.zoom >= SCOPE_ZOOM {
         return false;
     }
-    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, MOVE_STEP);
+    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &earth.tex, MOVE_STEP);
     // The nearest cities change as the globe turns: their markers and the list are redrawn too
     // (the buttons, the title block's static lines and the footer stay as they are).
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
@@ -323,6 +323,62 @@ fn side_panel(
 /// simulation switches it to compare the renderers).
 pub static COAST_LINES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
+/// Whether [`draw`] strokes the contour lines (isohypses) when zoomed in (and the picture is there).
+pub static CONTOURS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+const CONTOUR_LAND: u16 = rgb565(205, 160, 105);
+const CONTOUR_SEA: u16 = rgb565(90, 140, 200);
+/// Contour lines from this zoom on (a hemisphere's worth of cells would be far too many).
+const CONTOUR_ZOOM: f32 = 2.5;
+const LEVELS_COARSE: [i16; 12] = [
+    -4000, -2000, -1000, -200, 500, 1000, 2000, 3000, 4000, 5000, 6000, 6500,
+];
+const LEVELS_FINE: [i16; 17] = [
+    -5000, -4000, -3000, -2000, -1000, -200, 250, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000,
+    5000, 6000,
+];
+
+/// The isohypses of the elevation picture around the view, as one pixel lines.
+fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_>>) {
+    let Some(dem) = dem else { return };
+    if !CONTOURS.load(core::sync::atomic::Ordering::Relaxed) || view.zoom < CONTOUR_ZOOM {
+        return;
+    }
+    let r = GLOBE_R as f32;
+    let span = view.span() / DEG_TO_RAD + 1.0;
+    let lat_range = ((view.lat - span).max(-90.0), (view.lat + span).min(90.0));
+    let c = cosf((abs(view.lat) + span).min(89.0) * DEG_TO_RAD);
+    let dlon = (span / c.max(0.02)).min(180.0);
+    let levels: &[i16] = if view.zoom >= 6.0 {
+        &LEVELS_FINE
+    } else {
+        &LEVELS_COARSE
+    };
+    crate::relief::contours(
+        dem,
+        lat_range,
+        (view.lon - dlon, view.lon + dlon),
+        levels,
+        |la0, lo0, la1, lo1, lv| {
+            if let (Some((x0, y0, _)), Some((x1, y1, _))) = (
+                render::project(view, r, GLOBE_X, GLOBE_Y, la0, lo0),
+                render::project(view, r, GLOBE_X, GLOBE_Y, la1, lo1),
+            ) {
+                if (x1 - x0).abs() < 100 && (y1 - y0).abs() < 100 {
+                    render::line(
+                        fb,
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        if lv < 0 { CONTOUR_SEA } else { CONTOUR_LAND },
+                    );
+                }
+            }
+        },
+    );
+}
+
 /// The vector coastline (the image's rings, lakes included) as one pixel lines: crisp at any zoom,
 /// where the rasterized earth is soft. Only edges near the view are projected.
 fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
@@ -368,7 +424,7 @@ pub fn draw(
     spin: Spin,
     lut: Option<&mut GlobeLut<'_>>,
     extras: &[Extra],
-    earth: &Texture<'_>,
+    earth: &Earth<'_>,
 ) -> usize {
     fb.fill(BG);
     let r = GLOBE_R as f32;
@@ -405,10 +461,11 @@ pub fn draw(
     } else {
         match lut {
             // Spinning: the table only needs the turn, no trigonometry per pixel.
-            Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, GLOBE_STEP),
-            None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, GLOBE_STEP),
+            Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &earth.tex, GLOBE_STEP),
+            None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &earth.tex, GLOBE_STEP),
         }
         coast_lines(fb, img, view, COAST);
+        contour_lines(fb, view, earth.dem.as_ref());
     }
 
     // Every city in reach, as a dot (a pixel on the globe, larger on the scope). A wide view
