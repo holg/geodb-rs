@@ -93,7 +93,7 @@ pub fn apply(
             let top = at(x0, y0) * (256 - fx) + at(x1, y0) * fx;
             let bottom = at(x0, y1) * (256 - fx) + at(x1, y1) * fx;
             let s = (top * (256 - fy) + bottom * fy) >> 16; // 0..255
-            let factor = 256 + strength * (s - 128) / 128;
+            let factor = (256 + strength * (s - 128) / 128).max(0);
             let i = 2 * (y * w + x);
             let c = u16::from_le_bytes([base[i], base[i + 1]]);
             let (r, g, b) = (
@@ -339,7 +339,7 @@ pub fn apply_in_place(
             let top = at(x0, y0) * (256 - fx) + at(x1, y0) * fx;
             let bottom = at(x0, y1) * (256 - fx) + at(x1, y1) * fx;
             let s = (top * (256 - fy) + bottom * fy) >> 16;
-            let factor = 256 + strength * (s - 128) / 128;
+            let factor = (256 + strength * (s - 128) / 128).max(0);
             let i = 2 * (y * w + x);
             let c = u16::from_le_bytes([px[i], px[i + 1]]);
             let (r, g, b) = (

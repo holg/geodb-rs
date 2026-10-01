@@ -100,11 +100,57 @@ fn main() {
         &mut vec![0u8; 8 << 20],
     )
     .expect("rasterize the coast");
-    let earth = geodb_fw_core::render::Texture {
-        w: ui::EARTH_W,
-        h: ui::EARTH_H,
-        px: &earth_px,
+    // the relief as the board applies it: shaded earth, the elevation picture for the contour lines
+    let mut dem_px = Vec::new();
+    if let Some((packed, dw, dh)) = img.elev() {
+        dem_px = vec![0u8; dw * dh];
+        assert!(geodb_fw_core::relief::unpack(packed, dw, dh, &mut dem_px));
+        let dem = geodb_fw_core::relief::Dem {
+            w: dw,
+            h: dh,
+            px: &dem_px,
+        };
+        let mut shade = vec![0u8; dw * dh];
+        geodb_fw_core::relief::shade_field(&dem, ui::SHADE_EXAGGERATION, &mut shade);
+        geodb_fw_core::relief::apply_in_place(
+            &mut earth_px,
+            ui::EARTH_W,
+            ui::EARTH_H,
+            &shade,
+            dw,
+            dh,
+            ui::SHADE_STRENGTH,
+        );
+        ui::CONTOURS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // the half-size earth and its table, for the globe while it moves
+    let mut coarse_px = vec![0u8; ui::EARTH_W * ui::EARTH_H / 2];
+    geodb_fw_core::coast::halve(&earth_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_px);
+    let coarse = geodb_fw_core::render::Texture {
+        w: ui::EARTH_W / 2,
+        h: ui::EARTH_H / 2,
+        px: &coarse_px,
     };
+    let mut move_lut = geodb_fw_core::render::GlobeLut::new(Box::leak(
+        vec![geodb_fw_core::render::LutCell::EMPTY; ui::MOVE_LUT_CELLS].into_boxed_slice(),
+    ));
+    let earth = geodb_fw_core::render::Earth {
+        tex: geodb_fw_core::render::Texture {
+            w: ui::EARTH_W,
+            h: ui::EARTH_H,
+            px: &earth_px,
+        },
+        dem: (!dem_px.is_empty()).then(|| geodb_fw_core::relief::Dem {
+            w: 1024,
+            h: 512,
+            px: &dem_px,
+        }),
+    };
+    // As on the board: while the globe moves (it spins, or its view changed a moment ago) only the globe
+    // and the nearest cities are redrawn, from the coarse earth, without the coastline and contour
+    // strokes; at rest one full screen.
+    let (mut last_view, mut last_change) = (View::new(0.0, 0.0), Instant::now());
+    let mut have_full = false;
 
     let sock =
         UdpSocket::bind(("0.0.0.0", STATE_PORT)).expect("UDP port 7881 (another viewer running?)");
@@ -222,20 +268,32 @@ fn main() {
         if spin.on {
             ui::advance(&mut now_view, spin, stamp.elapsed().as_secs_f32().min(0.2));
         }
+        if view != last_view {
+            (last_view, last_change) = (view, Instant::now());
+        }
+        let moving = spin.on || last_change.elapsed() < Duration::from_millis(250);
+        let quick = moving && have_full;
         let mut fb = Fb { px: &mut buf, w, h };
-        ui::draw(
-            &mut fb,
-            &img,
-            now_view,
-            spin,
-            None,
-            &[],
-            &geodb_fw_core::render::Earth {
-                tex: earth,
-                dem: None,
-            },
-        );
-        // the frame rates, rounded (the trend matters, not the digit) and their history
+        if quick {
+            ui::draw_moving(
+                &mut fb,
+                &img,
+                now_view,
+                spin,
+                &mut move_lut,
+                &[],
+                &geodb_fw_core::render::Earth {
+                    tex: coarse,
+                    dem: None,
+                },
+            );
+        } else {
+            ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);
+            have_full = true;
+        }
+        // the frame rates, rounded (the trend matters, not the digit) and their history (on a cleared
+        // corner: the quick frames do not repaint it)
+        fb.rect(0, 0, 130, 76, geodb_fw_core::render::rgb565(6, 10, 22));
         let live = heard.is_some_and(|at| at.elapsed() < Duration::from_secs(2));
         let hud = format!(
             "board {} fps\nwindow {} fps\n{} pkt/s",
