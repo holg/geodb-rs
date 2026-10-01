@@ -316,6 +316,7 @@ async fn main(spawner: Spawner) {
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
     let mut last_state = Instant::now();
+    let mut inj_seen = Instant::now() - Duration::from_secs(10);
     // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
     let mut full = 0u8;
     let mut dirty = false; // quick frames left the panel and the dots stale
@@ -409,7 +410,9 @@ async fn main(spawner: Spawner) {
                 }
             }
             (None, None) => {
-                if vel.0.abs() + vel.1.abs() > STOP_PX_S {
+                if inj_seen.elapsed() < Duration::from_millis(80) {
+                    // a drag from the mirror is moving the globe: no coasting on top of it
+                } else if vel.0.abs() + vel.1.abs() > STOP_PX_S {
                     ui::pan_f(&mut view, vel.0 * dt, vel.1 * dt);
                     let decay = 1.0 - (FRICTION * dt).min(1.0);
                     vel = (vel.0 * decay, vel.1 * decay);
@@ -419,11 +422,41 @@ async fn main(spawner: Spawner) {
                 }
             }
         }
+        // input injected from the mirror window (UDP commands): the same as a finger
+        let (idx, idy) = (
+            net::INJ_DX.swap(0, core::sync::atomic::Ordering::Relaxed),
+            net::INJ_DY.swap(0, core::sync::atomic::Ordering::Relaxed),
+        );
+        if (idx != 0 || idy != 0) && dt > 0.0 {
+            ui::pan(&mut view, idx, idy);
+            let k = (dt * 20.0).min(1.0);
+            vel.0 += (idx as f32 / dt - vel.0) * k;
+            vel.1 += (idy as f32 / dt - vel.1) * k;
+            inj_seen = Instant::now();
+            redraw = true;
+        }
+        if net::INJ_RELEASE.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            inj_seen = Instant::now() - Duration::from_secs(10); // let go: the flick coasts
+        }
+        let tap = net::INJ_TAP.swap(0, core::sync::atomic::Ordering::Relaxed);
+        if tap & (1 << 31) != 0 {
+            let (x, y) = (((tap >> 16) & 0x3ff) as i32, (tap & 0x3ff) as i32);
+            let action = ui::hit(view, x, y);
+            info!("tap {},{} from the mirror", x, y);
+            vel = (0.0, 0.0);
+            if action != ui::Action::None {
+                ui::apply(&mut view, &mut spin, action);
+                redraw = true;
+                full = 2;
+            }
+        }
         if spin.on {
             ui::advance(&mut view, spin, dt);
         }
-        let motion =
-            spin.on || grab.is_some_and(|g| g.dragging) || vel.0.abs() + vel.1.abs() > STOP_PX_S;
+        let motion = spin.on
+            || grab.is_some_and(|g| g.dragging)
+            || vel.0.abs() + vel.1.abs() > STOP_PX_S
+            || inj_seen.elapsed() < Duration::from_millis(80);
         if !motion && dirty {
             // Came to rest: bring the panel and the dots up to date in both buffers.
             dirty = false;
@@ -457,7 +490,7 @@ async fn main(spawner: Spawner) {
         {
             last_state = Instant::now();
             if let Some(socket) = udp.as_mut() {
-                let packet = ui::encode_state(view, spin);
+                let packet = ui::encode_state(view, spin, fps);
                 let _ = with_timeout(
                     Duration::from_millis(5),
                     socket.send_to(&packet, net::STATE_BROADCAST),

@@ -4,18 +4,27 @@
 //!
 //!   cargo run --release -p geodb-fw-core --features std --example mirror [geodb.fw] [--scale 2]
 //!
+//! The window takes input like the LCD: a click is a tap (buttons, a point on the globe), dragging
+//! pans (and flicks), sent to the board as UDP commands. The top left shows the board's frame rate
+//! (as the board counts it, at most about 32 with its panel), this window's own and the packet
+//! rate, rounded, with a small history so the trend shows.
+//!
 //! Keys: R starts/stops a recording (an mp4 through `ffmpeg`, 30 fps, next to where you run it),
 //! S saves a png, Esc closes. Without packets (board off) the window shows the last view.
 
 use geodb_fw_core::render::{Fb, View};
 use geodb_fw_core::{ui, FwImage};
-use minifb::{Key, KeyRepeat, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use std::io::Write;
 use std::net::UdpSocket;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const STATE_PORT: u16 = 7881;
+/// The board's command port.
+const COMMAND_PORT: u16 = 7880;
+/// Samples of the frame-rate history (one per 250 ms).
+const HISTORY: usize = 48;
 
 fn rgb888(buf: &[u16]) -> Vec<u8> {
     buf.iter()
@@ -105,15 +114,92 @@ fn main() {
     let mut next_frame = Instant::now();
     let mut shots = 0;
     let mut pkt = [0u8; 64];
+    let cmd = UdpSocket::bind(("0.0.0.0", 0)).expect("command socket");
+    let mut board: Option<std::net::IpAddr> = None;
+    let mut dev_fps = 0u32;
+    let mut history = [0u32; HISTORY];
+    let mut history_at = Instant::now();
+    let (mut packets, mut pps, mut pps_at) = (0u32, 0.0f32, Instant::now());
+    let mut mirror_fps = 0.0f32;
+    let mut last_frame = Instant::now();
+    // the mouse: pressed at `press`, last seen at `last`, a drag once it has moved
+    let mut press: Option<(f32, f32)> = None;
+    let mut last = (0.0f32, 0.0f32);
+    let mut dragging = false;
+    let send = |text: String, board: Option<std::net::IpAddr>| {
+        if let Some(ip) = board {
+            let _ = cmd.send_to(text.as_bytes(), (ip, COMMAND_PORT));
+        }
+    };
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // the newest state packet wins
-        while let Ok((n, _)) = sock.recv_from(&mut pkt) {
-            if let Some((v, s)) = ui::decode_state(&pkt[..n]) {
-                (view, spin) = (v, s);
+        while let Ok((n, from)) = sock.recv_from(&mut pkt) {
+            if let Some((v, s, fps)) = ui::decode_state(&pkt[..n]) {
+                (view, spin, dev_fps) = (v, s, fps);
                 stamp = Instant::now();
                 heard = Some(stamp);
+                board = Some(from.ip());
+                packets += 1;
             }
+        }
+        if pps_at.elapsed() >= Duration::from_secs(1) {
+            pps = packets as f32 / pps_at.elapsed().as_secs_f32();
+            packets = 0;
+            pps_at = Instant::now();
+        }
+        if history_at.elapsed() >= Duration::from_millis(250) {
+            history_at = Instant::now();
+            history.rotate_left(1);
+            history[HISTORY - 1] = if heard.is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+            {
+                dev_fps
+            } else {
+                0
+            };
+        }
+        let gap = last_frame.elapsed().as_secs_f32().max(1e-4);
+        last_frame = Instant::now();
+        mirror_fps += (1.0 / gap - mirror_fps) * 0.05;
+
+        // input: click = tap, drag = pan (the deltas go to the board as they happen)
+        let scale_f = scale as f32;
+        let mouse = window
+            .get_mouse_pos(MouseMode::Clamp)
+            .map(|(x, y)| (x / scale_f, y / scale_f));
+        match (window.get_mouse_down(MouseButton::Left), mouse) {
+            (true, Some(pos)) => match press {
+                None => {
+                    press = Some(pos);
+                    dragging = false;
+                }
+                Some(start) => {
+                    if !dragging && (pos.0 - start.0).abs() + (pos.1 - start.1).abs() >= 8.0 {
+                        dragging = true;
+                        last = start;
+                    }
+                    if dragging {
+                        let (dx, dy) = (
+                            (pos.0 - last.0).round() as i32,
+                            (pos.1 - last.1).round() as i32,
+                        );
+                        if dx != 0 || dy != 0 {
+                            send(format!("!drag {dx} {dy}"), board);
+                            last = (last.0 + dx as f32, last.1 + dy as f32);
+                        }
+                    }
+                }
+            },
+            (false, _) => {
+                if let Some(start) = press.take() {
+                    if dragging {
+                        send("!release".into(), board);
+                    } else {
+                        send(format!("!tap {} {}", start.0 as i32, start.1 as i32), board);
+                    }
+                }
+            }
+            _ => {}
         }
         // between packets a spinning globe keeps turning at its speed (the board sends ~60 a second)
         let mut now_view = view;
@@ -122,6 +208,34 @@ fn main() {
         }
         let mut fb = Fb { px: &mut buf, w, h };
         ui::draw(&mut fb, &img, now_view, spin, None, &[]);
+        // the frame rates, rounded (the trend matters, not the digit) and their history
+        let live = heard.is_some_and(|at| at.elapsed() < Duration::from_secs(2));
+        let hud = format!(
+            "board {} fps\nwindow {} fps\n{} pkt/s",
+            if live { dev_fps } else { 0 },
+            (mirror_fps / 5.0).round() as u32 * 5,
+            (pps / 5.0).round() as u32 * 5
+        );
+        for (i, line) in hud.lines().enumerate() {
+            geodb_fw_core::render::text(
+                &mut fb,
+                6,
+                6 + i as i32 * 12,
+                line,
+                1,
+                geodb_fw_core::render::rgb565(255, 190, 70),
+            );
+        }
+        for (i, &v) in history.iter().enumerate() {
+            let height = (v.min(32) as i32 * 24 + 15) / 32;
+            fb.rect(
+                6 + i as i32 * 2,
+                46 + 24 - height,
+                1,
+                height.max(1),
+                geodb_fw_core::render::rgb565(255, 190, 70),
+            );
+        }
 
         if window.is_key_pressed(Key::S, KeyRepeat::No) {
             shots += 1;

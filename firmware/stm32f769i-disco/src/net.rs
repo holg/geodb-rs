@@ -79,6 +79,13 @@ pub const BROADCAST: (Ipv4Addr, u16) = (Ipv4Addr::BROADCAST, HOST_PORT);
 /// UDP port of the board's command server (see `scripts/board_ctl.py`).
 pub const COMMAND_PORT: u16 = 7880;
 
+/// Touch input injected from the host (the mirror window): drag deltas accumulate, a tap is the last
+/// tap (bit 31 set, x in bits 16..26, y in bits 0..10), release ends a drag. main.rs takes them.
+pub static INJ_DX: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+pub static INJ_DY: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+pub static INJ_TAP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub static INJ_RELEASE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// The frame rate main.rs measures, for `!info`.
 pub static FPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
@@ -103,6 +110,7 @@ impl core::fmt::Write for Out {
 /// * `!ping N` -> `!pong N`: round trip and loss
 /// * `!info` -> uptime, frame rate, build
 /// * `!blast N` -> N datagrams of 512 bytes (`!blast I` + padding): throughput and loss
+/// * `!tap X Y`, `!drag DX DY`, `!release` -> touch input from the mirror window (no reply)
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
 #[embassy_executor::task]
 pub async fn command_task(stack: Stack<'static>) -> ! {
@@ -165,6 +173,26 @@ pub async fn command_task(stack: Stack<'static>) -> ! {
                 }
                 let _ = write!(out, "!blast done {count}");
             }
+            Some("!tap") => {
+                let x: u32 = words
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+                    .min(799);
+                let y: u32 = words
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+                    .min(479);
+                INJ_TAP.store(1 << 31 | x << 16 | y, Ordering::Relaxed);
+            }
+            Some("!drag") => {
+                let dx: i32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                let dy: i32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                INJ_DX.fetch_add(dx.clamp(-800, 800), Ordering::Relaxed);
+                INJ_DY.fetch_add(dy.clamp(-480, 480), Ordering::Relaxed);
+            }
+            Some("!release") => INJ_RELEASE.store(true, Ordering::Relaxed),
             Some("!reset") => {
                 let _ = socket.send_to(b"!reset now", from).await;
                 embassy_time::Timer::after_millis(100).await;

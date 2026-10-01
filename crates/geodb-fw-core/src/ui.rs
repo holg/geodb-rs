@@ -447,12 +447,12 @@ pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 6] = [
 ];
 
 /// Bytes of a state packet (see [`encode_state`]).
-pub const STATE_LEN: usize = 18;
+pub const STATE_LEN: usize = 19;
 
 /// What the board tells the host viewer about a screen: `V`, latitude, longitude and zoom (f32 LE),
-/// spin on (u8), spin speed (f32 LE). The viewer runs [`draw`] on the same image and gets the
+/// spin on (u8), spin speed (f32 LE), the board's frame rate (u8). The viewer runs [`draw`] on the same image and gets the
 /// same screen without any pixels crossing the wire.
-pub fn encode_state(view: View, spin: Spin) -> [u8; STATE_LEN] {
+pub fn encode_state(view: View, spin: Spin, fps: u32) -> [u8; STATE_LEN] {
     let mut p = [0u8; STATE_LEN];
     p[0] = b'V';
     p[1..5].copy_from_slice(&view.lat.to_le_bytes());
@@ -460,11 +460,12 @@ pub fn encode_state(view: View, spin: Spin) -> [u8; STATE_LEN] {
     p[9..13].copy_from_slice(&view.zoom.to_le_bytes());
     p[13] = u8::from(spin.on);
     p[14..18].copy_from_slice(&spin.dps.to_le_bytes());
+    p[18] = fps.min(255) as u8;
     p
 }
 
 /// The inverse of [`encode_state`]; `None` for anything else.
-pub fn decode_state(p: &[u8]) -> Option<(View, Spin)> {
+pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32)> {
     if p.len() != STATE_LEN || p[0] != b'V' {
         return None;
     }
@@ -478,7 +479,11 @@ pub fn decode_state(p: &[u8]) -> Option<(View, Spin)> {
         on: p[13] != 0,
         dps: f(14),
     };
-    (view.lat.is_finite() && view.lon.is_finite() && view.zoom.is_finite()).then_some((view, spin))
+    (view.lat.is_finite() && view.lon.is_finite() && view.zoom.is_finite()).then_some((
+        view,
+        spin,
+        u32::from(p[18]),
+    ))
 }
 
 /// The globe turning by itself, and how fast (degrees per second).
@@ -629,8 +634,8 @@ mod tests {
             on: true,
             dps: 40.0,
         };
-        let p = encode_state(view, spin);
-        assert_eq!(decode_state(&p), Some((view, spin)));
+        let p = encode_state(view, spin, 32);
+        assert_eq!(decode_state(&p), Some((view, spin, 32)));
         assert_eq!(decode_state(&p[..10]), None);
         assert_eq!(decode_state(b"#hello hello hello"), None);
     }
