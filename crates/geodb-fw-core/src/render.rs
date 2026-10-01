@@ -418,6 +418,29 @@ fn sample_fixed(tex: &Texture<'_>, u: i32, v: i32, rows: i32) -> [u32; 3] {
     out
 }
 
+/// A one pixel line (Bresenham), clipped by the framebuffer.
+pub fn line(fb: &mut Fb<'_>, x0: i32, y0: i32, x1: i32, y1: i32, color: u16) {
+    let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+    let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+    let (mut x, mut y, mut err) = (x0, y0, dx + dy);
+    // (a segment of a few hundred pixels at most: the loop is bounded)
+    for _ in 0..=(dx - dy) {
+        fb.set(x, y, color);
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
 /// A filled dot of pixel radius `r`.
 pub fn dot(fb: &mut Fb<'_>, x: i32, y: i32, r: i32, color: u16) {
     for dy in -r..=r {

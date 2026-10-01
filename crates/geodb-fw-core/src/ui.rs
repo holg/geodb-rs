@@ -20,6 +20,9 @@ const DOT: u16 = rgb565(150, 205, 255);
 const RING: u16 = rgb565(255, 196, 70);
 const SCOPE: u16 = rgb565(10, 20, 38);
 const GRID: u16 = rgb565(44, 70, 110);
+/// The coastline drawn over the globe, and on the scope's plane.
+const COAST: u16 = rgb565(150, 205, 235);
+const COAST_SCOPE: u16 = rgb565(70, 110, 140);
 const BUTTON: u16 = rgb565(18, 30, 58);
 const BUTTON_ON: u16 = rgb565(90, 60, 10);
 
@@ -316,6 +319,39 @@ fn side_panel(
     }
 }
 
+/// The vector coastline (the image's rings, lakes included) as one pixel lines: crisp at any zoom,
+/// where the rasterized earth is soft. Only edges near the view are projected.
+fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
+    let r = GLOBE_R as f32;
+    let span = view.span() / DEG_TO_RAD + 1.0; // degrees from the view centre that can be seen
+    let polar = abs(view.lat) + span > 85.0; // near a pole longitude says little
+    img.coast().for_each_edge(|a, b| {
+        let (lo, la) = (a[0] as f32 * 0.01, a[1] as f32 * 0.01);
+        if abs(la - view.lat) > span {
+            return;
+        }
+        if !polar {
+            let mut dlon = abs(lo - view.lon);
+            if dlon > 180.0 {
+                dlon = 360.0 - dlon;
+            }
+            if dlon * crate::fmath::cos(la * DEG_TO_RAD) > span {
+                return;
+            }
+        }
+        let (lo1, la1) = (b[0] as f32 * 0.01, b[1] as f32 * 0.01);
+        if let (Some((x0, y0, _)), Some((x1, y1, _))) = (
+            render::project(view, r, GLOBE_X, GLOBE_Y, la, lo),
+            render::project(view, r, GLOBE_X, GLOBE_Y, la1, lo1),
+        ) {
+            // (an edge that wraps the other way round the antimeridian would be a long line)
+            if (x1 - x0).abs() < 200 && (y1 - y0).abs() < 200 {
+                render::line(fb, x0, y0, x1, y1, color);
+            }
+        }
+    });
+}
+
 /// Draws everything for the globe centred on `view`; `earth` is the rasterized coast ([`crate::coast`]). Returns how many
 /// nearest cities are listed.
 pub fn draw(
@@ -358,12 +394,14 @@ pub fn draw(
                 render::text(fb, x, GLOBE_Y - ring_px - 10, label.as_str(), 1, DIM);
             }
         }
+        coast_lines(fb, img, view, COAST_SCOPE);
     } else {
         match lut {
             // Spinning: the table only needs the turn, no trigonometry per pixel.
             Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, GLOBE_STEP),
             None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, GLOBE_STEP),
         }
+        coast_lines(fb, img, view, COAST);
     }
 
     // Every city in reach, as a dot (a pixel on the globe, larger on the scope). A wide view
