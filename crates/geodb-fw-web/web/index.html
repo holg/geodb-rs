@@ -255,6 +255,9 @@ try {
         if (!live) { fw.release(); return; }
         send(dragging ? "!release" : `!tap ${press[0]} ${press[1]}`);
     };
+    // mouse over a city shows its name (the board has no pointer; this is the simulation's own)
+    canvas.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") fw.hover(...at(e)); });
+    canvas.addEventListener("pointerleave", () => fw.hover(-1, -1));
     canvas.addEventListener("pointerup", up);
     canvas.addEventListener("pointercancel", up);
 
@@ -310,8 +313,8 @@ try {
                 return;
             }
             const p = new Uint8Array(m.data);
-            if (p.length !== 19) return;
-            new Uint8Array(fw.memory.buffer, fw.state_buf(), 19).set(p);
+            if (p.length !== fw.state_len()) return;
+            new Uint8Array(fw.memory.buffer, fw.state_buf(), p.length).set(p);
             if (fw.apply_state() && !live) {
                 live = true;
                 fw.release();

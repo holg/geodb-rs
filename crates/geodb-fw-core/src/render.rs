@@ -26,6 +26,8 @@ pub struct Texture<'a> {
 #[derive(Clone, Copy)]
 pub struct Earth<'a> {
     pub tex: Texture<'a>,
+    /// The same picture without the relief shading, for when that layer is off.
+    pub plain: Option<Texture<'a>>,
     pub dem: Option<crate::relief::Dem<'a>>,
 }
 

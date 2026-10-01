@@ -81,6 +81,12 @@ pub struct Layout {
     pub buttons: &'static [(i32, i32, i32, i32, &'static str, Action)],
     /// The font scale of the button labels.
     pub button_scale: i32,
+    /// The layers menu (it takes the place of the nearest-city list): x, first y, row pitch, width,
+    /// row height, font scale.
+    pub menu: (i32, i32, i32, i32, i32, i32),
+    /// The city card over the globe: width, height, font scale of the name and of the other lines,
+    /// y offset below the globe centre.
+    pub card: (i32, i32, i32, i32, i32),
 }
 
 impl Layout {
@@ -110,12 +116,14 @@ pub static LANDSCAPE: Layout = Layout {
         list: (500, 130, 24, 2, 11),
         dist: (792, 4, 1),
     },
-    clear: (500, 8, 300, 364),
+    clear: (500, 8, 300, 356),
     fps: (792, 14),
-    status: (500, 468, 292),
-    footer: Some((500, 456)),
+    status: (500, 471, 292),
+    footer: None,
     buttons: &BUTTONS,
     button_scale: 2,
+    menu: (500, 130, 34, 292, 30, 2),
+    card: (300, 104, 2, 1, 24),
 };
 
 /// A portrait screen of 720 x 1280 (the 5 inch DSI panel of the ESP32-P4 board): the globe on top, the
@@ -142,6 +150,8 @@ pub static PORTRAIT: Layout = Layout {
     footer: None,
     buttons: &PORTRAIT_BUTTONS,
     button_scale: 3,
+    menu: (24, 838, 56, 672, 48, 3),
+    card: (560, 200, 3, 2, 40),
 };
 
 /// A landscape screen of 1280 x 720 (the 5 inch panel of the M5Stack Tab5, ESP32-P4): the same arrangement
@@ -167,24 +177,28 @@ pub static HD: Layout = Layout {
     status: (740, 706, 516),
     footer: None,
     buttons: &HD_BUTTONS,
-    button_scale: 3,
+    button_scale: 2,
+    menu: (740, 196, 52, 516, 44, 3),
+    card: (500, 176, 3, 2, 36),
 };
 
-pub const HD_BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
+pub const HD_BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
     (740, 584, 204, 52, "SPIN", Action::SpinToggle),
     (956, 584, 100, 52, "-", Action::SpinSlower),
     (1068, 584, 100, 52, "+", Action::SpinFaster),
     (1180, 584, 76, 52, "<>", Action::SpinReverse),
-    (740, 644, 160, 52, "Z-", Action::ZoomOut),
-    (912, 644, 160, 52, "Z+", Action::ZoomIn),
-    (1084, 644, 172, 52, "WORLD", Action::World),
+    (740, 644, 120, 52, "Z-", Action::ZoomOut),
+    (872, 644, 120, 52, "Z+", Action::ZoomIn),
+    (1004, 644, 120, 52, "WORLD", Action::World),
+    (1136, 644, 120, 52, "LAYERS", Action::Layers),
 ];
 
-pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
-    (24, 1166, 240, 48, "SPIN", Action::SpinToggle),
-    (276, 1166, 120, 48, "-", Action::SpinSlower),
-    (408, 1166, 120, 48, "+", Action::SpinFaster),
-    (540, 1166, 156, 48, "<>", Action::SpinReverse),
+pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
+    (24, 1166, 180, 48, "SPIN", Action::SpinToggle),
+    (216, 1166, 96, 48, "-", Action::SpinSlower),
+    (324, 1166, 96, 48, "+", Action::SpinFaster),
+    (432, 1166, 96, 48, "<>", Action::SpinReverse),
+    (540, 1166, 156, 48, "LAYERS", Action::Layers),
     (24, 1218, 240, 48, "Z-", Action::ZoomOut),
     (276, 1218, 240, 48, "Z+", Action::ZoomIn),
     (528, 1218, 168, 48, "WORLD", Action::World),
@@ -324,6 +338,37 @@ pub fn name_of<'a>(img: &'a FwImage<'_>, extras: &'a [Extra], idx: usize) -> Opt
     })
 }
 
+/// The earth picture to draw: the shaded one, or the plain one when the relief layer is off.
+fn picture<'a>(earth: &'a Earth<'a>) -> &'a render::Texture<'a> {
+    match (&earth.plain, layer_on(layer::RELIEF)) {
+        (Some(plain), false) => plain,
+        _ => &earth.tex,
+    }
+}
+
+/// A cycle (or microsecond) counter the board sets, so a quick frame can time its parts: see [`PROFILE`].
+static CLOCK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Last quick frame: globe, nearest cities and markers, panel text (ticks of the clock set by [`set_clock`]).
+pub static PROFILE: [core::sync::atomic::AtomicU32; 3] = [
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+];
+
+/// Sets the counter (`fn() -> u32`, ticks wrap) that [`draw_moving`] times its parts with.
+pub fn set_clock(f: fn() -> u32) {
+    CLOCK.store(f as usize, core::sync::atomic::Ordering::Relaxed);
+}
+
+fn ticks() -> u32 {
+    match CLOCK.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => 0,
+        // SAFETY: only `set_clock` stores here, and it stores a `fn() -> u32`.
+        f => unsafe { core::mem::transmute::<usize, fn() -> u32>(f)() },
+    }
+}
+
 /// Redraws the globe (from the coarse table, [`MOVE_LUT_CELLS`] cells) and the parts that follow the
 /// view (the nearest cities: markers and list) over an earlier [`draw`] of the same buffer: the quick
 /// frame of a spinning or dragged globe. The buttons, the footer and the city dots keep their old
@@ -342,16 +387,24 @@ pub fn draw_moving(
         return false;
     }
     let l = layout();
-    lut.draw(fb, l.gx, l.gy, l.gr, view, &earth.tex, MOVE_STEP);
+    let t0 = ticks();
+    lut.draw(fb, l.gx, l.gy, l.gr, view, picture(earth), MOVE_STEP);
+    let t1 = ticks();
     // The nearest cities change as the globe turns: their markers and the list are redrawn too
     // (the buttons, the title block's static lines and the footer stay as they are).
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
     let n = img.nearest(view.lat, view.lon, &mut nearest);
     markers(fb, img, view, extras, &nearest[..n]);
+    city_card(fb, img, view, extras, earth.dem.as_ref());
+    let t2 = ticks();
     let c = l.clear;
     fb.rect(c.0, c.1, c.2, c.3, BG);
     let shown = view.span() * EARTH_RADIUS_KM * 0.75 <= DOTS_MAX_KM;
     side_panel(fb, img, view, spin, extras, &nearest[..n], shown, None);
+    let t3 = ticks();
+    PROFILE[0].store(t1.wrapping_sub(t0), core::sync::atomic::Ordering::Relaxed);
+    PROFILE[1].store(t2.wrapping_sub(t1), core::sync::atomic::Ordering::Relaxed);
+    PROFILE[2].store(t3.wrapping_sub(t2), core::sync::atomic::Ordering::Relaxed);
     true
 }
 
@@ -370,6 +423,137 @@ pub fn draw_fps(fb: &mut Fb<'_>, fps: u32) {
     fb.rect(right - 92, y - 4, 92, 24, BG);
     let wd = render::text_width(line.as_str(), 2);
     render::text(fb, right - wd, y, line.as_str(), 2, ACCENT);
+}
+
+/// The layers menu: one row per layer with a check box (it takes the place of the nearest-city list).
+fn menu_rows(fb: &mut Fb<'_>) {
+    let (mx, my, pitch, mw, mh, sc) = layout().menu;
+    for (i, name) in layer::NAMES.iter().enumerate() {
+        let y = my + i as i32 * pitch;
+        let on = layer_on(1 << i);
+        fb.rect(mx, y, mw, mh, BUTTON);
+        for k in 0..mw {
+            fb.set(mx + k, y, GRID);
+            fb.set(mx + k, y + mh - 1, GRID);
+        }
+        for k in 0..mh {
+            fb.set(mx, y + k, GRID);
+            fb.set(mx + mw - 1, y + k, GRID);
+        }
+        let b = 8 * sc;
+        let by = y + (mh - b) / 2;
+        fb.rect(mx + 8, by, b, b, if on { ACCENT } else { BG });
+        for k in 0..b {
+            fb.set(mx + 8 + k, by, DIM);
+            fb.set(mx + 8 + k, by + b - 1, DIM);
+            fb.set(mx + 8, by + k, DIM);
+            fb.set(mx + 8 + b - 1, by + k, DIM);
+        }
+        render::text(
+            fb,
+            mx + 8 + b + 12,
+            by,
+            name,
+            sc,
+            if on { TEXT } else { DIM },
+        );
+    }
+}
+
+/// The card of the selected city over the globe: name, country, position, the ground height (from the
+/// elevation picture) and what the host said about it; a ring marks the city on the globe.
+fn city_card(
+    fb: &mut Fb<'_>,
+    img: &FwImage<'_>,
+    view: View,
+    extras: &[Extra],
+    dem: Option<&crate::relief::Dem<'_>>,
+) {
+    let Some(idx) = selected() else { return };
+    let idx = idx as usize;
+    if idx >= img.len() {
+        return;
+    }
+    let l = layout();
+    let (la, lo) = crate::geo::to_deg(img.geoid(idx));
+    if let Some((x, y, _)) = render::project(view, l.gr as f32, l.gx, l.gy, la, lo) {
+        render::ring(fb, x, y, 10, ACCENT);
+        render::ring(fb, x, y, 11, ACCENT);
+    }
+    let (cw, ch, ns, ls, dy) = l.card;
+    let (x, y) = (l.gx - cw / 2, l.gy + dy);
+    fb.rect(x, y, cw, ch, BG);
+    for k in 0..cw {
+        for t in 0..2 {
+            fb.set(x + k, y + t, ACCENT);
+            fb.set(x + k, y + ch - 1 - t, ACCENT);
+        }
+    }
+    for k in 0..ch {
+        for t in 0..2 {
+            fb.set(x + t, y + k, ACCENT);
+            fb.set(x + cw - 1 - t, y + k, ACCENT);
+        }
+    }
+    let pad = 8 + ls;
+    let mut ty = y + pad;
+    let name = name_of(img, extras, idx).unwrap_or("(unnamed)");
+    render::text(
+        fb,
+        x + pad,
+        ty,
+        truncate(name, ((cw - 2 * pad) / (8 * ns)) as usize),
+        ns,
+        ACCENT,
+    );
+    ty += 8 * ns + 6;
+    let pitch = 8 * ls + 4;
+    let max_chars = ((cw - 2 * pad) / (8 * ls)) as usize;
+    let country = img.country(idx);
+    let mut line = Line::new();
+    let _ = write!(
+        line,
+        "{} ({})",
+        truncate(img.country_name(country), 20),
+        img.country_iso(country)
+    );
+    render::text(
+        fb,
+        x + pad,
+        ty,
+        truncate(line.as_str(), max_chars),
+        ls,
+        TEXT,
+    );
+    ty += pitch;
+    let mut line = Line::new();
+    let _ = write!(
+        line,
+        "{:.4}{} {:.4}{}",
+        abs(la),
+        if la >= 0.0 { 'N' } else { 'S' },
+        abs(lo),
+        if lo >= 0.0 { 'E' } else { 'W' }
+    );
+    render::text(fb, x + pad, ty, line.as_str(), ls, TEXT);
+    ty += pitch;
+    if let Some(dem) = dem {
+        let h = dem.height_at(la, lo);
+        let mut line = Line::new();
+        if h >= 0.0 {
+            let _ = write!(line, "ground about {:.0} m", h);
+        } else {
+            let _ = write!(line, "sea floor about {:.0} m", -h);
+        }
+        render::text(fb, x + pad, ty, truncate(line.as_str(), max_chars), ls, DIM);
+        ty += pitch;
+    }
+    if let Some(e) = extras
+        .iter()
+        .find(|e| e.index as usize == idx && e.detail_len > 0)
+    {
+        render::text(fb, x + pad, ty, truncate(e.detail(), max_chars), ls, DIM);
+    }
 }
 
 /// The nearest cities as numbered dots on the globe (with their names on the scope), and the view
@@ -467,6 +651,10 @@ fn side_panel(
         p.spin.2,
         if spin.on { ACCENT } else { DIM },
     );
+    if layer_on(layer::MENU) {
+        menu_rows(fb);
+        return;
+    }
     let (lx, ly, pitch, scale, name_len) = p.list;
     for (i, hit) in nearest.iter().enumerate() {
         let y = ly + i as i32 * pitch;
@@ -505,6 +693,10 @@ fn side_panel(
     }
 }
 
+/// Set false by a caller that draws a *moving* scope view as a full frame: the strokes (coastline,
+/// contours) are skipped then, as they are in quick frames, to keep the frame rate up.
+pub static STROKES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
 /// Whether [`draw`] strokes the vector coastline over the globe (on the board always; the browser
 /// simulation switches it to compare the renderers).
 pub static COAST_LINES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
@@ -532,7 +724,11 @@ const LEVELS_FINE: [i16; 17] = [
 /// The isohypses of the elevation picture around the view, as one pixel lines.
 fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_>>) {
     let Some(dem) = dem else { return };
-    if !CONTOURS.load(core::sync::atomic::Ordering::Relaxed) || view.zoom < CONTOUR_ZOOM {
+    if !CONTOURS.load(core::sync::atomic::Ordering::Relaxed)
+        || !STROKES.load(core::sync::atomic::Ordering::Relaxed)
+        || !layer_on(layer::CONTOURS)
+        || view.zoom < CONTOUR_ZOOM
+    {
         return;
     }
     let r = layout().gr as f32;
@@ -573,7 +769,10 @@ fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_
 /// The vector coastline (the image's rings, lakes included) as one pixel lines: crisp at any zoom,
 /// where the rasterized earth is soft. Only edges near the view are projected.
 fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
-    if !COAST_LINES.load(core::sync::atomic::Ordering::Relaxed) {
+    if !COAST_LINES.load(core::sync::atomic::Ordering::Relaxed)
+        || !STROKES.load(core::sync::atomic::Ordering::Relaxed)
+        || !layer_on(layer::COAST)
+    {
         return;
     }
     let r = layout().gr as f32;
@@ -661,7 +860,7 @@ pub fn draw(
                 layout().gy,
                 layout().gr,
                 view,
-                &earth.tex,
+                picture(earth),
                 GLOBE_STEP,
             ),
             None => render::draw_globe(
@@ -670,7 +869,7 @@ pub fn draw(
                 layout().gy,
                 layout().gr,
                 view,
-                &earth.tex,
+                picture(earth),
                 GLOBE_STEP,
             ),
         }
@@ -685,7 +884,7 @@ pub fn draw(
     let shown = query_km <= DOTS_MAX_KM;
     if shown {
         img.radius_index(view.lat, view.lon, query_km, |_, _| count += 1);
-        if count <= MAX_DOTS {
+        if count <= MAX_DOTS && layer_on(layer::DOTS) {
             let size = if scope { 1 } else { 0 };
             img.radius_index(view.lat, view.lon, query_km, |index, _| {
                 let (la, lo) = crate::geo::to_deg(img.geoid(index as usize));
@@ -696,7 +895,7 @@ pub fn draw(
             });
         }
     }
-    if !scope {
+    if !scope && layer_on(layer::RING) {
         // The query ring.
         for k in 0..120 {
             let bearing = k as f32 / 120.0 * core::f32::consts::TAU;
@@ -709,6 +908,7 @@ pub fn draw(
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
     let n = img.nearest(view.lat, view.lon, &mut nearest);
     markers(fb, img, view, extras, &nearest[..n]);
+    city_card(fb, img, view, extras, earth.dem.as_ref());
 
     side_panel(
         fb,
@@ -725,7 +925,9 @@ pub fn draw(
             Action::SpinToggle if spin.on => "STOP",
             _ => label,
         };
-        let fill = if action == Action::SpinToggle && spin.on {
+        let fill = if (action == Action::SpinToggle && spin.on)
+            || (action == Action::Layers && layer_on(layer::MENU))
+        {
             BUTTON_ON
         } else {
             BUTTON
@@ -759,23 +961,100 @@ pub fn draw(
 }
 
 /// The touch buttons: x, y, width, height, label, what a tap does.
-pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
-    (500, 374, 104, 34, "SPIN", Action::SpinToggle),
-    (612, 374, 60, 34, "-", Action::SpinSlower),
-    (680, 374, 60, 34, "+", Action::SpinFaster),
-    (748, 374, 44, 34, "<>", Action::SpinReverse),
-    (500, 414, 80, 34, "Z-", Action::ZoomOut),
-    (588, 414, 80, 34, "Z+", Action::ZoomIn),
-    (676, 414, 116, 34, "WORLD", Action::World),
+pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
+    (500, 366, 104, 32, "SPIN", Action::SpinToggle),
+    (612, 366, 60, 32, "-", Action::SpinSlower),
+    (680, 366, 60, 32, "+", Action::SpinFaster),
+    (748, 366, 44, 32, "<>", Action::SpinReverse),
+    (500, 402, 80, 32, "Z-", Action::ZoomOut),
+    (588, 402, 80, 32, "Z+", Action::ZoomIn),
+    (676, 402, 116, 32, "WORLD", Action::World),
+    (500, 438, 292, 32, "LAYERS", Action::Layers),
 ];
 
+/// The layers that can be switched on and off (bit masks of [`options`]); the board keeps all on by
+/// default, the touch menu changes them, the state packet carries them to the mirror.
+pub mod layer {
+    pub const RELIEF: u8 = 1;
+    pub const CONTOURS: u8 = 2;
+    pub const COAST: u8 = 4;
+    pub const DOTS: u8 = 8;
+    pub const RING: u8 = 16;
+    /// Not a layer: the layers menu is open (it is part of the screen the mirror must show too).
+    pub const MENU: u8 = 128;
+    pub const ALL: u8 = RELIEF | CONTOURS | COAST | DOTS | RING;
+    /// Names of the layers in the menu, by bit index.
+    pub const NAMES: [&str; 5] = [
+        "relief shading",
+        "isohypses",
+        "coastlines",
+        "city dots",
+        "query ring",
+    ];
+}
+
+static OPTIONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(layer::ALL);
+/// The city the card shows (index in the image), `u32::MAX` for none.
+static SELECTED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// The layer bits (and the menu bit) in force.
+pub fn options() -> u8 {
+    OPTIONS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_options(o: u8) {
+    OPTIONS.store(o, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the layer `bit` (see [`layer`]) is on.
+pub fn layer_on(bit: u8) -> bool {
+    options() & bit != 0
+}
+
+/// The selected city, if any.
+pub fn selected() -> Option<u32> {
+    match SELECTED.load(core::sync::atomic::Ordering::Relaxed) {
+        u32::MAX => None,
+        i => Some(i),
+    }
+}
+
+pub fn select(city: Option<u32>) {
+    SELECTED.store(
+        city.unwrap_or(u32::MAX),
+        core::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// What the board shares with the mirror besides the view and the spin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shared {
+    pub options: u8,
+    pub selected: Option<u32>,
+}
+
+/// The shared state in force now / puts a received one into force (the mirror and the browser).
+pub fn shared() -> Shared {
+    Shared {
+        options: options(),
+        selected: selected(),
+    }
+}
+
+pub fn set_shared(s: Shared) {
+    set_options(s.options);
+    select(s.selected);
+}
+
 /// Bytes of a state packet (see [`encode_state`]).
-pub const STATE_LEN: usize = 19;
+pub const STATE_LEN: usize = 24;
 
 /// What the board tells the host viewer about a screen: `V`, latitude, longitude and zoom (f32 LE),
-/// spin on (u8), spin speed (f32 LE), the board's frame rate (u8). The viewer runs [`draw`] on the same image and gets the
+/// spin on (u8), spin speed (f32 LE), the board's frame rate (u8), the layer options (u8) and the selected
+/// city (u32 LE, `u32::MAX` none). The viewer runs [`draw`] on the same image and gets the
 /// same screen without any pixels crossing the wire.
 pub fn encode_state(view: View, spin: Spin, fps: u32) -> [u8; STATE_LEN] {
+    let shared = shared();
     let mut p = [0u8; STATE_LEN];
     p[0] = b'V';
     p[1..5].copy_from_slice(&view.lat.to_le_bytes());
@@ -784,11 +1063,13 @@ pub fn encode_state(view: View, spin: Spin, fps: u32) -> [u8; STATE_LEN] {
     p[13] = u8::from(spin.on);
     p[14..18].copy_from_slice(&spin.dps.to_le_bytes());
     p[18] = fps.min(255) as u8;
+    p[19] = shared.options;
+    p[20..24].copy_from_slice(&shared.selected.unwrap_or(u32::MAX).to_le_bytes());
     p
 }
 
 /// The inverse of [`encode_state`]; `None` for anything else.
-pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32)> {
+pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32, Shared)> {
     if p.len() != STATE_LEN || p[0] != b'V' {
         return None;
     }
@@ -802,10 +1083,18 @@ pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32)> {
         on: p[13] != 0,
         dps: f(14),
     };
+    let shared = Shared {
+        options: p[19],
+        selected: match u32::from_le_bytes([p[20], p[21], p[22], p[23]]) {
+            u32::MAX => None,
+            i => Some(i),
+        },
+    };
     (view.lat.is_finite() && view.lon.is_finite() && view.zoom.is_finite()).then_some((
         view,
         spin,
         u32::from(p[18]),
+        shared,
     ))
 }
 
@@ -846,6 +1135,10 @@ pub enum Action {
     SpinSlower,
     /// Turns the other way round (the default is the Earth's own direction).
     SpinReverse,
+    /// Opens or closes the layers menu.
+    Layers,
+    /// Switches the layer with this index (see [`layer`]) on or off.
+    Toggle(u8),
     /// Look at this point (a tap on the globe).
     Center {
         lat: f32,
@@ -855,6 +1148,15 @@ pub enum Action {
 
 /// The action of a tap at screen pixel (x, y).
 pub fn hit(view: View, x: i32, y: i32) -> Action {
+    if layer_on(layer::MENU) {
+        let (mx, my, pitch, mw, mh, _) = layout().menu;
+        for i in 0..layer::NAMES.len() as i32 {
+            let ry = my + i * pitch;
+            if x >= mx - 4 && x < mx + mw + 4 && y >= ry - 3 && y < ry + mh + 3 {
+                return Action::Toggle(i as u8);
+            }
+        }
+    }
     for &(bx, by, bw, bh, _, action) in layout().buttons.iter() {
         // A finger is bigger than the button: a little slack (the rows are close).
         if x >= bx - 4 && x < bx + bw + 4 && y >= by - 4 && y < by + bh + 4 {
@@ -888,6 +1190,9 @@ pub fn apply(view: &mut View, spin: &mut Spin, action: Action) {
             spin.dps = spin.dps.signum() * (abs(spin.dps) / 1.5).clamp(Spin::MIN, Spin::MAX)
         }
         Action::SpinReverse => spin.dps = -spin.dps,
+        Action::Layers => set_options(options() ^ layer::MENU),
+        Action::Toggle(i) if i < 5 => set_options(options() ^ (1 << i)),
+        Action::Toggle(_) => {}
         Action::Center { lat, lon } => {
             view.lat = lat.clamp(-89.5, 89.5);
             view.lon = wrap_lon(lon);
@@ -896,6 +1201,205 @@ pub fn apply(view: &mut View, spin: &mut Spin, action: Action) {
                 view.zoom = clamp(view.zoom * 2.0);
             }
         }
+    }
+}
+
+/// The city under the screen point (x, y) when one lies within `slack` pixels of it.
+pub fn city_at(img: &FwImage<'_>, view: View, x: i32, y: i32, slack: i32) -> Option<u32> {
+    let l = layout();
+    let (dx, dy) = (x - l.gx, y - l.gy);
+    if dx * dx + dy * dy > l.gr * l.gr {
+        return None;
+    }
+    let r = l.gr as f32;
+    let (lat, lon, _) = render::unproject(view, dx as f32 / r, -(dy as f32) / r)?;
+    let mut found = [Hit { index: 0, km: 0.0 }; 1];
+    if img.nearest(lat, lon, &mut found) == 0 {
+        return None;
+    }
+    let (la, lo) = crate::geo::to_deg(img.geoid(found[0].index as usize));
+    let (px, py, _) = render::project(view, r, l.gx, l.gy, la, lo)?;
+    ((px - x) * (px - x) + (py - y) * (py - y) <= slack * slack).then_some(found[0].index)
+}
+
+/// A tooltip with the name of the city under the pointer (mouse over, in the mirror window and in the browser;
+/// the board has no pointer): drawn over the finished frame. Returns the city.
+pub fn draw_tooltip(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, x: i32, y: i32) -> Option<u32> {
+    let city = city_at(img, view, x, y, 12)?;
+    let idx = city as usize;
+    let mut line = Line::new();
+    let _ = write!(
+        line,
+        "{} {}",
+        truncate(img.name(idx).unwrap_or("(unnamed)"), 24),
+        img.country_iso(img.country(idx))
+    );
+    let sc = layout().card.3;
+    let (w, h) = (render::text_width(line.as_str(), sc) + 12, 8 * sc + 10);
+    let tx = (x + 14).min(layout().width as i32 - w - 2).max(2);
+    let ty = (y - h - 8).max(2);
+    fb.rect(tx, ty, w, h, BG);
+    for k in 0..w {
+        fb.set(tx + k, ty, ACCENT);
+        fb.set(tx + k, ty + h - 1, ACCENT);
+    }
+    for k in 0..h {
+        fb.set(tx, ty + k, ACCENT);
+        fb.set(tx + w - 1, ty + k, ACCENT);
+    }
+    render::text(fb, tx + 6, ty + 5, line.as_str(), sc, TEXT);
+    Some(city)
+}
+
+/// The two taps of a double tap must come within this many milliseconds.
+const DOUBLE_TAP_MS: u32 = 350;
+/// A flight to a city takes this long (s).
+const FLY_S: f32 = 0.9;
+
+#[derive(Clone, Copy)]
+struct Pending {
+    at: u32,
+    city: u32,
+    action: Action,
+}
+
+#[derive(Clone, Copy)]
+struct Fly {
+    from: View,
+    to: View,
+    t: f32,
+}
+
+/// Taps and flights on top of [`hit`] and [`apply`]: a tap on a city waits for a possible second tap;
+/// a double tap selects the city, flies the view to it and shows its card, a single one does what a tap
+/// on the globe does. Taps elsewhere act at once. The board and the browser simulation each keep one.
+pub struct Interact {
+    pending: Option<Pending>,
+    fly: Option<Fly>,
+}
+
+impl Interact {
+    pub const fn new() -> Self {
+        Interact {
+            pending: None,
+            fly: None,
+        }
+    }
+
+    /// A flight is under way (the view changes by itself).
+    pub fn flying(&self) -> bool {
+        self.fly.is_some()
+    }
+
+    /// A finger took hold of the globe: a flight stops, a waiting tap is dropped.
+    pub fn grab(&mut self) {
+        self.fly = None;
+        self.pending = None;
+    }
+
+    /// A tap at (x, y), `now_ms` on the caller's clock. Returns whether the screen changed.
+    pub fn tap(
+        &mut self,
+        img: &FwImage<'_>,
+        view: &mut View,
+        spin: &mut Spin,
+        x: i32,
+        y: i32,
+        now_ms: u32,
+    ) -> bool {
+        // a tap on the card closes it
+        if let Some(_c) = selected() {
+            let (cw, ch, _, _, dy) = layout().card;
+            let (cx, cy) = (layout().gx - cw / 2, layout().gy + dy);
+            if x >= cx && x < cx + cw && y >= cy && y < cy + ch {
+                select(None);
+                return true;
+            }
+        }
+        let action = hit(*view, x, y);
+        let Action::Center { .. } = action else {
+            self.flush(view, spin);
+            apply(view, spin, action);
+            return true;
+        };
+        match city_at(img, *view, x, y, 16) {
+            Some(city) => {
+                if let Some(p) = self.pending.take() {
+                    if p.city == city && now_ms.wrapping_sub(p.at) <= DOUBLE_TAP_MS {
+                        self.fly_to(img, *view, city);
+                        return true;
+                    }
+                    apply(view, spin, p.action);
+                }
+                self.pending = Some(Pending {
+                    at: now_ms,
+                    city,
+                    action,
+                });
+                false
+            }
+            None => {
+                self.flush(view, spin);
+                select(None);
+                apply(view, spin, action);
+                true
+            }
+        }
+    }
+
+    fn flush(&mut self, view: &mut View, spin: &mut Spin) {
+        if let Some(p) = self.pending.take() {
+            apply(view, spin, p.action);
+        }
+    }
+
+    fn fly_to(&mut self, img: &FwImage<'_>, from: View, city: u32) {
+        let (lat, lon) = crate::geo::to_deg(img.geoid(city as usize));
+        let zoom = from.zoom.max(zoom_for(80.0)).min(4000.0);
+        select(Some(city));
+        self.fly = Some(Fly {
+            from,
+            to: View { lat, lon, zoom },
+            t: 0.0,
+        });
+    }
+
+    /// Time passes (`dt` seconds): a waiting tap that no second tap followed acts as a single tap, a
+    /// flight goes on. Returns whether the view or the screen changed.
+    pub fn tick(&mut self, view: &mut View, spin: &mut Spin, dt: f32, now_ms: u32) -> bool {
+        let mut changed = false;
+        if let Some(p) = self.pending {
+            if now_ms.wrapping_sub(p.at) > DOUBLE_TAP_MS {
+                self.pending = None;
+                apply(view, spin, p.action);
+                changed = true;
+            }
+        }
+        if let Some(f) = self.fly.as_mut() {
+            f.t += dt;
+            let u = (f.t / FLY_S).min(1.0);
+            let e = u * u * (3.0 - 2.0 * u);
+            let mut dlon = wrap_lon(f.to.lon - f.from.lon);
+            if dlon > 180.0 {
+                dlon -= 360.0;
+            }
+            *view = View {
+                lat: f.from.lat + (f.to.lat - f.from.lat) * e,
+                lon: wrap_lon(f.from.lon + dlon * e),
+                zoom: f.from.zoom + (f.to.zoom - f.from.zoom) * e,
+            };
+            if u >= 1.0 {
+                self.fly = None;
+            }
+            changed = true;
+        }
+        changed
+    }
+}
+
+impl Default for Interact {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -976,16 +1480,30 @@ mod tests {
                 assert!(apart, "{} and {} overlap", a.4, b.4);
             }
         }
-        // the list ends above the buttons, the status line below them
+        // the list ends above the buttons, the status line below all of them
         let (_, y0, pitch, scale, _) = l.panel.list;
         let list_end = y0 + (LIST as i32 - 1) * pitch + 8 * scale;
-        assert!(list_end <= l.buttons[0].1, "{list_end}");
-        assert!(l.status.1 >= l.buttons[4].1 + l.buttons[4].3);
+        let top = l.buttons.iter().map(|b| b.1).min().unwrap();
+        let bottom = l.buttons.iter().map(|b| b.1 + b.3).max().unwrap();
+        assert!(list_end <= top, "{list_end} {top}");
+        assert!(l.status.1 >= bottom, "{} {bottom}", l.status.1);
+        // the menu rows fit between the panel text and the buttons, the card inside the globe
+        let (_, my, mp, _, mh, _) = l.menu;
+        assert!(my + (layer::NAMES.len() as i32 - 1) * mp + mh <= top);
+        let (cw, ch, _, _, dy) = l.card;
+        assert!(
+            dy + ch <= l.gr && cw <= 2 * l.gr,
+            "the card sits inside the globe"
+        );
         // the same actions as the landscape screen
-        let acts = |b: &[(i32, i32, i32, i32, &str, Action)]| {
-            b.iter().map(|t| t.5).collect::<alloc::vec::Vec<_>>()
-        };
-        assert_eq!(acts(l.buttons), acts(LANDSCAPE.buttons));
+        fn labels(
+            b: &'static [(i32, i32, i32, i32, &'static str, Action)],
+        ) -> alloc::vec::Vec<&'static str> {
+            let mut v: alloc::vec::Vec<&'static str> = b.iter().map(|t| t.4).collect();
+            v.sort();
+            v
+        }
+        assert_eq!(labels(l.buttons), labels(LANDSCAPE.buttons));
     }
 
     #[test]
@@ -1012,6 +1530,7 @@ mod tests {
 
     #[test]
     fn state_packets_round_trip() {
+        let _g = crate::GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
         let view = View {
             lat: 48.137,
             lon: -11.575,
@@ -1021,14 +1540,24 @@ mod tests {
             on: true,
             dps: 40.0,
         };
+        set_shared(Shared {
+            options: layer::ALL & !layer::CONTOURS,
+            selected: Some(1234),
+        });
         let p = encode_state(view, spin, 32);
-        assert_eq!(decode_state(&p), Some((view, spin, 32)));
+        let shared = shared();
+        assert_eq!(decode_state(&p), Some((view, spin, 32, shared)));
+        set_shared(Shared {
+            options: layer::ALL,
+            selected: None,
+        });
         assert_eq!(decode_state(&p[..10]), None);
         assert_eq!(decode_state(b"#hello hello hello"), None);
     }
 
     #[test]
     fn taps_and_drags_move_the_view() {
+        let _g = crate::GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
         let mut view = View::new(48.0, 11.0);
         let mut spin = Spin::new();
         // The buttons: spin, slower, faster; zoom out / in, world.

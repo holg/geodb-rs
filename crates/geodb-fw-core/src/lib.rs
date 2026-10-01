@@ -31,6 +31,10 @@ pub mod ui;
 
 pub use image::{FwImage, ImageError};
 
+/// Tests that touch the UI's global state (layers, selection, layout) take this lock.
+#[cfg(test)]
+pub(crate) static GLOBALS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A hash of this crate's source: two programs built from the same code report the same id.
 pub const BUILD_ID: &str = env!("GEODB_FW_CORE_BUILD");
 pub use query::{Answer, Hit};
@@ -86,6 +90,88 @@ mod tests {
             marble: &[],
             elev: None,
         })
+    }
+
+    #[test]
+    fn a_double_tap_on_a_city_flies_to_it_and_selects_it_a_single_tap_zooms_in() {
+        let _g = GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::render::View;
+        let bytes = image_of(5000);
+        let img = FwImage::parse(&bytes).unwrap();
+        let (la, lo) = geo::to_deg(img.geoid(100));
+        let l = ui::layout();
+        // looking straight at city 100 from far enough away that it is the city under the centre
+        let start = View {
+            lat: la,
+            lon: lo,
+            zoom: 8.0,
+        };
+
+        // a double tap (two taps 100 ms apart)
+        let (mut view, mut spin) = (start, ui::Spin::new());
+        let mut it = ui::Interact::new();
+        ui::select(None);
+        assert!(
+            !it.tap(&img, &mut view, &mut spin, l.gx, l.gy, 1000),
+            "a tap on a city waits for a second one"
+        );
+        assert!(
+            it.tap(&img, &mut view, &mut spin, l.gx, l.gy, 1100),
+            "the second tap starts the flight"
+        );
+        assert!(it.flying());
+        assert!(ui::selected().is_some());
+        let selected = ui::selected().unwrap();
+        let (tla, tlo) = geo::to_deg(img.geoid(selected as usize));
+        for _ in 0..100 {
+            it.tick(&mut view, &mut spin, 0.02, 1100);
+        }
+        assert!(!it.flying(), "the flight ends");
+        assert!(
+            (view.lat - tla).abs() < 1e-3 && (view.lon - tlo).abs() < 1e-3,
+            "{view:?}"
+        );
+        assert!(
+            view.zoom >= ui::zoom_for(80.0).min(4000.0) - 1.0,
+            "{}",
+            view.zoom
+        );
+
+        // a single tap: nothing at once, then (after the double-tap window) the tap on the globe: it moves in
+        let (mut view, mut spin) = (start, ui::Spin::new());
+        let mut it = ui::Interact::new();
+        ui::select(None);
+        assert!(!it.tap(&img, &mut view, &mut spin, l.gx, l.gy, 5000));
+        assert_eq!(view.zoom, 8.0);
+        assert!(!it.tick(&mut view, &mut spin, 0.1, 5200), "still waiting");
+        assert!(
+            it.tick(&mut view, &mut spin, 0.2, 5400),
+            "the window passed"
+        );
+        assert!(view.zoom > 8.0 && !it.flying());
+        assert!(ui::selected().is_none());
+
+        // a tap on a button acts at once, and the layers menu opens and toggles a layer
+        let (mut view, mut spin) = (start, ui::Spin::new());
+        let mut it = ui::Interact::new();
+        let (bx, by, bw, bh, label, _) = *l.buttons.iter().find(|b| b.4 == "LAYERS").unwrap();
+        assert!(
+            it.tap(&img, &mut view, &mut spin, bx + bw / 2, by + bh / 2, 9000),
+            "{label}"
+        );
+        assert!(ui::layer_on(ui::layer::MENU));
+        let (mx, my, _, mw, mh, _) = l.menu;
+        assert!(
+            it.tap(&img, &mut view, &mut spin, mx + mw / 2, my + mh / 2, 9100),
+            "the first menu row"
+        );
+        assert!(!ui::layer_on(ui::layer::RELIEF), "relief switched off");
+        it.tap(&img, &mut view, &mut spin, mx + mw / 2, my + mh / 2, 9200);
+        assert!(ui::layer_on(ui::layer::RELIEF));
+        it.tap(&img, &mut view, &mut spin, bx + bw / 2, by + bh / 2, 9300);
+        assert!(!ui::layer_on(ui::layer::MENU));
+        ui::set_options(ui::layer::ALL);
+        ui::select(None);
     }
 
     #[test]

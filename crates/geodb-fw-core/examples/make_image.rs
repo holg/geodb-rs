@@ -300,6 +300,7 @@ fn main() {
         ui::CONTOURS.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let earth = geodb_fw_core::render::Earth {
+        plain: None,
         tex: geodb_fw_core::render::Texture {
             w: ew,
             h: eh,

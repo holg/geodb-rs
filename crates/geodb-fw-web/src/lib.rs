@@ -61,6 +61,12 @@ struct Board {
     hybrid: Option<(&'static [u8], &'static [u8])>,
     /// Relief: the elevation picture, its shade field and the shaded copies of the earth.
     relief: Option<Relief>,
+    /// Double taps, flights to a city, the pending single tap; the page's clock in ms.
+    interact: ui::Interact,
+    clock_ms: u32,
+    /// The pointer over the screen (mouse over a city shows its name) and the city under it.
+    hover: Option<(i32, i32)>,
+    hovered: Option<u32>,
     view: View,
     spin: ui::Spin,
     /// The fine table for rest and spin, the coarse one for a globe being dragged.
@@ -285,6 +291,10 @@ pub extern "C" fn start() -> i32 {
         coarse,
         hybrid,
         relief: None,
+        interact: ui::Interact::new(),
+        clock_ms: 0,
+        hover: None,
+        hovered: None,
         view: View::new(30.0, 10.0),
         spin: ui::Spin::new(),
         lut: (
@@ -334,6 +344,29 @@ pub extern "C" fn release() {
 #[no_mangle]
 pub extern "C" fn frame(dt_ms: f32) -> i32 {
     BOARD.with(|b| b.borrow_mut().as_mut().map_or(0, |b| b.step(dt_ms)))
+}
+
+/// The pointer is over the screen at pixel (x, y) (negative: it left): a city under it shows its name.
+#[no_mangle]
+pub extern "C" fn hover(x: i32, y: i32) {
+    BOARD.with(|b| {
+        let mut b = b.borrow_mut();
+        let Some(b) = b.as_mut() else { return };
+        b.hover = (x >= 0 && y >= 0).then_some((x, y));
+        let city = b
+            .hover
+            .and_then(|(hx, hy)| ui::city_at(&b.img, b.view, hx, hy, 12));
+        if city != b.hovered {
+            b.hovered = city;
+            b.full = true; // the tooltip appears or goes
+        }
+    });
+}
+
+/// Bytes of a state packet the page hands to `state_buf()`.
+#[no_mangle]
+pub extern "C" fn state_len() -> u32 {
+    ui::STATE_LEN as u32
 }
 
 /// The width of the screen in pixels (800 landscape, 720 portrait).
@@ -394,7 +427,8 @@ pub extern "C" fn apply_state() -> i32 {
         let mut b = b.borrow_mut();
         let Some(b) = b.as_mut() else { return 0 };
         match ui::decode_state(&b.packet) {
-            Some((view, spin, fps)) => {
+            Some((view, spin, fps, shared)) => {
+                ui::set_shared(shared); // the layers and the selected city are the board's
                 let (still, have_full, quick) = match b.remote {
                     Some(old) if old.view == view => (old.still, old.have_full, old.quick),
                     Some(old) => (0.0, old.have_full, old.quick),
@@ -546,6 +580,9 @@ impl Board {
             (Some(mut g), Some(pos)) => {
                 let (dx, dy) = (pos.0 - g.last.0, pos.1 - g.last.1);
                 if (pos.0 - g.start.0).abs() + (pos.1 - g.start.1).abs() >= 12 {
+                    if !g.dragging {
+                        self.interact.grab(); // a drag takes hold of the globe: no flight, no waiting tap
+                    }
                     g.dragging = true;
                 }
                 if g.dragging && dt > 0.0 {
@@ -563,9 +600,14 @@ impl Board {
                 self.grab = None;
                 if !g.dragging {
                     self.vel = (0.0, 0.0);
-                    let action = ui::hit(self.view, g.start.0, g.start.1);
-                    if action != ui::Action::None {
-                        ui::apply(&mut self.view, &mut self.spin, action);
+                    if self.interact.tap(
+                        &self.img,
+                        &mut self.view,
+                        &mut self.spin,
+                        g.start.0,
+                        g.start.1,
+                        self.clock_ms,
+                    ) {
                         self.full = true;
                     }
                 }
@@ -584,7 +626,20 @@ impl Board {
         if self.spin.on {
             ui::advance(&mut self.view, self.spin, dt);
         }
+        self.clock_ms = self.clock_ms.wrapping_add((dt * 1000.0) as u32);
+        let moved = self
+            .interact
+            .tick(&mut self.view, &mut self.spin, dt, self.clock_ms);
+        if moved {
+            // a flight redraws quickly, the end of one (or a single tap taking effect) is a full screen
+            if self.interact.flying() {
+                redraw = true;
+            } else {
+                self.full = true;
+            }
+        }
         let motion = self.spin.on
+            || self.interact.flying()
             || self.grab.is_some_and(|g| g.dragging)
             || self.vel.0.abs() + self.vel.1.abs() > STOP_PX_S;
         if !motion && self.dirty {
@@ -604,6 +659,7 @@ impl Board {
             return 0;
         }
         let (full_tex, coarse_tex) = self.textures();
+        let (plain_full, plain_coarse) = self.base_textures();
         let dem = self.dem();
         let mut fb = Fb {
             px: &mut self.fb,
@@ -620,6 +676,7 @@ impl Board {
                 &[],
                 &Earth {
                     tex: coarse_tex,
+                    plain: Some(plain_coarse),
                     dem: None,
                 },
             );
@@ -627,6 +684,11 @@ impl Board {
             ui::draw_fps(&mut fb, self.fps);
             self.dirty = true;
         } else {
+            // (a moving scope view is a full frame too: without the strokes, as on the board)
+            ui::STROKES.store(
+                !(motion && self.view.zoom >= ui::SCOPE_ZOOM),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             ui::draw(
                 &mut fb,
                 &self.img,
@@ -634,9 +696,16 @@ impl Board {
                 self.spin,
                 Some(&mut self.lut.0),
                 &[],
-                &Earth { tex: full_tex, dem },
+                &Earth {
+                    tex: full_tex,
+                    plain: Some(plain_full),
+                    dem,
+                },
             );
             self.full = false;
+        }
+        if let Some((hx, hy)) = self.hover {
+            ui::draw_tooltip(&mut fb, &self.img, self.view, hx, hy);
         }
         ui::draw_status(&mut fb, &self.status);
         self.frames += 1;
@@ -667,6 +736,7 @@ impl Board {
         let mut view = r.view;
         ui::advance(&mut view, r.spin, r.age.min(0.2));
         let (full_tex, coarse_tex) = self.textures();
+        let (plain_full, plain_coarse) = self.base_textures();
         let dem = self.dem();
         let mut fb = Fb {
             px: &mut self.fb,
@@ -683,10 +753,15 @@ impl Board {
                 &[],
                 &Earth {
                     tex: coarse_tex,
+                    plain: Some(plain_coarse),
                     dem: None,
                 },
             );
         } else {
+            ui::STROKES.store(
+                !(moving && view.zoom >= ui::SCOPE_ZOOM),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             ui::draw(
                 &mut fb,
                 &self.img,
@@ -694,8 +769,15 @@ impl Board {
                 r.spin,
                 Some(&mut self.lut.0),
                 &[],
-                &Earth { tex: full_tex, dem },
+                &Earth {
+                    tex: full_tex,
+                    plain: Some(plain_full),
+                    dem,
+                },
             );
+        }
+        if let Some((hx, hy)) = self.hover {
+            ui::draw_tooltip(&mut fb, &self.img, view, hx, hy);
         }
         ui::draw_fps(&mut fb, r.fps);
         ui::draw_status(&mut fb, "web: connected, the board's view");

@@ -39,6 +39,20 @@ impl Dem<'_> {
     }
 }
 
+impl Dem<'_> {
+    /// The height (metres) at (lat, lon) degrees, bilinear between the cell centres.
+    pub fn height_at(&self, lat: f32, lon: f32) -> f32 {
+        let fx = (lon + 180.0) / 360.0 * self.w as f32 - 0.5;
+        let fy = (90.0 - lat) / 180.0 * self.h as f32 - 0.5;
+        let (x0, y0) = (floor(fx), floor(fy));
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (xi, yi) = (x0 as isize, y0 as isize);
+        let top = self.height(xi, yi) * (1.0 - tx) + self.height(xi + 1, yi) * tx;
+        let bottom = self.height(xi, yi + 1) * (1.0 - tx) + self.height(xi + 1, yi + 1) * tx;
+        top * (1.0 - ty) + bottom * ty
+    }
+}
+
 /// Bytes of the shade field of a `dem`.
 pub const fn shade_len(dem: &Dem<'_>) -> usize {
     dem.w * dem.h

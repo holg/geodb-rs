@@ -94,6 +94,10 @@ pub fn sdram_cached() {
         mpu.rnr.write(3);
         mpu.rbar.write((SDRAM_BASE + 0x0080_0000) as u32);
         mpu.rasr.write(attrs | (22 << 1)); // 8 MB
+                                           // the plain earth, 4 MB at 0xC040_0000
+        mpu.rnr.write(4);
+        mpu.rbar.write((SDRAM_BASE + 0x0040_0000) as u32);
+        mpu.rasr.write(attrs | (21 << 1));
         mpu.ctrl.write((1 << 2) | 1);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();

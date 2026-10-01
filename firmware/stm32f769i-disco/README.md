@@ -191,3 +191,20 @@ colours (`ui::SHADE_STRENGTH`), then halves the shaded earth for the globe while
 2.5) the full redraws also stroke contour lines (isohypses) found on the elevation grid by marching squares: land in
 tan, sea floor in blue (every 1000 m, every 500 m from zoom 6). The 200 KB come out of the city budget: 40,928
 cities.
+
+## Layers and touch (the same on the board, in the mirror window and in the browser)
+
+* **LAYERS** (bottom button) opens a menu in place of the nearest-city list with a check box for each layer:
+  relief shading, isohypses, coastlines, city dots, query ring. The board keeps the shaded and the plain earth
+  (the plain copy sits in its own cacheable SDRAM window), so switching relief off is free. The layers and the menu
+  are part of the state packet (now 24 bytes: the options byte and the selected city), so the mirror shows the
+  same screen; clicks in the mirror are sent to the board as taps and change its layers.
+* **Double tap on a city** (two taps within 350 ms on the same city; a single tap on a city still recentres and
+  zooms in, after the double-tap window): the view flies to the city (0.9 s, ease in and out, to about an 80 km
+  view) and a card opens over the globe: name, country, position, the ground height from the elevation picture and
+  what the names server knows (state). A ring marks the city; a tap on the card closes it.
+* **Mouse over a city** (mirror window and browser): a tooltip with its name and country. The board has no pointer.
+* **Frame rate:** a moving view at the closest zooms (the scope, from zoom 12) is drawn as a full frame; it skips the
+  coastline and contour strokes while it moves (`ui::STROKES`), as quick frames do: 23 ms instead of 61 ms per frame
+  on the board (32 fps; the strokes come back when it rests). `ui::PROFILE` times the parts of a quick frame (the
+  log line `32fps 19ms: g15 n0 p2` is the frame, the globe, the nearest cities, the panel text, in ms).

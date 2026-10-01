@@ -42,6 +42,10 @@ const IMAGE_MAX: usize = 0x14_0000;
 const LUT_AT: usize = 0x0020_0000; // cacheable window, 2 MB (display::sdram_cached)
 const EARTH_AT: usize = 0x0080_0000; // cacheable window, 8 MB
 const MIP_AT: usize = EARTH_AT + 0x0040_0000;
+/// The plain (unshaded) earth, 4 MB, in a cacheable window of its own; its half-size copy sits in the
+/// table window behind the globe tables.
+const PLAIN_AT: usize = 0x0040_0000;
+const PLAIN_MIP_AT: usize = LUT_AT + 0x0010_0000;
 /// The unpacked elevation picture (up to 512 KB), the last of the window.
 const DEM_AT: usize = EARTH_AT + 0x0078_0000;
 const DEM_MAX: usize = 0x0008_0000;
@@ -55,6 +59,9 @@ const SCRATCH_LEN: usize = 0x0020_0000;
 struct Earth<'a> {
     full: Texture<'a>,
     coarse: Texture<'a>,
+    /// The same two without the relief shading (the layers menu switches it off).
+    plain: Texture<'a>,
+    plain_coarse: Texture<'a>,
     /// The elevation picture for the contour lines (when the image has one).
     dem: Option<geodb_fw_core::relief::Dem<'a>>,
 }
@@ -132,6 +139,7 @@ async fn main(spawner: Spawner) {
     // fast. The SDRAM is mapped non-cacheable by display::init_sdram (MPU).
     core.SCB.enable_icache();
     core.SCB.enable_dcache(&mut core.CPUID);
+    ui::set_clock(DWT::cycle_count);
     DWT::unlock();
     core.DCB.enable_trace();
     core.DWT.enable_cycle_counter();
@@ -316,7 +324,13 @@ async fn main(spawner: Spawner) {
     let t = Instant::now();
     // (the hybrid: the image's Blue Marble colours under its vector coast; procedural colours when the
     // image has no colour picture, as the placeholder)
-    match geodb_fw_core::coast::earth(&img, ui::EARTH_W, ui::EARTH_H, earth_px, work, crossings) {
+    let plain_px: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(
+            (display::SDRAM_BASE + PLAIN_AT) as *mut u8,
+            ui::EARTH_W * ui::EARTH_H * 2,
+        )
+    };
+    match geodb_fw_core::coast::earth(&img, ui::EARTH_W, ui::EARTH_H, plain_px, work, crossings) {
         Ok(()) => info!(
             "earth rasterized in {} ms ({})",
             t.elapsed().as_millis(),
@@ -328,6 +342,8 @@ async fn main(spawner: Spawner) {
         ),
         Err(_) => error!("the coastline does not rasterize"),
     }
+    // the shaded earth starts as a copy of the plain one
+    earth_px.copy_from_slice(plain_px);
     // the elevation picture: unpacked, turned into a shade field (in the scratch, free by now) that is
     // mixed into the earth's colours; the picture itself stays for the contour lines
     let mut dem_ref = None;
@@ -375,6 +391,13 @@ async fn main(spawner: Spawner) {
         )
     };
     geodb_fw_core::coast::halve(earth_px, ui::EARTH_W, ui::EARTH_H, mip_px);
+    let plain_mip_px: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(
+            (display::SDRAM_BASE + PLAIN_MIP_AT) as *mut u8,
+            ui::EARTH_W * ui::EARTH_H / 2,
+        )
+    };
+    geodb_fw_core::coast::halve(plain_px, ui::EARTH_W, ui::EARTH_H, plain_mip_px);
     watchdog.pet();
     let earth = Earth {
         full: Texture {
@@ -387,12 +410,23 @@ async fn main(spawner: Spawner) {
             h: ui::EARTH_H / 2,
             px: &*mip_px,
         },
+        plain: Texture {
+            w: ui::EARTH_W,
+            h: ui::EARTH_H,
+            px: &*plain_px,
+        },
+        plain_coarse: Texture {
+            w: ui::EARTH_W / 2,
+            h: ui::EARTH_H / 2,
+            px: &*plain_mip_px,
+        },
         dem: dem_ref,
     };
 
     // ---- the first screen ----
     let mut view = View::new(30.0, 10.0);
     let mut spin = ui::Spin::new();
+    let mut interact = ui::Interact::new();
     let mut front = 0usize;
     draw_and_show(
         &mut disp,
@@ -539,6 +573,9 @@ async fn main(spawner: Spawner) {
                 let far = (i32::from(pos.0) - i32::from(g.start.0)).abs()
                     + (i32::from(pos.1) - i32::from(g.start.1)).abs();
                 if far >= 12 {
+                    if !g.dragging {
+                        interact.grab(); // a drag takes hold of the globe: no flight, no waiting tap
+                    }
                     g.dragging = true;
                 }
                 if g.dragging && dt > 0.0 {
@@ -558,10 +595,16 @@ async fn main(spawner: Spawner) {
                     info!("flick {},{} px/s", vel.0 as i32, vel.1 as i32);
                 } else {
                     vel = (0.0, 0.0);
-                    let action = ui::hit(view, i32::from(g.start.0), i32::from(g.start.1));
                     info!("tap {},{}", g.start.0, g.start.1);
-                    if action != ui::Action::None {
-                        ui::apply(&mut view, &mut spin, action);
+                    let now_ms = Instant::now().as_millis() as u32;
+                    if interact.tap(
+                        &img,
+                        &mut view,
+                        &mut spin,
+                        i32::from(g.start.0),
+                        i32::from(g.start.1),
+                        now_ms,
+                    ) {
                         redraw = true;
                         full = 2;
                     }
@@ -599,6 +642,7 @@ async fn main(spawner: Spawner) {
             net::INJ_DY.swap(0, core::sync::atomic::Ordering::Relaxed),
         );
         if (idx != 0 || idy != 0) && dt > 0.0 {
+            interact.grab();
             ui::pan(&mut view, idx, idy);
             let k = (dt * 20.0).min(1.0);
             vel.0 += (idx as f32 / dt - vel.0) * k;
@@ -612,12 +656,18 @@ async fn main(spawner: Spawner) {
         let tap = net::INJ_TAP.swap(0, core::sync::atomic::Ordering::Relaxed);
         if tap & (1 << 31) != 0 {
             let (x, y) = (((tap >> 16) & 0x3ff) as i32, (tap & 0x3ff) as i32);
-            let action = ui::hit(view, x, y);
             info!("tap {},{} from the mirror", x, y);
             vel = (0.0, 0.0);
-            if action != ui::Action::None {
-                ui::apply(&mut view, &mut spin, action);
+            let now_ms = Instant::now().as_millis() as u32;
+            if interact.tap(&img, &mut view, &mut spin, x, y, now_ms) {
                 redraw = true;
+                full = 2;
+            }
+        }
+        // double taps and flights to a city; a tap on a city waits a moment for its second tap
+        if interact.tick(&mut view, &mut spin, dt, Instant::now().as_millis() as u32) {
+            redraw = true;
+            if !interact.flying() {
                 full = 2;
             }
         }
@@ -625,6 +675,7 @@ async fn main(spawner: Spawner) {
             ui::advance(&mut view, spin, dt);
         }
         let motion = spin.on
+            || interact.flying()
             || grab.is_some_and(|g| g.dragging)
             || vel.0.abs() + vel.1.abs() > STOP_PX_S
             || inj_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(80));
@@ -697,6 +748,11 @@ async fn main(spawner: Spawner) {
                 net::FPS.store(fps, core::sync::atomic::Ordering::Relaxed);
             }
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
+            // (a moving scope view is a full frame: without the strokes, which would cost 40 ms)
+            ui::STROKES.store(
+                !(motion && view.zoom >= ui::SCOPE_ZOOM),
+                core::sync::atomic::Ordering::Relaxed,
+            );
             let draw_ms = draw_and_show(
                 &mut disp,
                 &mut front,
@@ -722,7 +778,17 @@ async fn main(spawner: Spawner) {
                 let ms = since.elapsed().as_millis() as u32;
                 info!("moving: {} ms per frame ({} ms drawing)", ms / 30, draw_ms);
                 let mut line = Buf::new();
-                let _ = write!(line, "moving: {} fps, {} ms drawing", fps, draw_ms);
+                let p =
+                    |i: usize| ui::PROFILE[i].load(core::sync::atomic::Ordering::Relaxed) / 216_000;
+                let _ = write!(
+                    line,
+                    "{}fps {}ms: g{} n{} p{}",
+                    fps,
+                    draw_ms,
+                    p(0),
+                    p(1),
+                    p(2)
+                );
                 netlog(udp.as_mut(), net_state == 2, line.as_str()).await;
                 frames = 0;
                 since = Instant::now();
@@ -772,6 +838,7 @@ async fn draw_and_show(
             extras,
             &geodb_fw_core::render::Earth {
                 tex: earth.coarse,
+                plain: Some(earth.plain_coarse),
                 dem: None,
             },
         );
@@ -787,6 +854,7 @@ async fn draw_and_show(
             extras,
             &geodb_fw_core::render::Earth {
                 tex: earth.full,
+                plain: Some(earth.plain),
                 dem: earth.dem,
             },
         );
