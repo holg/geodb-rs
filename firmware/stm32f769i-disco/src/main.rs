@@ -224,35 +224,6 @@ async fn main(spawner: Spawner) {
         usart::Config::default(), // 115200 8N1
     )
     .ok();
-    // ---- Ethernet (LAN8742 over RMII) with DHCP; the host is found by broadcast ----
-    let mut rng = Rng::new(p.RNG, Irqs);
-    let mut seed = [0u8; 8];
-    rng.blocking_fill_bytes(&mut seed);
-    let device = Ethernet::new(
-        unsafe { net::packets() },
-        p.ETH,
-        p.PA1,
-        p.PA7,
-        p.PC4,
-        p.PC5,
-        p.PG13,
-        p.PG14,
-        p.PG11,
-        [0x02, 0x47, 0x45, 0x4f, 0x44, 0x42], // locally administered: "GEODB"
-        p.ETH_SMA,
-        p.PA2,
-        p.PC1,
-        Irqs,
-    );
-    let (stack, runner) = Stack::new(unsafe { net::storage() }, u64::from_le_bytes(seed));
-    let iface = stack.add_iface(net::DEVICE.init(device)).ok();
-    if let Some(iface) = &iface {
-        let _ = iface.set_dhcpv4(Some(Default::default()));
-    }
-    spawner.spawn(defmt::unwrap!(net::net_task(runner)));
-    info!("ethernet: started, waiting for a cable and DHCP");
-    spawner.spawn(defmt::unwrap!(net::command_task(stack)));
-    let mut udp = net::open_socket(stack);
     let mut status = Buf::new();
     let _ = status.write_str("net: no cable");
     let mut net_state = 0u8;
@@ -303,6 +274,39 @@ async fn main(spawner: Spawner) {
     )
     .await;
     green.set_high();
+
+    // (after the first screen: the globe is up even when the network does not come)
+    // ---- Ethernet (LAN8742 over RMII) with DHCP; the host is found by broadcast ----
+    let mut rng = Rng::new(p.RNG, Irqs);
+    let mut seed = [0u8; 8];
+    rng.blocking_fill_bytes(&mut seed);
+    info!("ethernet: starting the MAC (waits for the PHY clock)");
+    let device = Ethernet::new(
+        unsafe { net::packets() },
+        p.ETH,
+        p.PA1,
+        p.PA7,
+        p.PC4,
+        p.PC5,
+        p.PG13,
+        p.PG14,
+        p.PG11,
+        [0x02, 0x47, 0x45, 0x4f, 0x44, 0x42], // locally administered: "GEODB"
+        p.ETH_SMA,
+        p.PA2,
+        p.PC1,
+        Irqs,
+    );
+    info!("ethernet: MAC up");
+    let (stack, runner) = Stack::new(unsafe { net::storage() }, u64::from_le_bytes(seed));
+    let iface = stack.add_iface(net::DEVICE.init(device)).ok();
+    if let Some(iface) = &iface {
+        let _ = iface.set_dhcpv4(Some(Default::default()));
+    }
+    spawner.spawn(defmt::unwrap!(net::net_task(runner)));
+    info!("ethernet: started, waiting for a cable and DHCP");
+    spawner.spawn(defmt::unwrap!(net::command_task(stack)));
+    let mut udp = net::open_socket(stack);
 
     // ---- touch: the globe is grabbed like a heavy trackball: it follows the finger while it is
     // down, keeps rolling (and slows down) after a flick. A short touch is a tap: a button or a
@@ -476,7 +480,7 @@ async fn main(spawner: Spawner) {
                     match resolve(link, &img, view, &mut extras, &mut extra_next).await {
                         Some(true) => full = 2,
                         Some(false) => {}
-                        None => host_retry = Instant::now() + Duration::from_secs(5),
+                        None => host_retry = Instant::now() + Duration::from_secs(30),
                     }
                 }
             }
@@ -701,7 +705,7 @@ impl Link<'_, '_> {
             Link::Udp(socket) => {
                 socket.send_to(ask, net::BROADCAST).await.ok()?;
                 with_timeout(
-                    Duration::from_millis(250),
+                    Duration::from_millis(100),
                     socket.recv_from_with(|data, _from| {
                         let n = data.len().min(reply.len());
                         reply[..n].copy_from_slice(&data[..n]);
@@ -714,7 +718,7 @@ impl Link<'_, '_> {
             }
             Link::Serial(uart) => {
                 uart.write(ask).await.ok()?;
-                with_timeout(Duration::from_millis(250), uart.read_until_idle(reply))
+                with_timeout(Duration::from_millis(100), uart.read_until_idle(reply))
                     .await
                     .ok()?
                     .ok()
