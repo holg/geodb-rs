@@ -43,11 +43,22 @@ const EARTH_AT: usize = 0x0040_0000;
 const SCRATCH_AT: usize = 0x0080_0000;
 const SCRATCH_LEN: usize = 0x0020_0000;
 
-/// The image in flash: its header names the length (an erased flash gives a length that is clamped
-/// and does not parse).
+/// A tiny valid image (no coast, one city "No image"): what runs when the flash holds no usable city
+/// image (a new image format, an update that was cut off): the network and the updates keep working
+/// and the LCD says so. `make_image --placeholder` writes it.
+static PLACEHOLDER: &[u8] = include_bytes!("../placeholder.fw");
+
+/// The image in flash, when it parses (its header names the length); else the placeholder.
 fn flash_image() -> &'static [u8] {
-    let len = unsafe { ((IMAGE_ADDR + 60) as *const u32).read_volatile() } as usize;
-    unsafe { core::slice::from_raw_parts(IMAGE_ADDR as *const u8, len.min(IMAGE_MAX)) }
+    if !ota::UPDATING_IMAGE.load(core::sync::atomic::Ordering::Relaxed) {
+        let len = unsafe { ((IMAGE_ADDR + 60) as *const u32).read_volatile() } as usize;
+        let bytes =
+            unsafe { core::slice::from_raw_parts(IMAGE_ADDR as *const u8, len.min(IMAGE_MAX)) };
+        if FwImage::parse(bytes).is_ok() {
+            return bytes;
+        }
+    }
+    PLACEHOLDER
 }
 
 bind_interrupts!(struct Irqs {
@@ -114,6 +125,7 @@ async fn main(spawner: Spawner) {
         flash_image().len(),
         flash_image().as_ptr() as usize
     );
+    let image_ok = flash_image().as_ptr() as usize == IMAGE_ADDR;
     let img = match FwImage::parse(flash_image()) {
         Ok(img) => img,
         Err(_) => {
@@ -369,6 +381,17 @@ async fn main(spawner: Spawner) {
     let mut since = Instant::now();
     loop {
         watchdog.pet();
+        if ota::UPDATING_IMAGE.load(core::sync::atomic::Ordering::Relaxed) {
+            // The city image is being replaced over the network: nothing may read it.
+            for fb in 0..2 {
+                ui::draw_status(
+                    &mut disp.fb[fb].fb(),
+                    "UPDATING THE CITY IMAGE - KEEP THE POWER ON",
+                );
+            }
+            Timer::after_millis(100).await;
+            continue;
+        }
         let moving = spin.on || grab.is_some() || vel.0.abs() + vel.1.abs() > STOP_PX_S;
         if !moving {
             Timer::after_millis(20).await;
@@ -549,7 +572,12 @@ async fn main(spawner: Spawner) {
         if last_tick.elapsed() >= Duration::from_secs(1) {
             last_tick = Instant::now();
             let mut line = Buf::new();
-            let _ = write!(line, "{} up {}s", status.as_str(), Instant::now().as_secs());
+            let base = if image_ok {
+                status.as_str()
+            } else {
+                "NO IMAGE: geodb-board ota-image"
+            };
+            let _ = write!(line, "{} up {}s", base, Instant::now().as_secs());
             for fb in 0..2 {
                 ui::draw_status(&mut disp.fb[fb].fb(), line.as_str());
             }
@@ -568,6 +596,9 @@ async fn main(spawner: Spawner) {
                 )
                 .await;
             }
+        }
+        if ota::UPDATING_IMAGE.load(core::sync::atomic::Ordering::Relaxed) {
+            continue; // (the update began while this turn waited)
         }
         if redraw {
             // a smoothed frame rate from the time between frames
@@ -723,6 +754,9 @@ async fn resolve(
     let n = img.nearest(view.lat, view.lon, &mut hits);
     let mut changed = false;
     for (k, hit) in hits[..n].iter().enumerate() {
+        if ota::UPDATING_IMAGE.load(core::sync::atomic::Ordering::Relaxed) {
+            return Some(false); // the image is being replaced
+        }
         let idx = hit.index;
         // (every city in the image has a name; the host adds the state and country of the nearest)
         if (img.name(idx as usize).is_some() && k > 0) || extras.iter().any(|e| e.index == idx) {

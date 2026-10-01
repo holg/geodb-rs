@@ -6,12 +6,25 @@
 //!
 //! The record format is the bootloader's: four words, magic last, check in bits 16..31 of the flags.
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_stm32::flash::{Blocking, Flash, WRITE_SIZE};
 
 /// The two program slots (one 256 KB sector each) and where the boot log is.
 pub const SLOT: [u32; 2] = [0x0804_0000, 0x0808_0000];
 pub const SLOT_LEN: u32 = 0x4_0000;
 const FLASH_BASE: u32 = 0x0800_0000;
+/// The city image: sectors 7-11 (1.25 MB), outside both program slots.
+pub const IMAGE_ADDR: u32 = 0x080C_0000;
+pub const IMAGE_MAX: u32 = 0x14_0000;
+const SECTOR: u32 = 0x4_0000;
+
+/// Set while the image is being replaced: the program must not read it (and does not draw).
+pub static UPDATING_IMAGE: AtomicBool = AtomicBool::new(false);
+
+/// Pets the independent watchdog (a sector erase takes 1-2 s, an image update erases five).
+fn pet() {
+    unsafe { (0x4000_3000 as *mut u32).write_volatile(0xAAAA) };
+}
 const META: u32 = 0x0800_8000;
 const META_LEN: u32 = 0x8000;
 const META_MAGIC: u32 = 0x4D45_5441;
@@ -91,7 +104,8 @@ pub fn crc32(data: &[u8]) -> u32 {
 
 pub struct Ota {
     flash: Flash<'static, Blocking>,
-    /// (target slot, length, crc, next expected offset) of an update in progress.
+    /// (target, length, crc, next expected offset) of an update in progress; target 0/1 is a program
+    /// slot, 2 the city image.
     update: Option<(u32, u32, u32, u32)>,
     confirmed: bool,
 }
@@ -148,11 +162,32 @@ impl Ota {
         let target = 1 - my_slot();
         let from = SLOT[target as usize] - FLASH_BASE;
         self.update = None;
+        pet();
         self.flash
             .blocking_erase(from, from + SLOT_LEN)
             .map_err(|_| "erase failed")?;
+        pet();
         self.update = Some((target, len, crc, 0));
         Ok(target)
+    }
+
+    /// Starts replacing the city image: stops the program from reading it, erases its sectors.
+    pub fn begin_image(&mut self, len: u32, crc: u32) -> Result<(), &'static str> {
+        if !(64..=IMAGE_MAX).contains(&len) {
+            return Err("length");
+        }
+        self.update = None;
+        UPDATING_IMAGE.store(true, Ordering::Relaxed);
+        for k in 0..len.div_ceil(SECTOR) {
+            let from = IMAGE_ADDR - FLASH_BASE + k * SECTOR;
+            pet();
+            self.flash
+                .blocking_erase(from, from + SECTOR)
+                .map_err(|_| "erase failed")?;
+        }
+        pet();
+        self.update = Some((2, len, crc, 0));
+        Ok(())
     }
 
     /// A chunk at `offset`; returns the next offset expected (a repeated or a skipped chunk
@@ -162,7 +197,12 @@ impl Ota {
         if offset != *next || offset + bytes.len() as u32 > *len {
             return Ok(*next);
         }
-        let at = SLOT[*target as usize] - FLASH_BASE + offset;
+        let base = if *target == 2 {
+            IMAGE_ADDR
+        } else {
+            SLOT[*target as usize]
+        };
+        let at = base - FLASH_BASE + offset;
         let whole = bytes.len() / WRITE_SIZE * WRITE_SIZE;
         if whole > 0 {
             self.flash
@@ -186,6 +226,24 @@ impl Ota {
         let (target, len, crc, next) = self.update.ok_or("no update")?;
         if next != len {
             return Err("incomplete");
+        }
+        if target == 2 {
+            // the city image: CRC and header (magic, version, total length); no boot record
+            let image =
+                unsafe { core::slice::from_raw_parts(IMAGE_ADDR as *const u8, len as usize) };
+            if crc32(image) != crc {
+                return Err("crc mismatch");
+            }
+            let version = u16::from_le_bytes([image[4], image[5]]);
+            let total = u32::from_le_bytes([image[60], image[61], image[62], image[63]]);
+            if image[..4] != geodb_fw_core::image::MAGIC
+                || version != geodb_fw_core::image::VERSION
+                || total != len
+            {
+                return Err("not a city image of this version");
+            }
+            self.update = None;
+            return Ok(());
         }
         let base = SLOT[target as usize];
         let image = unsafe { core::slice::from_raw_parts(base as *const u8, len as usize) };

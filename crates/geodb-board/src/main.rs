@@ -37,17 +37,21 @@ fn main() {
     let count: Option<usize> = args.iter().skip(1).find_map(|a| a.parse().ok());
     match cmd {
         "serve" => serve(&flag("--data").unwrap_or_else(default_data)),
-        "ota" => {
+        "ota" | "ota-image" => {
             let file = args
                 .iter()
-                .skip_while(|a| *a != "ota")
+                .skip_while(|a| *a != cmd)
                 .nth(1)
                 .filter(|a| !a.starts_with("--"))
                 .unwrap_or_else(|| {
-                    eprintln!("usage: geodb-board ota app-X.bin [--host IP]");
+                    eprintln!("usage: geodb-board ota app-X.bin | ota-image geodb.fw [--host IP]");
                     std::process::exit(2);
                 });
-            ota(file, flag("--host").and_then(|h| h.parse().ok()));
+            ota(
+                file,
+                flag("--host").and_then(|h| h.parse().ok()),
+                cmd == "ota-image",
+            );
         }
         "test" | "info" | "ping" | "blast" | "reset" => {
             client(cmd, flag("--host").and_then(|h| h.parse().ok()), count)
@@ -353,6 +357,7 @@ fn client(cmd: &str, host: Option<IpAddr>, count: Option<usize>) {
 
 const SLOT_B: u32 = 0x0808_0000;
 const SLOT_LEN: usize = 0x4_0000;
+const IMAGE_MAX: usize = 0x14_0000;
 const CHUNK: usize = 1024;
 
 fn crc32(data: &[u8]) -> u32 {
@@ -366,13 +371,22 @@ fn slot_of(info: &str) -> Option<char> {
     info.split("slot ").nth(1)?.chars().next()
 }
 
-fn ota(file: &str, host: Option<IpAddr>) {
+/// `image`: replaces the city image (`geodb.fw`) instead of a program slot.
+fn ota(file: &str, host: Option<IpAddr>, image: bool) {
     let bin = std::fs::read(file).unwrap_or_else(|e| panic!("{file}: {e}"));
+    let limit = if image { IMAGE_MAX } else { SLOT_LEN };
     assert!(
-        bin.len() >= 64 && bin.len() <= SLOT_LEN,
-        "{file}: {} bytes do not fit a slot",
+        bin.len() >= 64 && bin.len() <= limit,
+        "{file}: {} bytes do not fit ({limit} at most)",
         bin.len()
     );
+    if image {
+        assert_eq!(
+            &bin[..4],
+            b"GDFW",
+            "{file} is not a city image (make_image writes geodb.fw)"
+        );
+    }
     // The reset vector says which slot the binary was linked for.
     let reset = u32::from_le_bytes([bin[4], bin[5], bin[6], bin[7]]);
     let for_slot = if reset >= SLOT_B { 'B' } else { 'A' };
@@ -388,7 +402,7 @@ fn ota(file: &str, host: Option<IpAddr>) {
         eprintln!("the board does not report its slot (an old firmware: flash the bootloader and a slot build with the ST-LINK first)");
         std::process::exit(1);
     });
-    if running == for_slot {
+    if !image && running == for_slot {
         eprintln!(
             "{file} is linked for slot {for_slot}, which is the one running: send the other build"
         );
@@ -397,11 +411,22 @@ fn ota(file: &str, host: Option<IpAddr>) {
 
     let crc = crc32(&bin);
     println!(
-        "{file}: {} bytes, crc {crc:08x}, for slot {for_slot}; erasing it on the board ...",
-        bin.len()
+        "{file}: {} bytes, crc {crc:08x}, {}; erasing it on the board ...",
+        bin.len(),
+        if image {
+            "the city image".to_string()
+        } else {
+            format!("for slot {for_slot}")
+        }
     );
-    sock.set_read_timeout(Some(Duration::from_secs(20))).ok();
-    match ask(&sock, to, &format!("!ota begin {} {crc:08x}", bin.len()), 1) {
+    sock.set_read_timeout(Some(Duration::from_secs(40))).ok();
+    let begin = if image { "begin-image" } else { "begin" };
+    match ask(
+        &sock,
+        to,
+        &format!("!ota {begin} {} {crc:08x}", bin.len()),
+        1,
+    ) {
         Some((r, _)) if r.starts_with("!ota ready") => {}
         other => {
             eprintln!(
@@ -484,7 +509,9 @@ fn ota(file: &str, host: Option<IpAddr>) {
                 t1.elapsed().as_secs_f64(),
                 r.trim()
             );
-            if slot_of(&r) == Some(for_slot) {
+            if image {
+                println!("the city image is replaced; the board runs again");
+            } else if slot_of(&r) == Some(for_slot) {
                 println!("running slot {for_slot}: updated (it confirms itself after about 20 s)");
             } else {
                 println!(

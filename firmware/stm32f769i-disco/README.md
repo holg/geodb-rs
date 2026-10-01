@@ -156,4 +156,15 @@ into a 2048 x 1024 RGB565 picture in SDRAM (4 MB, `coast::rasterize`: even-odd f
 scanlines per pixel row with exact coverage along each, so the coast is anti-aliased; sea, land by
 latitude, ice at the poles). One pixel is 0.18 degrees (20 km at the equator), 14 times finer than the
 256 x 128 picture it replaced, for the same flash. The image format is version 2 (coast instead of texture),
-so the image has to be flashed again (`flash-first.sh`; an image update over the network is not built).
+so the image has to be replaced: over the network (below) or with `flash-first.sh`.
+
+### The city image over Ethernet
+
+    cargo run --release -p geodb-board -- ota-image firmware/stm32f769i-disco/geodb.fw --host 192.168.x.y
+
+replaces the image in sectors 7-11 (about 6 s to send 1.3 MB, 24 s in all with the erase and the restart). While it
+runs the program stops reading the image (the LCD says so; the watchdog is petted between the sector erases). A
+cut-off update leaves an image that does not parse: the program then runs a built-in one-city placeholder
+(`placeholder.fw`, written by `make_image --placeholder`), the LCD's last line says `NO IMAGE`, and the network
+and the updates keep working, so the image can simply be sent again. This is also how a program with a new image
+format is rolled out without the ST-LINK: update the program (it runs on the placeholder), then send the image.

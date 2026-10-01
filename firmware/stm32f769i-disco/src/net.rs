@@ -136,6 +136,8 @@ impl core::fmt::Write for Out {
 /// * `!tap X Y`, `!drag DX DY`, `!release` -> touch input from the mirror window (no reply)
 /// * `!query LAT LON KM` -> `!query COUNT TESTED RADIUS_US NEAREST_US INDEX:KM ...`: the cities
 ///   within KM and the ten nearest, timed on the chip (`geodb-board compare`)
+/// * `!ota begin-image LEN CRC32HEX` -> the same for the city image (sectors 7-11); `!ota end` then checks
+///   its header and restarts
 /// * `!ota begin LEN CRC32HEX` -> erases the other slot; data chunks (`0x01`, offset u32 LE, bytes)
 ///   -> `!ota ack NEXT`; `!ota end` -> checks the CRC, marks the slot pending, restarts
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
@@ -275,6 +277,22 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                     match ota.begin(len, crc) {
                         Ok(slot) => {
                             let _ = write!(out, "!ota ready {slot}");
+                        }
+                        Err(e) => {
+                            let _ = write!(out, "!ota error {e}");
+                        }
+                    }
+                }
+                Some("begin-image") => {
+                    let len: u32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let crc = words
+                        .next()
+                        .and_then(|v| u32::from_str_radix(v, 16).ok())
+                        .unwrap_or(0);
+                    // (the program stops drawing; five sector erases take several seconds)
+                    match ota.begin_image(len, crc) {
+                        Ok(()) => {
+                            let _ = write!(out, "!ota ready image");
                         }
                         Err(e) => {
                             let _ = write!(out, "!ota error {e}");

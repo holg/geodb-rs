@@ -42,6 +42,20 @@ fn main() {
     db.attach_layer(&std::fs::read(assets.join("cities.meta")).expect("cities.meta"))
         .expect("attach meta");
     let meta = db.meta.as_ref().expect("meta");
+    if std::env::args().any(|a| a == "--placeholder") {
+        // what the board runs when the flash holds no usable image (see firmware main.rs)
+        let bytes = build(&Source {
+            geoids: &[geo::from_deg(0.0, 0.0)],
+            country_ids: &[0],
+            countries: &[("XX".to_string(), "No image".to_string())],
+            names: &[(0, "No image".to_string())],
+            coast: &[0], // no layers: all sea
+        });
+        let path = root.join("../../firmware/stm32f769i-disco/placeholder.fw");
+        std::fs::write(&path, &bytes).expect("write placeholder");
+        println!("{}: {} bytes", path.display(), bytes.len());
+        return;
+    }
     let all = db.cities.len();
 
     // ---- the filter set: only cities with a name reach the device, the biggest first ----
