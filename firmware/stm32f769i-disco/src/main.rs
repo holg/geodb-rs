@@ -316,8 +316,8 @@ async fn main(spawner: Spawner) {
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
     let mut last_state = Instant::now();
-    let mut inj_seen = Instant::now() - Duration::from_secs(10);
-    // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
+    let mut inj_seen: Option<Instant> = None; // when a drag from the mirror last moved the globe
+                                              // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
     let mut full = 0u8;
     let mut dirty = false; // quick frames left the panel and the dots stale
     let mut since = Instant::now();
@@ -410,7 +410,7 @@ async fn main(spawner: Spawner) {
                 }
             }
             (None, None) => {
-                if inj_seen.elapsed() < Duration::from_millis(80) {
+                if inj_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(80)) {
                     // a drag from the mirror is moving the globe: no coasting on top of it
                 } else if vel.0.abs() + vel.1.abs() > STOP_PX_S {
                     ui::pan_f(&mut view, vel.0 * dt, vel.1 * dt);
@@ -432,11 +432,11 @@ async fn main(spawner: Spawner) {
             let k = (dt * 20.0).min(1.0);
             vel.0 += (idx as f32 / dt - vel.0) * k;
             vel.1 += (idy as f32 / dt - vel.1) * k;
-            inj_seen = Instant::now();
+            inj_seen = Some(Instant::now());
             redraw = true;
         }
         if net::INJ_RELEASE.swap(false, core::sync::atomic::Ordering::Relaxed) {
-            inj_seen = Instant::now() - Duration::from_secs(10); // let go: the flick coasts
+            inj_seen = None; // let go: the flick coasts
         }
         let tap = net::INJ_TAP.swap(0, core::sync::atomic::Ordering::Relaxed);
         if tap & (1 << 31) != 0 {
@@ -456,7 +456,7 @@ async fn main(spawner: Spawner) {
         let motion = spin.on
             || grab.is_some_and(|g| g.dragging)
             || vel.0.abs() + vel.1.abs() > STOP_PX_S
-            || inj_seen.elapsed() < Duration::from_millis(80);
+            || inj_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(80));
         if !motion && dirty {
             // Came to rest: bring the panel and the dots up to date in both buffers.
             dirty = false;
