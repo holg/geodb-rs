@@ -207,3 +207,14 @@ impl Ota {
         Ok(())
     }
 }
+
+/// Restarts the chip. A debug session (probe-rs, "connect under reset") leaves the reset
+/// vector catch set in DEMCR, which survives a software reset: the core would stop at the first
+/// instruction and wait for a debugger that is not there. Clear it first.
+pub fn reboot() -> ! {
+    unsafe {
+        let dcb = &*cortex_m::peripheral::DCB::PTR;
+        dcb.demcr.modify(|v| v & !0x7FF); // keep TRCENA (bit 24), drop the vector catches
+    }
+    cortex_m::peripheral::SCB::sys_reset()
+}

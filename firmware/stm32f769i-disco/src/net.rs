@@ -250,7 +250,7 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                     Ok(()) => {
                         let _ = socket.send_to(b"!ota done: restarting", from).await;
                         embassy_time::Timer::after_millis(300).await;
-                        cortex_m::peripheral::SCB::sys_reset();
+                        crate::ota::reboot();
                     }
                     Err(e) => {
                         let _ = write!(out, "!ota error {e}");
@@ -263,7 +263,7 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
             Some("!reset") => {
                 let _ = socket.send_to(b"!reset now", from).await;
                 embassy_time::Timer::after_millis(100).await;
-                cortex_m::peripheral::SCB::sys_reset();
+                crate::ota::reboot();
             }
             _ => {
                 let _ = write!(out, "!? {text}");

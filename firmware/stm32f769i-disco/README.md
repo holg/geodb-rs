@@ -133,3 +133,17 @@ Then, with the board on the network (it runs slot A, so send the slot B build):
 
 The next update is `app-a.bin`, and so on. `!info` (and `geodb-board info`) tell which slot runs.
 The city image is separate: it is not part of an update (yet).
+
+Tested on the board: A to B and B to A over Ethernet (about 1-3 s for the 170 KB, the board is back
+after about 7 s), and the fall-back: `GEODB_SLOT=b cargo build --release --features fail-boot` is a program
+that hangs after the display is up; sent as an update, the independent watchdog (8 s) resets it three
+times and the bootloader goes back to the old slot (about 40 s).
+
+Notes:
+* The watchdog is started first thing and petted by the main loop; a hung program is reset (and, after an
+  update, counted by the bootloader).
+* After a debug session (probe-rs, "connect under reset") the reset vector catch stays set in DEMCR and
+  a software reset would halt the core at its first instruction. `ota::reboot()` clears it before the
+  reset, so `!reset` and an update work after a debug session; a power cycle clears it as well.
+* The boot log has room for about 2000 records (16 bytes each; an update writes 3-4); erasing it when full
+  is not implemented.

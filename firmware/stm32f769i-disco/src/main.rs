@@ -88,6 +88,10 @@ async fn main(spawner: Spawner) {
         config.rcc.sys = Sysclk::Pll1P;
     }
     let p = embassy_stm32::init(config);
+    // The watchdog: a program that hangs is reset, and after an update the bootloader then counts the
+    // failed tries and goes back to the old slot. The loops below pet it.
+    let mut watchdog = embassy_stm32::wdg::IndependentWatchdog::new(p.IWDG, 8_000_000);
+    watchdog.unleash();
 
     let mut core = cortex_m::Peripherals::take().unwrap();
     // The image and the code run from flash (7 wait states at 216 MHz): the caches make that
@@ -213,6 +217,11 @@ async fn main(spawner: Spawner) {
         }
     };
     info!("display up: {} panel", disp.panel.name());
+    watchdog.pet();
+    #[cfg(feature = "fail-boot")]
+    loop {
+        cortex_m::asm::nop(); // (never pets: the watchdog resets, see Cargo.toml)
+    }
 
     let mut i2c_cfg = i2c::Config::default();
     i2c_cfg.frequency = Hertz(100_000);
@@ -325,6 +334,7 @@ async fn main(spawner: Spawner) {
     let mut dirty = false; // quick frames left the panel and the dots stale
     let mut since = Instant::now();
     loop {
+        watchdog.pet();
         let moving = spin.on || grab.is_some() || vel.0.abs() + vel.1.abs() > STOP_PX_S;
         if !moving {
             Timer::after_millis(20).await;
