@@ -539,7 +539,7 @@ async fn draw_and_show(
     let cycles = DWT::cycle_count();
     if quick {
         let mut fb = disp.fb[back].fb();
-        ui::draw_moving(&mut fb, img, view, &mut lut.1);
+        ui::draw_moving(&mut fb, img, view, spin, &mut lut.1, extras);
         ui::draw_fps(&mut fb, fps);
         ui::draw_status(&mut fb, status);
     } else {

@@ -157,18 +157,33 @@ pub fn name_of<'a>(img: &'a FwImage<'_>, extras: &'a [Extra], idx: usize) -> Opt
     })
 }
 
-/// Redraws only the globe (from the coarse table, [`MOVE_LUT_CELLS`] cells) over an earlier [`draw`] of the
-/// same buffer: the quick frame of a spinning or dragged globe. The side
-/// panel and the city dots keep their old state until the next full draw.
+/// Redraws the globe (from the coarse table, [`MOVE_LUT_CELLS`] cells) and the parts that follow the
+/// view (the nearest cities: markers and list) over an earlier [`draw`] of the same buffer: the quick
+/// frame of a spinning or dragged globe. The buttons, the footer and the city dots keep their old
+/// state until the next full draw.
 /// Returns false (and draws nothing) on the scope view, which needs [`draw`].
-pub fn draw_moving(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, lut: &mut GlobeLut<'_>) -> bool {
+pub fn draw_moving(
+    fb: &mut Fb<'_>,
+    img: &FwImage<'_>,
+    view: View,
+    spin: Spin,
+    lut: &mut GlobeLut<'_>,
+    extras: &[Extra],
+) -> bool {
     if view.zoom >= SCOPE_ZOOM {
         return false;
     }
     let (w, h, px) = img.texture();
     let tex = Texture { w, h, px };
     lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, MOVE_STEP);
-    render::ring(fb, GLOBE_X, GLOBE_Y, 6, TEXT);
+    // The nearest cities change as the globe turns: their markers and the list are redrawn too
+    // (the buttons, the title block's static lines and the footer stay as they are).
+    let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
+    let n = img.nearest(view.lat, view.lon, &mut nearest);
+    markers(fb, img, view, extras, &nearest[..n]);
+    fb.rect(500, 8, 300, 364, BG);
+    let shown = view.span() * EARTH_RADIUS_KM * 0.75 <= DOTS_MAX_KM;
+    side_panel(fb, img, view, spin, extras, &nearest[..n], shown, None);
     true
 }
 
@@ -185,6 +200,113 @@ pub fn draw_fps(fb: &mut Fb<'_>, fps: u32) {
     fb.rect(700, 10, 92, 24, BG);
     let wd = render::text_width(line.as_str(), 2);
     render::text(fb, 792 - wd, 14, line.as_str(), 2, ACCENT);
+}
+
+/// The nearest cities as numbered dots on the globe (with their names on the scope), and the view
+/// centre.
+fn markers(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, extras: &[Extra], nearest: &[Hit]) {
+    let r = GLOBE_R as f32;
+    let scope = view.zoom >= SCOPE_ZOOM;
+    for (i, hit) in nearest.iter().enumerate() {
+        let idx = hit.index as usize;
+        let (la, lo) = crate::geo::to_deg(img.geoid(idx));
+        if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
+            render::dot(fb, x, y, 3, ACCENT);
+            let mut tag = Line::new();
+            let _ = write!(tag, "{}", (i + 1) % 10);
+            if scope {
+                if let Some(name) = name_of(img, extras, idx) {
+                    let _ = write!(tag, " {}", truncate(name, 14));
+                }
+            }
+            render::text(fb, x + 6, y - 4, tag.as_str(), 1, TEXT);
+        }
+    }
+    // The view centre.
+    render::ring(fb, GLOBE_X, GLOBE_Y, 6, TEXT);
+}
+
+/// The text of the side panel: title, position, view, the nearest cities. (The buttons and the
+/// footer are static.) `count` is the number of cities in reach, when it was counted.
+#[allow(clippy::too_many_arguments)]
+fn side_panel(
+    fb: &mut Fb<'_>,
+    img: &FwImage<'_>,
+    view: View,
+    spin: Spin,
+    extras: &[Extra],
+    nearest: &[Hit],
+    shown: bool,
+    count: Option<usize>,
+) {
+    let visible_km = view.span() * EARTH_RADIUS_KM;
+    // Side panel.
+    let x0 = 500;
+    render::text(fb, x0, 16, "GeoDB", 3, ACCENT);
+    let mut line = Line::new();
+    let _ = write!(line, "{} cities {} KB", img.len(), img.byte_len() / 1024);
+    render::text(fb, x0, 50, line.as_str(), 1, DIM);
+    let mut line = Line::new();
+    let _ = write!(
+        line,
+        "{:.3}{} {:.3}{}",
+        abs(view.lat),
+        if view.lat >= 0.0 { 'N' } else { 'S' },
+        abs(view.lon),
+        if view.lon >= 0.0 { 'E' } else { 'W' }
+    );
+    render::text(fb, x0, 70, line.as_str(), 2, TEXT);
+    let mut line = Line::new();
+    if !shown || count.is_none() {
+        let _ = write!(line, "view {:.0} km", visible_km);
+    } else if let (true, Some(count)) = (visible_km >= 100.0, count) {
+        let _ = write!(line, "view {:.0} km, {} cities in reach", visible_km, count);
+    } else {
+        let _ = write!(
+            line,
+            "view {:.1} km, {} cities in reach",
+            visible_km,
+            count.unwrap_or(0)
+        );
+    }
+    render::text(fb, x0, 94, line.as_str(), 1, DIM);
+    render::text(fb, x0, 112, "nearest cities", 1, DIM);
+    let mut line = Line::new();
+    if spin.on {
+        let _ = write!(line, "spin {:.0} deg/s", spin.dps);
+    } else {
+        let _ = write!(line, "spin off");
+    }
+    let wd = render::text_width(line.as_str(), 1);
+    render::text(
+        fb,
+        792 - wd,
+        112,
+        line.as_str(),
+        1,
+        if spin.on { ACCENT } else { DIM },
+    );
+    for (i, hit) in nearest.iter().enumerate() {
+        let y = 130 + i as i32 * 24;
+        let idx = hit.index as usize;
+        let mut name = Line::new();
+        let _ = match name_of(img, extras, idx) {
+            Some(s) => write!(name, "{}", truncate(s, 11)),
+            None => write!(name, "(unnamed)"),
+        };
+        let mut line = Line::new();
+        let iso = img.country_iso(img.country(idx));
+        let _ = write!(line, "{} {:<11} {}", (i + 1) % 10, name.as_str(), iso);
+        render::text(fb, x0, y, line.as_str(), 2, TEXT);
+        let mut dist = Line::new();
+        if hit.km < 100.0 {
+            let _ = write!(dist, "{:.1}", hit.km);
+        } else {
+            let _ = write!(dist, "{:.0}", hit.km);
+        }
+        let wd = render::text_width(dist.as_str(), 1);
+        render::text(fb, 792 - wd, y + 4, dist.as_str(), 1, DIM);
+    }
 }
 
 /// Draws everything for the globe centred on `view`. Returns how many
@@ -265,89 +387,20 @@ pub fn draw(
             }
         }
     }
-    // The nearest cities: numbered dots (with their names on the scope).
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
     let n = img.nearest(view.lat, view.lon, &mut nearest);
-    for (i, hit) in nearest[..n].iter().enumerate() {
-        let idx = hit.index as usize;
-        let (la, lo) = crate::geo::to_deg(img.geoid(idx));
-        if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
-            render::dot(fb, x, y, 3, ACCENT);
-            let mut tag = Line::new();
-            let _ = write!(tag, "{}", (i + 1) % 10);
-            if scope {
-                if let Some(name) = name_of(img, extras, idx) {
-                    let _ = write!(tag, " {}", truncate(name, 14));
-                }
-            }
-            render::text(fb, x + 6, y - 4, tag.as_str(), 1, TEXT);
-        }
-    }
-    // The view centre.
-    render::ring(fb, GLOBE_X, GLOBE_Y, 6, TEXT);
+    markers(fb, img, view, extras, &nearest[..n]);
 
-    // Side panel.
-    let x0 = 500;
-    render::text(fb, x0, 16, "GeoDB", 3, ACCENT);
-    let mut line = Line::new();
-    let _ = write!(line, "{} cities {} KB", img.len(), img.byte_len() / 1024);
-    render::text(fb, x0, 50, line.as_str(), 1, DIM);
-    let mut line = Line::new();
-    let _ = write!(
-        line,
-        "{:.3}{} {:.3}{}",
-        abs(view.lat),
-        if view.lat >= 0.0 { 'N' } else { 'S' },
-        abs(view.lon),
-        if view.lon >= 0.0 { 'E' } else { 'W' }
-    );
-    render::text(fb, x0, 70, line.as_str(), 2, TEXT);
-    let mut line = Line::new();
-    if !shown {
-        let _ = write!(line, "view {:.0} km", visible_km);
-    } else if visible_km >= 100.0 {
-        let _ = write!(line, "view {:.0} km, {} cities in reach", visible_km, count);
-    } else {
-        let _ = write!(line, "view {:.1} km, {} cities in reach", visible_km, count);
-    }
-    render::text(fb, x0, 94, line.as_str(), 1, DIM);
-    render::text(fb, x0, 112, "nearest cities", 1, DIM);
-    let mut line = Line::new();
-    if spin.on {
-        let _ = write!(line, "spin {:.0} deg/s", spin.dps);
-    } else {
-        let _ = write!(line, "spin off");
-    }
-    let wd = render::text_width(line.as_str(), 1);
-    render::text(
+    side_panel(
         fb,
-        792 - wd,
-        112,
-        line.as_str(),
-        1,
-        if spin.on { ACCENT } else { DIM },
+        img,
+        view,
+        spin,
+        extras,
+        &nearest[..n],
+        shown,
+        Some(count),
     );
-    for (i, hit) in nearest[..n].iter().enumerate() {
-        let y = 130 + i as i32 * 24;
-        let idx = hit.index as usize;
-        let mut name = Line::new();
-        let _ = match name_of(img, extras, idx) {
-            Some(s) => write!(name, "{}", truncate(s, 11)),
-            None => write!(name, "(unnamed)"),
-        };
-        let mut line = Line::new();
-        let iso = img.country_iso(img.country(idx));
-        let _ = write!(line, "{} {:<11} {}", (i + 1) % 10, name.as_str(), iso);
-        render::text(fb, x0, y, line.as_str(), 2, TEXT);
-        let mut dist = Line::new();
-        if hit.km < 100.0 {
-            let _ = write!(dist, "{:.1}", hit.km);
-        } else {
-            let _ = write!(dist, "{:.0}", hit.km);
-        }
-        let wd = render::text_width(dist.as_str(), 1);
-        render::text(fb, 792 - wd, y + 4, dist.as_str(), 1, DIM);
-    }
     for (x, y, w, h, label, action) in BUTTONS {
         let label = match action {
             Action::SpinToggle if spin.on => "STOP",
@@ -379,7 +432,7 @@ pub fn draw(
                 .find(|e| e.index == h.index && e.detail_len > 0)
         })
         .map_or("km, positions within 300 m", Extra::detail);
-    render::text(fb, x0, 456, detail, 1, DIM);
+    render::text(fb, 500, 456, detail, 1, DIM);
     n
 }
 
