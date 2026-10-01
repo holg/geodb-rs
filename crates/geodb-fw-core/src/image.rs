@@ -1,7 +1,7 @@
 //! The flash image, read in place (no copy, no allocation).
 //!
 //! Little-endian; every section starts on a 4-byte boundary, offsets count
-//! from the start of the image. The 64-byte header:
+//! from the start of the image. The 72-byte header:
 //!
 //! | at | field |
 //! |---|---|
@@ -12,16 +12,21 @@
 //! | 24 | offsets: geoids, country ids, named index, name offsets, names |
 //! | 44 | names length; offsets: countries, country names, coastline |
 //! | 60 | total length |
+//! | 64 | colour picture (the Blue Marble, 256 x 128 RGB565): offset u32, length u32 (0: none) |
 //!
 //! Sections: `geoids` (cities × u32, sorted), `country ids` (cities × u8),
 //! `named index` (named × u32 city indices, ascending), `name offsets`
 //! ((named + 1) × u32 into `names`), `names` (ASCII, NUL-terminated),
 //! `countries` (countries × 4: ISO2, u16 offset into `country names`),
-//! `country names` (ASCII, NUL-terminated), `coast` (the packed rings, see [`crate::coast`]).
+//! `country names` (ASCII, NUL-terminated), `coast` (the packed rings, see [`crate::coast`]),
+//! `marble` (optional: the coarse colour picture the hybrid earth takes its colours from).
 
 pub const MAGIC: [u8; 4] = *b"GDFW";
-pub const VERSION: u16 = 2;
-pub const HEADER_LEN: usize = 64;
+pub const VERSION: u16 = 3;
+pub const HEADER_LEN: usize = 72;
+/// The colour picture's size: 256 x 128 RGB565.
+pub const MARBLE_W: usize = 256;
+pub const MARBLE_H: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageError {
@@ -48,6 +53,8 @@ pub struct FwImage<'a> {
     off_countries: usize,
     off_country_names: usize,
     off_coast: usize,
+    off_marble: usize,
+    marble_len: usize,
 }
 
 fn u32_at(b: &[u8], at: usize) -> usize {
@@ -81,6 +88,8 @@ impl<'a> FwImage<'a> {
             off_countries: u32_at(bytes, 48),
             off_country_names: u32_at(bytes, 52),
             off_coast: u32_at(bytes, 56),
+            off_marble: u32_at(bytes, 64),
+            marble_len: u32_at(bytes, 68),
         };
         let names_len = u32_at(bytes, 44);
         let fits = |off: usize, len: usize| {
@@ -96,7 +105,8 @@ impl<'a> FwImage<'a> {
             && fits(img.off_names, names_len)
             && fits(img.off_countries, img.countries * 4)
             && fits(img.off_country_names, 0)
-            && fits(img.off_coast, img.coast_len);
+            && fits(img.off_coast, img.coast_len)
+            && (img.marble_len == 0 || fits(img.off_marble, img.marble_len));
         if ok {
             Ok(img)
         } else {
@@ -179,6 +189,15 @@ impl<'a> FwImage<'a> {
         let city = u32_at(self.bytes, self.off_named + 4 * n);
         let off = u32_at(self.bytes, self.off_name_off + 4 * n);
         (city, self.cstr(self.off_names + off))
+    }
+
+    /// The coarse colour picture (256 x 128 RGB565 bytes), empty when the image has none.
+    pub fn marble(&self) -> &'a [u8] {
+        if self.marble_len == MARBLE_W * MARBLE_H * 2 {
+            &self.bytes[self.off_marble..self.off_marble + self.marble_len]
+        } else {
+            &[]
+        }
     }
 
     /// The packed coastline rings.

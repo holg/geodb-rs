@@ -91,11 +91,12 @@ fn main() {
     let img = FwImage::parse(&bytes).expect("image");
     // the earth, rasterized from the image's coast as the board does it
     let mut earth_px = vec![0u8; ui::EARTH_W * ui::EARTH_H * 2];
-    geodb_fw_core::coast::rasterize(
-        img.coast(),
+    geodb_fw_core::coast::earth(
+        &img,
         ui::EARTH_W,
         ui::EARTH_H,
         &mut earth_px,
+        &mut vec![0u8; geodb_fw_core::coast::WORK],
         &mut vec![0u8; 8 << 20],
     )
     .expect("rasterize the coast");

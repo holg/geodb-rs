@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// Flash for the image: sectors 7-11 (1.25 MB, 0x080C0000..0x08200000), outside the two program slots
 /// (see firmware/stm32f769i-disco/README.md). Cities go in, biggest first, until this is reached.
-const BUDGET: usize = 1_300_000;
+const BUDGET: usize = 1_305_000;
 const NAME_LEN: usize = 22;
 
 fn ascii(s: &str) -> String {
@@ -50,6 +50,7 @@ fn main() {
             countries: &[("XX".to_string(), "No image".to_string())],
             names: &[(0, "No image".to_string())],
             coast: &[0], // no layers: all sea
+            marble: &[],
         });
         let path = root.join("../../firmware/stm32f769i-disco/placeholder.fw");
         std::fs::write(&path, &bytes).expect("write placeholder");
@@ -111,7 +112,24 @@ fn main() {
             std::cmp::Reverse(pop),
         )
     });
-    let fixed = countries.len() * 30 + 65_536 + 4096;
+    // The coastline: the web demo's packed rings (gzip inside), kept as the raw payload.
+    let coast_file = std::fs::read(assets.join("coast.bin")).expect("coast.bin");
+    assert_eq!(&coast_file[..4], b"GDBC", "coast.bin");
+    let coast = {
+        let payload = &coast_file[5..];
+        if payload.starts_with(&[0x1f, 0x8b]) {
+            let mut raw = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(payload), &mut raw)
+                .expect("gunzip coast");
+            raw
+        } else {
+            payload.to_vec()
+        }
+    };
+    // The colour picture (Blue Marble, 256 x 128 RGB565): the hybrid earth's colours.
+    let marble = std::fs::read(root.join("assets/earth-256x128.rgb565")).expect("marble");
+    let fixed =
+        countries.len() * 30 + coast.len() + marble.len() + 4096 + geodb_fw_core::image::HEADER_LEN;
     let mut used = fixed;
     let mut kept: Vec<(usize, String)> = Vec::new();
     for (i, name) in candidates {
@@ -139,26 +157,13 @@ fn main() {
         .enumerate()
         .map(|(k, (_, name))| (k as u32, name.clone()))
         .collect();
-    // The coastline: the web demo's packed rings (gzip inside), kept as the raw payload.
-    let coast_file = std::fs::read(assets.join("coast.bin")).expect("coast.bin");
-    assert_eq!(&coast_file[..4], b"GDBC", "coast.bin");
-    let coast = {
-        let payload = &coast_file[5..];
-        if payload.starts_with(&[0x1f, 0x8b]) {
-            let mut raw = Vec::new();
-            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(payload), &mut raw)
-                .expect("gunzip coast");
-            raw
-        } else {
-            payload.to_vec()
-        }
-    };
     let bytes = build(&Source {
         geoids: &geoids,
         country_ids: &country_ids,
         countries: &countries,
         names: &chosen,
         coast: &coast,
+        marble: &marble,
     });
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).expect("output directory");
@@ -169,14 +174,15 @@ fn main() {
         .filter(|&&(i, _)| db.cities[i].rank == GlobeRank::Capital)
         .count();
     println!(
-        "{}: {} bytes for {n} of {all} cities (all named, {capitals} capitals, {} countries)\n  geoids {} + country ids {} + names ~{} + coast {}",
+        "{}: {} bytes for {n} of {all} cities (all named, {capitals} capitals, {} countries)\n  geoids {} + country ids {} + names ~{} + coast {} + colour picture {}",
         out.display(),
         bytes.len(),
         countries.len(),
         geoids.len() * 4,
         n,
         used - fixed,
-        coast.len()
+        coast.len(),
+        marble.len()
     );
 
     // ------------------------------------------------------------- verify
@@ -248,7 +254,8 @@ fn main() {
     let mut earth_px = vec![0u8; ew * eh * 2];
     let mut scratch = vec![0u8; 8 << 20];
     let t = std::time::Instant::now();
-    geodb_fw_core::coast::rasterize(img.coast(), ew, eh, &mut earth_px, &mut scratch)
+    let mut work = vec![0u8; geodb_fw_core::coast::WORK];
+    geodb_fw_core::coast::earth(&img, ew, eh, &mut earth_px, &mut work, &mut scratch)
         .expect("rasterize");
     println!(
         "  earth {ew} x {eh} rasterized in {:.0} ms on the host",

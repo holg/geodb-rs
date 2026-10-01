@@ -148,7 +148,7 @@ Notes:
 * The boot log has room for about 2000 records (16 bytes each; an update writes 3-4); erasing it when full
   is not implemented.
 
-## The earth
+## The earth (hybrid)
 
 The picture on the globe is not stored: the image carries the coastline as vector rings (Natural Earth
 1:50m, the web demo's packed rings, 73 KB, points about 1 km apart). At start the board rasterizes them
@@ -168,3 +168,15 @@ cut-off update leaves an image that does not parse: the program then runs a buil
 (`placeholder.fw`, written by `make_image --placeholder`), the LCD's last line says `NO IMAGE`, and the network
 and the updates keep working, so the image can simply be sent again. This is also how a program with a new image
 format is rolled out without the ST-LINK: update the program (it runs on the placeholder), then send the image.
+
+### Hybrid colours (image version 3)
+
+The earth is now the hybrid: the vector coast decides land and sea, the colours come from the Blue Marble picture
+the image carries (256 x 128 RGB565, 64 KB, the same one the browser simulation offers as "before"). The picture
+has sea colour in its coastal land texels, so at start the board splits it by the coast into a land-only and a
+sea-only colour field (texels the coast covers fully, or not at all; the rest are filled from their neighbours,
+`coast::rasterize_hybrid`) and mixes the two per pixel by the pixel's own coverage. An image without the
+picture (the placeholder) gets the procedural colours. The coastlines are stroked over it as before.
+The rasterizer's working memory sits in the cacheable SDRAM window (uncached it would take seconds). Rolling
+out a new image version: update the program over Ethernet first (it runs on the placeholder), then the image.
+The image budget (1.25 MB of flash) now holds 49,264 cities.

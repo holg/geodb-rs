@@ -453,6 +453,37 @@ pub fn rasterize_hybrid(
     })
 }
 
+/// Bytes of `work` that [`earth`] needs.
+pub const WORK: usize = hybrid_work(crate::image::MARBLE_W, crate::image::MARBLE_H);
+
+/// The earth picture of an image: the hybrid (the image's colour picture under its vector coast)
+/// when it has the picture, else the procedural colours. `out` is `w` x `h` RGB565 bytes.
+pub fn earth(
+    img: &crate::FwImage<'_>,
+    w: usize,
+    h: usize,
+    out: &mut [u8],
+    work: &mut [u8],
+    scratch: &mut [u8],
+) -> Result<(), RasterError> {
+    let marble = img.marble();
+    if marble.is_empty() {
+        rasterize(img.coast(), w, h, out, scratch)
+    } else {
+        rasterize_hybrid(
+            img.coast(),
+            marble,
+            crate::image::MARBLE_W,
+            crate::image::MARBLE_H,
+            w,
+            h,
+            out,
+            work,
+            scratch,
+        )
+    }
+}
+
 /// Halves an RGB565 picture (`w` x `h`, 2 bytes a pixel) into `dst` (`w / 2` x `h / 2`) by averaging
 /// 2 x 2 pixels: the coarse earth the globe is drawn from while it moves (fewer texels per block, so
 /// no shimmer, and 4 times less memory to read).

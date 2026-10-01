@@ -40,9 +40,12 @@ const IMAGE_MAX: usize = 0x14_0000;
 /// SDRAM beyond the two framebuffers (0..1.5 MB): the globe tables, the scratch of the coast rasterizer
 /// and the earth picture with its coarse copy (see `display::sdram_cached`).
 const LUT_AT: usize = 0x0020_0000; // cacheable window, 2 MB (display::sdram_cached)
-const SCRATCH_AT: usize = 0x0040_0000; // not cached
 const EARTH_AT: usize = 0x0080_0000; // cacheable window, 8 MB
 const MIP_AT: usize = EARTH_AT + 0x0040_0000;
+// the rasterizer's working memory is in the cacheable window too (uncached SDRAM would make the
+// hybrid take seconds): the colour fields, then the crossings
+const WORK_AT: usize = EARTH_AT + 0x0050_0000;
+const SCRATCH_AT: usize = EARTH_AT + 0x0058_0000;
 const SCRATCH_LEN: usize = 0x0020_0000;
 
 /// The earth picture: full size for the screen at rest and at spin speed, half size while dragging.
@@ -296,13 +299,28 @@ async fn main(spawner: Spawner) {
             ui::EARTH_W * ui::EARTH_H * 2,
         )
     };
-    let scratch: &'static mut [u8] = unsafe {
+    let work: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(
+            (display::SDRAM_BASE + WORK_AT) as *mut u8,
+            geodb_fw_core::coast::WORK,
+        )
+    };
+    let crossings: &'static mut [u8] = unsafe {
         core::slice::from_raw_parts_mut((display::SDRAM_BASE + SCRATCH_AT) as *mut u8, SCRATCH_LEN)
     };
     let t = Instant::now();
-    match geodb_fw_core::coast::rasterize(img.coast(), ui::EARTH_W, ui::EARTH_H, earth_px, scratch)
-    {
-        Ok(()) => info!("earth rasterized in {} ms", t.elapsed().as_millis()),
+    // (the hybrid: the image's Blue Marble colours under its vector coast; procedural colours when the
+    // image has no colour picture, as the placeholder)
+    match geodb_fw_core::coast::earth(&img, ui::EARTH_W, ui::EARTH_H, earth_px, work, crossings) {
+        Ok(()) => info!(
+            "earth rasterized in {} ms ({})",
+            t.elapsed().as_millis(),
+            if img.marble().is_empty() {
+                "procedural"
+            } else {
+                "hybrid"
+            }
+        ),
         Err(_) => error!("the coastline does not rasterize"),
     }
     // the coarse earth (half size) for the globe while it moves

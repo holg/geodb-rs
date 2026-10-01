@@ -79,6 +79,7 @@ mod tests {
             countries: &countries,
             names: &names,
             coast: &coast,
+            marble: &[],
         })
     }
 

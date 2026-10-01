@@ -17,6 +17,8 @@ pub struct Source<'a> {
     pub names: &'a [(u32, String)],
     /// The packed coastline rings (`coast::Coast` payload).
     pub coast: &'a [u8],
+    /// The colour picture, 256 x 128 RGB565 little-endian (or empty).
+    pub marble: &'a [u8],
 }
 
 fn align4(v: &mut Vec<u8>) {
@@ -70,6 +72,15 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
     let off_countries = put(&mut out, &table);
     let off_country_names = put(&mut out, &cnames);
     let off_coast = put(&mut out, src.coast);
+    assert!(
+        src.marble.is_empty()
+            || src.marble.len() == crate::image::MARBLE_W * crate::image::MARBLE_H * 2
+    );
+    let off_marble = if src.marble.is_empty() {
+        0
+    } else {
+        put(&mut out, src.marble)
+    };
     align4(&mut out);
     let total = out.len();
     let w32 = |out: &mut Vec<u8>, at: usize, v: usize| {
@@ -91,6 +102,8 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         (48, off_countries),
         (52, off_country_names),
         (56, off_coast),
+        (64, off_marble),
+        (68, src.marble.len()),
         (60, total),
     ] {
         w32(&mut out, at, v);
