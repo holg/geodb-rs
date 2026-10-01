@@ -320,6 +320,7 @@ async fn main(spawner: Spawner) {
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
     let mut last_state = Instant::now();
+    let mut last_tick = Instant::now();
     let mut inj_seen: Option<Instant> = None; // when a drag from the mirror last moved the globe
                                               // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
     let mut full = 0u8;
@@ -487,6 +488,16 @@ async fn main(spawner: Spawner) {
         }
         if full > 0 {
             redraw = true;
+        }
+        // a heartbeat on the LCD: the network line with the uptime, so a stuck board is told from a
+        // quiet one without any debugger (written into both buffers, whichever is on the panel)
+        if last_tick.elapsed() >= Duration::from_secs(1) {
+            last_tick = Instant::now();
+            let mut line = Buf::new();
+            let _ = write!(line, "{} up {}s", status.as_str(), Instant::now().as_secs());
+            for fb in 0..2 {
+                ui::draw_status(&mut disp.fb[fb].fb(), line.as_str());
+            }
         }
         // the viewer on the host mirrors the screen from this: the view, a few bytes
         if net_state == 2
