@@ -144,6 +144,42 @@ pub static PORTRAIT: Layout = Layout {
     button_scale: 3,
 };
 
+/// A landscape screen of 1280 x 720 (the 5 inch panel of the M5Stack Tab5, ESP32-P4): the same arrangement
+/// as the board's, with a bigger globe and bigger text.
+pub static HD: Layout = Layout {
+    width: 1280,
+    height: 720,
+    gx: 360,
+    gy: 360,
+    gr: 336,
+    panel: Panel {
+        title: (740, 24, 4),
+        info: (740, 70, 2),
+        coord: (740, 104, 3),
+        view: (740, 140, 2),
+        label: (740, 168, 2),
+        spin: (1256, 168, 2),
+        list: (740, 196, 34, 3, 11),
+        dist: (1256, 8, 2),
+    },
+    clear: (736, 0, 544, 572),
+    fps: (1256, 28),
+    status: (740, 706, 516),
+    footer: None,
+    buttons: &HD_BUTTONS,
+    button_scale: 3,
+};
+
+pub const HD_BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
+    (740, 584, 204, 52, "SPIN", Action::SpinToggle),
+    (956, 584, 100, 52, "-", Action::SpinSlower),
+    (1068, 584, 100, 52, "+", Action::SpinFaster),
+    (1180, 584, 76, 52, "<>", Action::SpinReverse),
+    (740, 644, 160, 52, "Z-", Action::ZoomOut),
+    (912, 644, 160, 52, "Z+", Action::ZoomIn),
+    (1084, 644, 172, 52, "WORLD", Action::World),
+];
+
 pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
     (24, 1166, 240, 48, "SPIN", Action::SpinToggle),
     (276, 1166, 120, 48, "-", Action::SpinSlower),
@@ -154,20 +190,20 @@ pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
     (528, 1218, 168, 48, "WORLD", Action::World),
 ];
 
-static PORTRAIT_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static SHAPE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
-/// Picks the screen shape (the board always runs the landscape one; the browser simulation can show the
-/// portrait one).
-pub fn set_portrait(on: bool) {
-    PORTRAIT_ON.store(on, core::sync::atomic::Ordering::Relaxed);
+/// Picks the screen shape: 0 the board's landscape 800 x 480 (the default; the board always runs it),
+/// 1 the portrait 720 x 1280, 2 the landscape 1280 x 720 (the browser simulation shows them).
+pub fn set_shape(shape: u8) {
+    SHAPE.store(shape.min(2), core::sync::atomic::Ordering::Relaxed);
 }
 
 /// The layout in use.
 pub fn layout() -> &'static Layout {
-    if PORTRAIT_ON.load(core::sync::atomic::Ordering::Relaxed) {
-        &PORTRAIT
-    } else {
-        &LANDSCAPE
+    match SHAPE.load(core::sync::atomic::Ordering::Relaxed) {
+        1 => &PORTRAIT,
+        2 => &HD,
+        _ => &LANDSCAPE,
     }
 }
 
@@ -391,14 +427,20 @@ fn side_panel(
     );
     render::text(fb, p.coord.0, p.coord.1, line.as_str(), p.coord.2, TEXT);
     let mut line = Line::new();
+    // (the big screens print the view at a bigger scale: a shorter wording keeps it inside the panel)
+    let reach = if p.view.2 > 1 {
+        "in reach"
+    } else {
+        "cities in reach"
+    };
     if !shown || count.is_none() {
         let _ = write!(line, "view {:.0} km", visible_km);
     } else if let (true, Some(count)) = (visible_km >= 100.0, count) {
-        let _ = write!(line, "view {:.0} km, {} cities in reach", visible_km, count);
+        let _ = write!(line, "view {:.0} km, {} {reach}", visible_km, count);
     } else {
         let _ = write!(
             line,
-            "view {:.1} km, {} cities in reach",
+            "view {:.1} km, {} {reach}",
             visible_km,
             count.unwrap_or(0)
         );
@@ -908,8 +950,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_portrait_layout_fits_its_screen_and_its_buttons_do_not_overlap() {
-        let l = &PORTRAIT;
+    fn the_other_layouts_fit_their_screens_and_their_buttons_do_not_overlap() {
+        for l in [&PORTRAIT, &HD] {
+            check_layout(l);
+        }
+    }
+
+    fn check_layout(l: &Layout) {
         let inside = |x: i32, y: i32, w: i32, h: i32| {
             x >= 0 && y >= 0 && x + w <= l.width as i32 && y + h <= l.height as i32
         };

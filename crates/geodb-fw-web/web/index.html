@@ -99,6 +99,7 @@
         <span>screen</span>
         <button data-s="0" class="on">Landscape 800×480 (the board)</button>
         <button data-s="1">Portrait 720×1280 (ESP32-P4 5 inch)</button>
+        <button data-s="2">Landscape 1280×720 (M5Stack Tab5)</button>
     </div>
     <div class="link" id="relief" title="relief from an 8-bit elevation picture (ETOPO 2022)">
         <span>relief</span>
@@ -203,17 +204,22 @@ try {
 
     // the screen shape: the canvas follows the layout (width x height as the wasm reports them)
     const shapeButtons = [...document.querySelectorAll("#shape button")];
-    const reshape = (portrait) => {
-        fw.set_layout(portrait);
+    const reshape = (shape) => {
+        const portrait = shape === 1;
+        fw.set_layout(shape);
         W = fw.screen_w(); H = fw.screen_h();
         canvas.width = W; canvas.height = H;
         canvas.style.aspectRatio = `${W} / ${H}`;
         canvas.style.maxHeight = portrait ? "78vh" : "";
         canvas.style.width = portrait ? "auto" : "";
-        shapeButtons.forEach((b, i) => b.classList.toggle("on", i === portrait));
+        shapeButtons.forEach((b, i) => b.classList.toggle("on", i === shape));
     };
     shapeButtons.forEach((b, i) => b.onclick = () => reshape(i));
-    if (new URLSearchParams(location.search).get("layout") === "portrait") reshape(1);
+    {
+        const want = new URLSearchParams(location.search).get("layout");
+        if (want === "portrait") reshape(1);
+        else if (want === "hd" || want === "tab5") reshape(2);
+    }
 
     // the pointer, in screen pixels, as the touch controller reports it
     const at = (e) => {

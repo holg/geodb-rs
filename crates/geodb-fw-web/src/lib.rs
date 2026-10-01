@@ -348,11 +348,11 @@ pub extern "C" fn screen_h() -> u32 {
     ui::layout().height as u32
 }
 
-/// The screen shape: 0 the board's 800 x 480 landscape, 1 the portrait 720 x 1280 of the 5 inch
-/// ESP32-P4 board. Resizes the screen (read `screen_w()` / `screen_h()` again) and redraws.
+/// The screen shape: 0 the board's 800 x 480 landscape, 1 the portrait 720 x 1280 of a 5 inch ESP32-P4
+/// board, 2 the landscape 1280 x 720 of the M5Stack Tab5. Resizes the screen (read `screen_w()` / `screen_h()` again) and redraws.
 #[no_mangle]
-pub extern "C" fn set_layout(portrait: i32) {
-    ui::set_portrait(portrait != 0);
+pub extern "C" fn set_layout(shape: i32) {
+    ui::set_shape(shape.clamp(0, 2) as u8);
     let l = ui::layout();
     BOARD.with(|b| {
         if let Some(b) = b.borrow_mut().as_mut() {
