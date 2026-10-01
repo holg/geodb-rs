@@ -30,6 +30,9 @@ pub mod render;
 pub mod ui;
 
 pub use image::{FwImage, ImageError};
+
+/// A hash of this crate's source: two programs built from the same code report the same id.
+pub const BUILD_ID: &str = env!("GEODB_FW_CORE_BUILD");
 pub use query::{Answer, Hit};
 
 #[cfg(test)]

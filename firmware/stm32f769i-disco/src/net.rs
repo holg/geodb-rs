@@ -207,12 +207,14 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
             Some("!info") => {
                 let _ = write!(
                     out,
-                    "!info {} {} slot {} uptime {} ms, {} fps",
+                    "!info {} {} slot {} uptime {} ms, {} fps, build {} img {}",
                     env!("CARGO_PKG_NAME"),
                     env!("CARGO_PKG_VERSION"),
                     if crate::ota::my_slot() == 0 { 'A' } else { 'B' },
                     embassy_time::Instant::now().as_millis(),
-                    FPS.load(Ordering::Relaxed)
+                    FPS.load(Ordering::Relaxed),
+                    geodb_fw_core::BUILD_ID,
+                    crate::flash_image().len()
                 );
             }
             Some("!blast") => {

@@ -177,6 +177,11 @@ fn main() {
     let mut shots = 0;
     let mut pkt = [0u8; 64];
     let cmd = UdpSocket::bind(("0.0.0.0", 0)).expect("command socket");
+    cmd.set_nonblocking(true).unwrap();
+    // The board's build id and image size (from `!info`), asked now and then: the window says so when
+    // it was built from other code or shows another image than the board runs.
+    let mut board_sync: Option<(String, usize)> = None;
+    let mut info_asked: Option<Instant> = None;
     let mut board: Option<std::net::IpAddr> = None;
     let mut dev_fps = 0u32;
     let mut history = [0u32; HISTORY];
@@ -203,6 +208,28 @@ fn main() {
                 heard = Some(stamp);
                 board = Some(from.ip());
                 packets += 1;
+            }
+        }
+        if board.is_some() && info_asked.is_none_or(|t| t.elapsed() > Duration::from_secs(10)) {
+            info_asked = Some(Instant::now());
+            send("!info".into(), board);
+        }
+        let mut reply = [0u8; 300];
+        while let Ok((n, _)) = cmd.recv_from(&mut reply) {
+            let text = String::from_utf8_lossy(&reply[..n]).into_owned();
+            let words: Vec<&str> = text.split_whitespace().collect();
+            if let (Some(b), Some(i)) = (
+                words
+                    .iter()
+                    .position(|w| *w == "build")
+                    .and_then(|i| words.get(i + 1)),
+                words
+                    .iter()
+                    .position(|w| *w == "img")
+                    .and_then(|i| words.get(i + 1))
+                    .and_then(|v| v.parse::<usize>().ok()),
+            ) {
+                board_sync = Some(((*b).to_string(), i));
             }
         }
         if pps_at.elapsed() >= Duration::from_secs(1) {
@@ -274,8 +301,9 @@ fn main() {
         let moving = spin.on || last_change.elapsed() < Duration::from_millis(250);
         let quick = moving && have_full;
         let mut fb = Fb { px: &mut buf, w, h };
-        if quick {
-            ui::draw_moving(
+        // (the scope view has no quick frame: draw_moving says so and a full one is drawn, as on the board)
+        let drawn_quick = quick
+            && ui::draw_moving(
                 &mut fb,
                 &img,
                 now_view,
@@ -287,7 +315,7 @@ fn main() {
                     dem: None,
                 },
             );
-        } else {
+        if !drawn_quick {
             ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);
             have_full = true;
         }
@@ -322,6 +350,34 @@ fn main() {
             );
         }
 
+        // in sync with the board? (build id of this crate's code and the image's size)
+        if let Some((b, n)) = &board_sync {
+            let same = b == geodb_fw_core::BUILD_ID && *n == bytes.len();
+            let (text, colour) = if same {
+                (
+                    format!("in sync with the board (build {b})"),
+                    geodb_fw_core::render::rgb565(90, 150, 100),
+                )
+            } else {
+                (
+                    format!(
+                        "OUT OF SYNC: board {b} img {n}, here {} img {}",
+                        geodb_fw_core::BUILD_ID,
+                        bytes.len()
+                    ),
+                    geodb_fw_core::render::rgb565(255, 90, 90),
+                )
+            };
+            let mut fb = Fb { px: &mut buf, w, h };
+            fb.rect(
+                0,
+                h as i32 - 12,
+                300,
+                12,
+                geodb_fw_core::render::rgb565(6, 10, 22),
+            );
+            geodb_fw_core::render::text(&mut fb, 4, h as i32 - 10, &text, 1, colour);
+        }
         if window.is_key_pressed(Key::S, KeyRepeat::No) {
             shots += 1;
             let name = format!("board-{shots}.png");
