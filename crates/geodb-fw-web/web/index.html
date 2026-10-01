@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+    <title>GeoDB Board</title>
+    <link rel="icon" href="data:,"/>
+    <style>
+        :root {
+            --bg: #020409;
+            --bezel: #15181f;
+            --edge: #2a2f3a;
+            --text: #e6ecf5;
+            --muted: #8a97ad;
+            --accent: #ffc446;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+            font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+        main {
+            min-height: 100vh; min-height: 100dvh; padding: 16px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        }
+        .board {
+            width: min(100%, 860px, calc((100dvh - 150px) * 5 / 3 + 32px));
+            padding: 16px; border-radius: 18px;
+            background: linear-gradient(160deg, #1d212a, var(--bezel));
+            border: 1px solid var(--edge);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        canvas {
+            display: block; width: 100%; aspect-ratio: 5 / 3; border-radius: 4px;
+            background: #060a16; touch-action: none; cursor: grab;
+            image-rendering: pixelated;
+        }
+        canvas:active { cursor: grabbing; }
+        .label {
+            display: flex; justify-content: space-between; gap: 12px; margin-top: 10px;
+            font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #5d6678;
+        }
+        .label b { color: #8e97a8; font-weight: 600; }
+        p { margin: 0; max-width: 820px; text-align: center; color: var(--muted); font-size: 13px; }
+        p b { color: var(--text); font-weight: 600; }
+        #status { color: var(--accent); }
+        #status:empty { display: none; }
+        a { color: var(--muted); }
+        .link { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--muted); }
+        .link input {
+            width: 190px; padding: 5px 8px; font: inherit; color: var(--text);
+            background: rgba(255, 255, 255, 0.06); border: 1px solid var(--edge); border-radius: 6px;
+        }
+        .link button {
+            font: inherit; color: var(--text); cursor: pointer; padding: 5px 12px;
+            background: rgba(255, 255, 255, 0.08); border: 1px solid var(--edge); border-radius: 6px;
+        }
+        .link button:hover { border-color: var(--accent); }
+        #mode { min-width: 9em; }
+        #mode.live { color: #6fdc8c; }
+        #linkhint { font-size: 12px; max-width: 640px; }
+        #linkhint:empty { display: none; }
+        #linkhint a { color: var(--accent); }
+        .compare { width: min(100%, 860px); }
+        .compare h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 14px; font-weight: 650; }
+        .compare h2 span { flex: 1; }
+        .compare button {
+            font: inherit; font-size: 13px; color: var(--text); cursor: pointer; padding: 4px 12px;
+            background: rgba(255, 255, 255, 0.08); border: 1px solid var(--edge); border-radius: 6px;
+        }
+        .compare button:disabled { opacity: 0.4; cursor: default; }
+        .scroll { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+        th, td { padding: 3px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+        th { color: var(--muted); font-weight: 600; }
+        th:first-child, td:first-child { text-align: left; padding-left: 0; }
+        td.ok { color: #6fdc8c; }
+        td.bad { color: #ff8a7a; }
+        #cmp-note { margin-top: 6px; font-size: 12px; text-align: left; }
+        @media (max-width: 560px) {
+            main { padding: 8px; }
+            .board { padding: 8px; border-radius: 12px; }
+            .label { font-size: 9px; }
+        }
+        #relief label { margin: 0 10px; font-size: 13px; }
+    #renderers button.on { background: #2a4a78; border-color: #6a9fe0; color: #fff; }
+    #renderers button:disabled { opacity: .4; }
+</style>
+</head>
+<body>
+<main>
+    <div class="board">
+        <canvas id="screen" width="800" height="480"></canvas>
+        <div class="label"><b>STM32F769I-DISCO</b><span id="info">geodb firmware · in the browser</span></div>
+    </div>
+    <p id="status">Loading…</p>
+    <div class="link" id="relief" title="relief from an 8-bit elevation picture (ETOPO 2022)">
+        <span>relief</span>
+        <label>hill shading <input type="range" id="shade" min="0" max="512" value="230"/></label>
+        <label>height × <input type="range" id="exag" min="10" max="300" value="90"/></label>
+        <label><input type="checkbox" id="contours"/> contour lines (zoom in)</label>
+        <select id="demres">
+            <option value="512x256">elevation 512×256 (128 KB)</option>
+            <option value="1024x512" selected>elevation 1024×512 (512 KB)</option>
+        </select>
+    </div>
+    <div class="link" id="renderers" title="the earth picture the globe is drawn from">
+        <span>earth</span>
+        <button data-r="0">Blue Marble 256×128 (before)</button>
+        <button data-r="1">Vector earth 2048×1024</button>
+        <button data-r="2" class="on">+ coastlines (the board now)</button>
+        <button data-r="3">Hybrid: Blue Marble colours + vector coast and coastlines</button>
+    </div>
+    <div class="link">
+        <span id="mode">simulating</span>
+        <input id="bridge" placeholder="bridge host:port" title="geodb-board bridge (default port 8792)" autocomplete="off"/>
+        <button id="connect">Connect to the board</button>
+    </div>
+    <p id="linkhint"></p>
+    <section class="compare">
+        <h2><span>The same queries: this browser (wasm) and the board</span><button id="cmp-run">Compare</button></h2>
+        <div class="scroll"><table id="cmp"></table></div>
+        <p id="cmp-note">Twelve queries (geodb_fw_core::query::COMPARE): the cities within the radius and the ten
+            nearest, here in WebAssembly on geodb.fw and, when connected, on the chip itself (216 MHz Cortex-M7, the
+            image in flash). <b>geodb-board compare</b> adds globe-fw (geodb-core on the same cities) on the host.</p>
+    </section>
+    <p>The board's own code (<b>geodb-fw-core</b>: the flash image, the queries, the software globe and the whole
+        800 × 480 screen), compiled to WebAssembly and run on the same <b>geodb.fw</b> image the board holds in flash.
+        Drag or flick the globe, tap a point to look at it, use the buttons as on the LCD.
+        Connected (through <b>geodb-board bridge</b> on a host in the board's network), the screen is the board's
+        view and your touches move the real board.</p>
+    <p><b>Your own board:</b> <a href="geodb-stm32f769i-disco.zip" download>geodb-stm32f769i-disco.zip</a>
+        holds what a STM32F769I-DISCO fresh from the box needs: the bootloader, the program and this very
+        <b>geodb.fw</b>, with addresses and checksums, and <code>flash.sh</code> (probe-rs over the board's ST-LINK).</p>
+    <p>cities: <a href="https://github.com/dr5hn/countries-states-cities-database">dr5hn</a> (CC-BY-4.0) ·
+        <a href="https://github.com/holg/geodb-rs">github.com/holg/geodb-rs</a></p>
+</main>
+<script type="module">
+const status = document.getElementById("status");
+const info = document.getElementById("info");
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const W = 800, H = 480;
+const kb = (n) => (n / 1024).toFixed(0) + " KB";
+
+try {
+    const [wasmRes, imgRes, marbleRes] = await Promise.all([
+        fetch("board.wasm"), fetch("geodb.fw"), fetch("earth-256x128.rgb565").catch(() => null)]);
+    if (!wasmRes.ok || !imgRes.ok) throw new Error("board.wasm or geodb.fw is missing");
+    const [wasmBytes, image] = await Promise.all([wasmRes.arrayBuffer(), imgRes.arrayBuffer()]);
+    const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+    const fw = instance.exports;
+    const ptr = fw.image_alloc(image.byteLength);
+    new Uint8Array(fw.memory.buffer, ptr, image.byteLength).set(new Uint8Array(image));
+    // the Blue Marble the board used before the vector coast (for the comparison; optional)
+    if (marbleRes && marbleRes.ok) {
+        const marble = await marbleRes.arrayBuffer();
+        const mp = fw.marble_alloc(marble.byteLength);
+        new Uint8Array(fw.memory.buffer, mp, marble.byteLength).set(new Uint8Array(marble));
+    }
+    const cities = fw.start();
+    if (cities < 0) throw new Error(["", "no image", "not a geodb firmware image", "another image version", "a damaged image"][-cities]);
+    status.textContent = "";
+    info.textContent = `${cities.toLocaleString("en")} cities · image ${kb(image.byteLength)} · wasm ${kb(wasmBytes.byteLength)}`;
+
+    // the three renderers: Blue Marble (256 x 128 picture), vector earth, vector earth + coastlines
+    const rbtn = [...document.querySelectorAll("#renderers button")];
+    rbtn[0].disabled = rbtn[3].disabled = fw.set_renderer(0) < 0;
+    fw.set_renderer(2);
+    rbtn.forEach((b, i) => b.onclick = () => {
+        if (fw.set_renderer(i) >= 0) rbtn.forEach((x, j) => x.classList.toggle("on", j === i));
+    });
+
+    // the elevation picture: hill shading and contour lines (optional files)
+    const rel = document.getElementById("relief");
+    const loadDem = async (res) => {
+        const [w, h] = res.split("x").map(Number);
+        const r = await fetch(`elev-${res}.u8`).catch(() => null);
+        if (!r || !r.ok) return false;
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        new Uint8Array(fw.memory.buffer, fw.dem_alloc(w, h), bytes.length).set(bytes);
+        return fw.dem_ready() === 1;
+    };
+    const demSel = document.getElementById("demres");
+    if (!(await loadDem(demSel.value))) rel.style.display = "none";
+    const shade = document.getElementById("shade"), exag = document.getElementById("exag");
+    let pending = false;
+    const relief = () => {
+        if (pending) return;
+        pending = true; // (the shading is a pass over 2 million pixels: at most one per frame)
+        requestAnimationFrame(() => { pending = false; fw.set_relief(+shade.value, +exag.value); });
+    };
+    shade.oninput = exag.oninput = relief;
+    relief(); // the sliders' start values (the board's)
+    document.getElementById("contours").onchange = (e) => fw.set_contours(e.target.checked ? 1 : 0);
+    demSel.onchange = async () => { await loadDem(demSel.value); relief(); };
+
+    // the pointer, in screen pixels, as the touch controller reports it
+    const at = (e) => {
+        const r = canvas.getBoundingClientRect();
+        return [Math.round((e.clientX - r.left) * W / r.width), Math.round((e.clientY - r.top) * H / r.height)];
+    };
+    // simulating: the pointer is the board's touch controller. Connected: a click is a tap, a
+    // drag sends its deltas as it goes (the board does the flick), as the mirror window does.
+    let ws = null, live = false;
+    let down = null, press = null, last = null, dragging = false;
+    const send = (text) => { if (ws && ws.readyState === 1) ws.send(text); };
+    canvas.addEventListener("pointerdown", (e) => {
+        if (down !== null) return; // one finger, as on the board
+        down = e.pointerId;
+        canvas.setPointerCapture(e.pointerId);
+        press = last = at(e);
+        dragging = false;
+        if (!live) fw.touch(...press);
+    });
+    canvas.addEventListener("pointermove", (e) => {
+        if (e.pointerId !== down) return;
+        const p = at(e);
+        if (!live) { fw.touch(...p); return; }
+        if (!dragging && Math.abs(p[0] - press[0]) + Math.abs(p[1] - press[1]) >= 8) dragging = true;
+        if (dragging && (p[0] !== last[0] || p[1] !== last[1])) {
+            send(`!drag ${p[0] - last[0]} ${p[1] - last[1]}`);
+            last = p;
+        }
+    });
+    const up = (e) => {
+        if (e.pointerId !== down) return;
+        down = null;
+        if (!live) { fw.release(); return; }
+        send(dragging ? "!release" : `!tap ${press[0]} ${press[1]}`);
+    };
+    canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointercancel", up);
+
+    // the link: geodb-board bridge relays the board's state packets and our touches
+    const mode = document.getElementById("mode");
+    const bridge = document.getElementById("bridge");
+    const button = document.getElementById("connect");
+    const params = new URLSearchParams(location.search);
+    bridge.value = params.get("bridge") || "";
+    const show = (text, on) => { mode.textContent = text; mode.classList.toggle("live", !!on); };
+    const disconnect = () => {
+        if (ws) { ws.onclose = null; ws.close(); ws = null; }
+        if (live) fw.local();
+        live = false;
+        button.textContent = "Connect to the board";
+        show("simulating");
+    };
+    // The bridge listens twice: http + ws:// on 8792, https + wss:// on 8793. An https page (trahe.eu)
+    // may open only wss://, so it takes 8793 (whatever port was typed for the plain one).
+    const secure = location.protocol === "https:";
+    const hint = document.getElementById("linkhint");
+    const store = {
+        get: () => { try { return localStorage.getItem("geodb-bridge") || ""; } catch { return ""; } },
+        set: (v) => { try { localStorage.setItem("geodb-bridge", v); } catch { /* private mode */ } },
+    };
+    const target = (raw) => {
+        const name = raw.trim().replace(/^(ws|http)s?:\/\//, "").replace(/\/.*$/, "") || "localhost";
+        const m = name.match(/^(.*?)(?::(\d+))?$/);
+        const plainPort = m[2] && m[2] !== "8793" ? m[2] : "8792";
+        const port = secure ? (m[2] && m[2] !== "8792" ? m[2] : "8793") : plainPort;
+        return { name: m[1], host: `${m[1]}:${port}`, plain: `${m[1]}:${plainPort}`,
+                 url: `${secure ? "wss" : "ws"}://${m[1]}:${port}/ws` };
+    };
+    const connect = () => {
+        const t = target(bridge.value);
+        const host = t.host;
+        const url = t.url;
+        let opened = false;
+        hint.textContent = "";
+        show("connecting…");
+        button.textContent = "Disconnect";
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+        ws.onopen = () => {
+            opened = true;
+            store.set(bridge.value.trim());
+            show("bridge up, waiting for the board");
+        };
+        ws.onmessage = (m) => {
+            if (typeof m.data === "string") {
+                if (m.data.startsWith("board ")) show("connected: " + m.data.slice(6), true);
+                if (m.data.startsWith("!query") && answerWaiter) { answerWaiter(m.data); answerWaiter = null; }
+                return;
+            }
+            const p = new Uint8Array(m.data);
+            if (p.length !== 19) return;
+            new Uint8Array(fw.memory.buffer, fw.state_buf(), 19).set(p);
+            if (fw.apply_state() && !live) {
+                live = true;
+                fw.release();
+            }
+        };
+        ws.onclose = () => {
+            disconnect();
+            show(opened ? "the bridge went away" : "no bridge at " + host);
+            if (!opened && secure) {
+                // most likely: this device does not trust the bridge's certificate yet
+                hint.innerHTML = `This page is https, so it needs the bridge's secure port (wss://${host}) and its certificate trusted once on this device: `
+                    + `install <a href="http://${t.plain}/geodb-bridge-ca.cer">the bridge's certificate</a> `
+                    + `(iPhone: Settings › General › VPN &amp; Device Management › install, then Settings › General › About › Certificate Trust Settings › on), `
+                    + `or open <a href="https://${host}/" target="_blank" rel="noopener">https://${host}/</a> and accept the warning. Then connect again. `
+                    + `Is <b>geodb-board bridge</b> running on ${t.name}?`;
+            }
+        };
+    };
+    button.onclick = () => (ws ? disconnect() : connect());
+    // served by the bridge itself: connect to it
+    if (!bridge.value) bridge.value = store.get();
+    if (params.has("bridge")) connect();
+    else if (location.port) {
+        fetch("bridge").then((r) => {
+            if (r.headers.get("x-geodb-bridge")) { bridge.value = location.host; connect(); }
+        }).catch(() => {});
+    }
+
+    // ---- the comparison: the wasm on geodb.fw here, the chip through the bridge
+    let answerWaiter = null;
+    const askBoard = (lat, lon, km) => new Promise((resolve) => {
+        if (!ws || ws.readyState !== 1 || !live) return resolve(null);
+        answerWaiter = resolve;
+        ws.send(`!query ${lat} ${lon} ${km}`);
+        setTimeout(() => { if (answerWaiter === resolve) { answerWaiter = null; resolve(null); } }, 3000);
+    });
+    // "!query COUNT TESTED RADIUS_US NEAREST_US I:KM ..." (geodb_fw_core::Answer::write)
+    const parseAnswer = (text) => {
+        const w = text.trim().split(/\s+/).slice(1);
+        if (w.length < 4 || isNaN(+w[0])) return null;
+        return { count: +w[0], radiusUs: +w[2], nearestUs: +w[3],
+                 near: w.slice(4).map((p) => { const [i, d] = p.split(":"); return [+i, +d]; }) };
+    };
+    // the browser's clock is coarse: repeat until 20 ms have passed
+    const timeUs = (f) => {
+        let n = 0;
+        const t0 = performance.now();
+        let t = t0;
+        do { f(); n++; t = performance.now(); } while (t - t0 < 20);
+        return (t - t0) * 1000 / n;
+    };
+    const fmtUs = (v) => v == null ? "–" : v >= 1000 ? (v / 1000).toFixed(1) + " ms" : v < 10 ? v.toFixed(1) + " µs" : v.toFixed(0) + " µs";
+    const name = (i) => new TextDecoder().decode(new Uint8Array(fw.memory.buffer, fw.compare_name(i), fw.compare_name_len(i)));
+    const cmpRun = document.getElementById("cmp-run");
+    const cmpTable = document.getElementById("cmp");
+    const cmpNote = document.getElementById("cmp-note");
+    cmpRun.onclick = async () => {
+        cmpRun.disabled = true;
+        const rows = [];
+        let agree = true, boardSeen = false;
+        cmpTable.innerHTML = "<tr><th>query</th><th>km</th><th>count wasm / board</th><th>10 nearest</th>"
+            + "<th>wasm radius / 10nn</th><th>board radius / 10nn</th></tr>";
+        for (let i = 0; i < fw.compare_len(); i++) {
+            const [lat, lon, km] = [0, 1, 2].map((k) => fw.compare_arg(i, k));
+            const p = fw.answer(lat, lon, km) / 4;
+            const words = new Uint32Array(fw.memory.buffer);
+            const f32 = new Float32Array(fw.memory.buffer);
+            const found = words[p + 4];
+            const mine = { count: words[p], near: Array.from({ length: found }, (_, j) => [words[p + 5 + 2 * j], f32[p + 6 + 2 * j]]) };
+            const rUs = timeUs(() => fw.radius_count(lat, lon, km));
+            const nUs = timeUs(() => fw.nearest_ten(lat, lon));
+            const reply = await askBoard(lat, lon, km);
+            const board = reply && parseAnswer(reply);
+            let same = "–", cls = "";
+            if (board) {
+                boardSeen = true;
+                const key = (n) => n.map((h) => h[0]).sort((a, b) => a - b).join();
+                const ok = board.count === mine.count && key(board.near) === key(mine.near);
+                agree &&= ok;
+                same = ok ? "same" : "differ";
+                cls = ok ? "ok" : "bad";
+            }
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${name(i)}</td><td>${km}</td><td>${mine.count} / ${board ? board.count : "–"}</td>`
+                + `<td class="${cls}">${same}</td><td>${fmtUs(rUs)} / ${fmtUs(nUs)}</td>`
+                + `<td>${board ? fmtUs(board.radiusUs) + " / " + fmtUs(board.nearestUs) : "–"}</td>`;
+            cmpTable.appendChild(tr);
+            await new Promise(requestAnimationFrame); // let the page draw between queries
+        }
+        cmpNote.textContent = boardSeen
+            ? (agree ? "The board and this browser agree on every query: the same counts and the same ten nearest cities (same image, same code)."
+                     : "The board and this browser DIFFER on some queries (marked).")
+            : "Not connected to a board: the wasm column only. Connect (geodb-board bridge, or --probe) and run again.";
+        cmpRun.disabled = false;
+    };
+
+    let lastFrame = performance.now();
+    const tick = (now) => {
+        const dt = now - lastFrame;
+        lastFrame = now;
+        if (fw.frame(dt)) {
+            const px = new Uint8ClampedArray(fw.memory.buffer, fw.pixels(), W * H * 4);
+            ctx.putImageData(new ImageData(px, W, H), 0, 0);
+        }
+        requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+} catch (err) {
+    status.textContent = "Could not start the board: " + err.message;
+}
+</script>
+</body>
+</html>

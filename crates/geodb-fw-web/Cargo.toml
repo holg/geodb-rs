@@ -1,0 +1,14 @@
+[package]
+name = "geodb-fw-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The geodb board's screen in the browser: geodb-fw-core on the firmware image, compiled to wasm"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+geodb-fw-core = { path = "../geodb-fw-core" }
