@@ -5,6 +5,8 @@
 //!                                     print its log lines
 //! geodb-board test [--host IP]        info, 200 pings (round trip, loss), a 1000 x 512 byte blast
 //! geodb-board info | ping [N] | blast [N] | reset   [--host IP]
+//! geodb-board ota app-b.bin [--host IP]   update the board over the network (the binary of the slot
+//!                                     that is NOT running; firmware/stm32f769i-disco/build-ota.sh)
 //! ```
 //!
 //! The board is found by listening for its state packets (UDP 7881), else by broadcast; `--host`
@@ -35,6 +37,18 @@ fn main() {
     let count: Option<usize> = args.iter().skip(1).find_map(|a| a.parse().ok());
     match cmd {
         "serve" => serve(&flag("--data").unwrap_or_else(default_data)),
+        "ota" => {
+            let file = args
+                .iter()
+                .skip_while(|a| *a != "ota")
+                .nth(1)
+                .filter(|a| !a.starts_with("--"))
+                .unwrap_or_else(|| {
+                    eprintln!("usage: geodb-board ota app-X.bin [--host IP]");
+                    std::process::exit(2);
+                });
+            ota(file, flag("--host").and_then(|h| h.parse().ok()));
+        }
         "test" | "info" | "ping" | "blast" | "reset" => {
             client(cmd, flag("--host").and_then(|h| h.parse().ok()), count)
         }
@@ -333,4 +347,155 @@ fn client(cmd: &str, host: Option<IpAddr>, count: Option<usize>) {
             ask(&sock, to, "!reset", 1).map_or("(no answer)".into(), |r| r.0)
         );
     }
+}
+
+// ------------------------------------------------------------------------------------------ ota
+
+const SLOT_B: u32 = 0x0808_0000;
+const SLOT_LEN: usize = 0x4_0000;
+const CHUNK: usize = 1024;
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = flate2::Crc::new();
+    crc.update(data);
+    crc.sum()
+}
+
+/// "slot A" / "slot B" out of an `!info` reply.
+fn slot_of(info: &str) -> Option<char> {
+    info.split("slot ").nth(1)?.chars().next()
+}
+
+fn ota(file: &str, host: Option<IpAddr>) {
+    let bin = std::fs::read(file).unwrap_or_else(|e| panic!("{file}: {e}"));
+    assert!(
+        bin.len() >= 64 && bin.len() <= SLOT_LEN,
+        "{file}: {} bytes do not fit a slot",
+        bin.len()
+    );
+    // The reset vector says which slot the binary was linked for.
+    let reset = u32::from_le_bytes([bin[4], bin[5], bin[6], bin[7]]);
+    let for_slot = if reset >= SLOT_B { 'B' } else { 'A' };
+
+    let sock = UdpSocket::bind(("0.0.0.0", 0)).expect("socket");
+    sock.set_broadcast(true).ok();
+    sock.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    let ip = find(&sock, host);
+    let to = SocketAddr::new(ip, COMMAND_PORT);
+    let info = ask(&sock, to, "!info", 3).map_or(String::new(), |r| r.0);
+    println!("board at {ip}: {info}");
+    let running = slot_of(&info).unwrap_or_else(|| {
+        eprintln!("the board does not report its slot (an old firmware: flash the bootloader and a slot build with the ST-LINK first)");
+        std::process::exit(1);
+    });
+    if running == for_slot {
+        eprintln!(
+            "{file} is linked for slot {for_slot}, which is the one running: send the other build"
+        );
+        std::process::exit(1);
+    }
+
+    let crc = crc32(&bin);
+    println!(
+        "{file}: {} bytes, crc {crc:08x}, for slot {for_slot}; erasing it on the board ...",
+        bin.len()
+    );
+    sock.set_read_timeout(Some(Duration::from_secs(20))).ok();
+    match ask(&sock, to, &format!("!ota begin {} {crc:08x}", bin.len()), 1) {
+        Some((r, _)) if r.starts_with("!ota ready") => {}
+        other => {
+            eprintln!(
+                "the board refused: {}",
+                other.map_or("no answer".into(), |r| r.0)
+            );
+            std::process::exit(1);
+        }
+    }
+
+    sock.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    let t0 = Instant::now();
+    let (mut at, mut resends) = (0usize, 0u32);
+    let mut buf = [0u8; 2048];
+    while at < bin.len() {
+        let end = (at + CHUNK).min(bin.len());
+        let mut packet = vec![1u8];
+        packet.extend_from_slice(&(at as u32).to_le_bytes());
+        packet.extend_from_slice(&bin[at..end]);
+        let mut acked = false;
+        for _ in 0..8 {
+            let _ = sock.send_to(&packet, to);
+            match sock.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    let text = String::from_utf8_lossy(&buf[..n]);
+                    if let Some(next) = text
+                        .strip_prefix("!ota ack ")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                    {
+                        if next >= end {
+                            at = end;
+                            acked = true;
+                            break;
+                        }
+                        at = next.min(at); // the board wants an earlier chunk: resend from there
+                        acked = true;
+                        break;
+                    }
+                    if text.starts_with("!ota error") {
+                        eprintln!("the board: {}", text.trim());
+                        std::process::exit(1);
+                    }
+                }
+                Err(_) => resends += 1,
+            }
+        }
+        if !acked {
+            eprintln!(
+                "no acknowledgement at offset {at}: giving up (the running program is untouched)"
+            );
+            std::process::exit(1);
+        }
+        if at % (64 * CHUNK) == 0 || at == bin.len() {
+            println!("  {at} / {} bytes", bin.len());
+        }
+    }
+    println!(
+        "sent in {:.1} s ({resends} resends); checking and restarting ...",
+        t0.elapsed().as_secs_f64()
+    );
+    sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    match ask(&sock, to, "!ota end", 1) {
+        Some((r, _)) if r.starts_with("!ota done") => println!("{}", r.trim()),
+        other => {
+            eprintln!(
+                "the board did not accept it: {}",
+                other.map_or("no answer".into(), |r| r.0)
+            );
+            std::process::exit(1);
+        }
+    }
+    // The new program starts (a trial boot); it confirms itself after about 20 s on the network.
+    sock.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    let t1 = Instant::now();
+    while t1.elapsed() < Duration::from_secs(90) {
+        std::thread::sleep(Duration::from_secs(1));
+        if let Some((r, _)) = ask(&sock, to, "!info", 1) {
+            println!(
+                "back after {:.0} s: {}",
+                t1.elapsed().as_secs_f64(),
+                r.trim()
+            );
+            if slot_of(&r) == Some(for_slot) {
+                println!("running slot {for_slot}: updated (it confirms itself after about 20 s)");
+            } else {
+                println!(
+                    "the board runs slot {} again: the new program did not start",
+                    slot_of(&r).unwrap_or('?')
+                );
+            }
+            return;
+        }
+    }
+    println!(
+        "the board did not come back in 90 s (it falls back to the old slot after three tries)"
+    );
 }

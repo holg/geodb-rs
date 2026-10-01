@@ -87,6 +87,9 @@ pub static INJ_TAP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 pub static INJ_RELEASE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// The frame rate main.rs measures, for `!info`.
+/// Set by main.rs when the network has an address.
+pub static NET_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub static FPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Reply text under construction.
@@ -111,9 +114,11 @@ impl core::fmt::Write for Out {
 /// * `!info` -> uptime, frame rate, build
 /// * `!blast N` -> N datagrams of 512 bytes (`!blast I` + padding): throughput and loss
 /// * `!tap X Y`, `!drag DX DY`, `!release` -> touch input from the mirror window (no reply)
+/// * `!ota begin LEN CRC32HEX` -> erases the other slot; data chunks (`0x01`, offset u32 LE, bytes)
+///   -> `!ota ack NEXT`; `!ota end` -> checks the CRC, marks the slot pending, restarts
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
 #[embassy_executor::task]
-pub async fn command_task(stack: Stack<'static>) -> ! {
+pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! {
     use core::fmt::Write;
     use core::sync::atomic::Ordering;
     let mut socket = match UdpSocket::new(stack) {
@@ -123,18 +128,48 @@ pub async fn command_task(stack: Stack<'static>) -> ! {
         },
     };
     let _ = socket.bind(COMMAND_PORT);
+    let mut up_since: Option<embassy_time::Instant> = None;
     loop {
-        let mut cmd = [0u8; 48];
-        let Ok((n, from)) = socket
-            .recv_from_with(|data, meta| {
+        let mut cmd = [0u8; 1100];
+        // (a second at most, so that the confirmation below runs without any traffic)
+        let received = embassy_time::with_timeout(
+            embassy_time::Duration::from_secs(1),
+            socket.recv_from_with(|data, meta| {
                 let n = data.len().min(cmd.len());
                 cmd[..n].copy_from_slice(&data[..n]);
                 (n, meta)
-            })
-            .await
-        else {
+            }),
+        )
+        .await;
+        // A program that came up from an update confirms itself once the network has been up for a
+        // while, else the bootloader goes back to the old slot after three tries.
+        if NET_UP.load(Ordering::Relaxed) {
+            let since = *up_since.get_or_insert_with(embassy_time::Instant::now);
+            if since.elapsed() >= embassy_time::Duration::from_secs(20) && ota.confirm() {
+                defmt::info!("update confirmed (slot {})", crate::ota::my_slot());
+            }
+        }
+        let Ok(Ok((n, from))) = received else {
             continue;
         };
+        // a data chunk of an update: 0x01, offset (u32 LE), bytes
+        if n >= 5 && cmd[0] == 1 {
+            let offset = u32::from_le_bytes([cmd[1], cmd[2], cmd[3], cmd[4]]);
+            let mut out = Out {
+                bytes: [0; 96],
+                len: 0,
+            };
+            match ota.data(offset, &cmd[5..n]) {
+                Ok(next) => {
+                    let _ = write!(out, "!ota ack {next}");
+                }
+                Err(e) => {
+                    let _ = write!(out, "!ota error {e}");
+                }
+            }
+            let _ = socket.send_to(&out.bytes[..out.len], from).await;
+            continue;
+        }
         let text = core::str::from_utf8(&cmd[..n]).unwrap_or("").trim();
         let mut words = text.split_whitespace();
         let mut out = Out {
@@ -148,9 +183,10 @@ pub async fn command_task(stack: Stack<'static>) -> ! {
             Some("!info") => {
                 let _ = write!(
                     out,
-                    "!info {} {} uptime {} ms, {} fps",
+                    "!info {} {} slot {} uptime {} ms, {} fps",
                     env!("CARGO_PKG_NAME"),
                     env!("CARGO_PKG_VERSION"),
+                    if crate::ota::my_slot() == 0 { 'A' } else { 'B' },
                     embassy_time::Instant::now().as_millis(),
                     FPS.load(Ordering::Relaxed)
                 );
@@ -193,6 +229,37 @@ pub async fn command_task(stack: Stack<'static>) -> ! {
                 INJ_DY.fetch_add(dy.clamp(-480, 480), Ordering::Relaxed);
             }
             Some("!release") => INJ_RELEASE.store(true, Ordering::Relaxed),
+            Some("!ota") => match words.next() {
+                Some("begin") => {
+                    let len: u32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let crc = words
+                        .next()
+                        .and_then(|v| u32::from_str_radix(v, 16).ok())
+                        .unwrap_or(0);
+                    // (erasing the slot stalls the chip for a second or two)
+                    match ota.begin(len, crc) {
+                        Ok(slot) => {
+                            let _ = write!(out, "!ota ready {slot}");
+                        }
+                        Err(e) => {
+                            let _ = write!(out, "!ota error {e}");
+                        }
+                    }
+                }
+                Some("end") => match ota.end() {
+                    Ok(()) => {
+                        let _ = socket.send_to(b"!ota done: restarting", from).await;
+                        embassy_time::Timer::after_millis(300).await;
+                        cortex_m::peripheral::SCB::sys_reset();
+                    }
+                    Err(e) => {
+                        let _ = write!(out, "!ota error {e}");
+                    }
+                },
+                _ => {
+                    let _ = write!(out, "!ota ?");
+                }
+            },
             Some("!reset") => {
                 let _ = socket.send_to(b"!reset now", from).await;
                 embassy_time::Timer::after_millis(100).await;

@@ -32,7 +32,6 @@ embassy-net = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad
 embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "d5e5b579ad0d61776887738263c2dd0c3c63d564", features = [
   "defmt",
   "stm32f769ni",
-  "memory-x",
   "unstable-pac",
   "time-driver-any",
   "exti",

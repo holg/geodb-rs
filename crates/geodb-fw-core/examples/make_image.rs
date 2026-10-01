@@ -14,9 +14,9 @@ use geodb_fw_core::render::{Fb, View};
 use geodb_fw_core::{geo, ui, FwImage, Hit};
 use std::path::{Path, PathBuf};
 
-/// Flash left for the image on a 2 MB part, after the program and its
-/// slack: names are added by population until this is reached.
-const BUDGET: usize = 1_850_000;
+/// Flash for the image: sectors 7-11 (1.25 MB, 0x080C0000..0x08200000), outside the two program slots
+/// (see firmware/stm32f769i-disco/README.md). Cities go in, biggest first, until this is reached.
+const BUDGET: usize = 1_300_000;
 const NAME_LEN: usize = 22;
 
 fn ascii(s: &str) -> String {

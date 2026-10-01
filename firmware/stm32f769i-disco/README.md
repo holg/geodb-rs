@@ -97,3 +97,39 @@ The Ethernet DMA cannot reach the DTCM and ignores the data cache, so only its
 buffers (the stack's packet pool) are linked into SRAM1 at 0x20060000 (`ethbuf.x`),
 cleared at start, and an MPU region makes that window non-cacheable and
 not shareable (LDREX/STREX fault on anything else but the DTCM or cacheable memory).
+
+## Updates over Ethernet (A/B slots)
+
+The 2 MB flash is split so that a program update can be tried and undone:
+
+| Address | Size | Content |
+|---|---|---|
+| `0x0800_0000` | 32 KB (sector 0) | the bootloader (`../bootloader`, 2 KB) |
+| `0x0800_8000` | 32 KB (sector 1) | boot records: which slot, pending or confirmed, tries |
+| `0x0804_0000` | 256 KB (sector 5) | program slot A |
+| `0x0808_0000` | 256 KB (sector 6) | program slot B |
+| `0x080C_0000` | 1.25 MB (sectors 7-11) | the city image (`geodb.fw`, 52,088 cities) |
+
+The program is linked for one slot (`GEODB_SLOT=a|b`, `build-ota.sh` builds both: `app-a.bin`,
+`app-b.bin`). An update is the build for the slot that is **not** running. The program
+runs from the slot it is in, receives the other build over UDP into the other slot (CRC-32 checked),
+marks it *pending* and restarts. The bootloader starts a pending slot at most three times; the new
+program confirms itself once its network has been up for 20 s, else the old slot (the last known
+good one) starts again. A power loss anywhere leaves a bootable slot.
+
+First time, with the ST-LINK (the whole internal flash is rewritten; QSPI and option bytes are not touched):
+
+    cd firmware/bootloader && cargo build --release
+    cd ../stm32f769i-disco && ./build-ota.sh
+    cargo run --release -p geodb-fw-core --features std --example make_image
+    st-flash --connect-under-reset erase
+    probe-rs download --chip STM32F769NIHx --speed 500 ../bootloader/target/thumbv7em-none-eabihf/release/geodb-bootloader
+    probe-rs download --chip STM32F769NIHx --speed 500 target-a/thumbv7em-none-eabihf/release/geodb-firmware
+    probe-rs download --chip STM32F769NIHx --speed 500 --binary-format bin --base-address 0x080C0000 geodb.fw
+
+Then, with the board on the network (it runs slot A, so send the slot B build):
+
+    cargo run --release -p geodb-board -- ota app-b.bin --host 192.168.x.y
+
+The next update is `app-a.bin`, and so on. `!info` (and `geodb-board info`) tell which slot runs.
+The city image is separate: it is not part of an update (yet).

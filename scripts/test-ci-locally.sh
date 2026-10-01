@@ -100,7 +100,7 @@ fi
 # The STM32F769I-DISCO firmware has a workspace of its own (thumbv7em, needs geodb.fw from make_image)
 echo -e "${YELLOW}Step 2b: Firmware (fmt, clippy, build)...${NC}"
 if rustup target list --installed 2>/dev/null | grep -q thumbv7em-none-eabihf && [[ -f firmware/stm32f769i-disco/geodb.fw ]]; then
-    if (cd firmware/stm32f769i-disco && { cargo fmt -- --check || { [[ "$AUTO_FIX" == true ]] && cargo fmt; }; } && cargo clippy --release -- -D warnings && cargo build --release); then
+    if (cd firmware/stm32f769i-disco && { cargo fmt -- --check || { [[ "$AUTO_FIX" == true ]] && cargo fmt; }; } && cargo clippy --release -- -D warnings && cargo build --release) && (cd firmware/bootloader && { cargo fmt -- --check || { [[ "$AUTO_FIX" == true ]] && cargo fmt; }; } && cargo clippy --release -- -D warnings); then
         echo -e "${GREEN}✓ firmware passed${NC}\n"
     else
         echo -e "${RED}✗ firmware failed (fmt, clippy or build)${NC}\n"

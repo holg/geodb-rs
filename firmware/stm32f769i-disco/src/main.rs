@@ -7,6 +7,7 @@
 
 mod display;
 mod net;
+mod ota;
 mod touch;
 
 use core::fmt::Write;
@@ -29,9 +30,18 @@ use geodb_fw_core::{geo, ui, FwImage, Hit};
 use panic_probe as _;
 use {defmt_rtt as _, embassy_stm32 as _};
 
-/// The image (`cargo run --release -p geodb-fw-core --features std --example
-/// make_image`): 1.5 MB in flash, read in place.
-static IMAGE: &[u8] = include_bytes!("../geodb.fw");
+/// The city image (`make_image`) sits in the last flash sectors, outside both program slots, so a
+/// program update leaves it alone: flash it once with
+/// `probe-rs download --binary-format bin --base-address 0x080C0000 geodb.fw`.
+const IMAGE_ADDR: usize = 0x080C_0000;
+const IMAGE_MAX: usize = 0x14_0000;
+
+/// The image in flash: its header names the length (an erased flash gives a length that is clamped
+/// and does not parse).
+fn flash_image() -> &'static [u8] {
+    let len = unsafe { ((IMAGE_ADDR + 60) as *const u32).read_volatile() } as usize;
+    unsafe { core::slice::from_raw_parts(IMAGE_ADDR as *const u8, len.min(IMAGE_MAX)) }
+}
 
 bind_interrupts!(struct Irqs {
     LTDC => ltdc::InterruptHandler<peripherals::LTDC>;
@@ -90,10 +100,10 @@ async fn main(spawner: Spawner) {
 
     info!(
         "geodb firmware: image {} bytes in flash at {:x}",
-        IMAGE.len(),
-        IMAGE.as_ptr() as usize
+        flash_image().len(),
+        flash_image().as_ptr() as usize
     );
-    let img = match FwImage::parse(IMAGE) {
+    let img = match FwImage::parse(flash_image()) {
         Ok(img) => img,
         Err(_) => {
             error!("the image does not parse");
@@ -289,7 +299,11 @@ async fn main(spawner: Spawner) {
     }
     spawner.spawn(defmt::unwrap!(net::net_task(runner)));
     info!("ethernet: started, waiting for a cable and DHCP");
-    spawner.spawn(defmt::unwrap!(net::command_task(stack)));
+    let flash = embassy_stm32::flash::Flash::new_blocking(p.FLASH);
+    spawner.spawn(defmt::unwrap!(net::command_task(
+        stack,
+        ota::Ota::new(flash)
+    )));
     let mut udp = net::open_socket(stack);
 
     // ---- touch: the globe is grabbed like a heavy trackball: it follows the finger while it is
@@ -325,6 +339,7 @@ async fn main(spawner: Spawner) {
         };
         if state != net_state {
             net_state = state;
+            net::NET_UP.store(state == 2, core::sync::atomic::Ordering::Relaxed);
             status.clear();
             match state {
                 2 => {

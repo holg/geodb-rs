@@ -177,3 +177,6 @@ firmware/*/preview*.png
 firmware/*/target/
 
 firmware/*/backup/
+firmware/*/app-*.bin
+firmware/*/target-*/
+firmware/bootloader/target/
