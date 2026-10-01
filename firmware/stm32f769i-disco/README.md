@@ -117,7 +117,7 @@ marks it *pending* and restarts. The bootloader starts a pending slot at most th
 program confirms itself once its network has been up for 20 s, else the old slot (the last known
 good one) starts again. A power loss anywhere leaves a bootable slot.
 
-First time, with the ST-LINK (the whole internal flash is rewritten; QSPI and option bytes are not touched):
+First time, with the ST-LINK: `./flash-first.sh` does all of the following (the whole internal flash is rewritten; QSPI and option bytes are not touched):
 
     cd firmware/bootloader && cargo build --release
     cd ../stm32f769i-disco && ./build-ota.sh
