@@ -273,7 +273,12 @@ fn side_panel(
     render::text(fb, x0, 112, "nearest cities", 1, DIM);
     let mut line = Line::new();
     if spin.on {
-        let _ = write!(line, "spin {:.0} deg/s", spin.dps);
+        let _ = write!(
+            line,
+            "spin {:.0} deg/s{}",
+            abs(spin.dps),
+            if spin.dps < 0.0 { " reverse" } else { "" }
+        );
     } else {
         let _ = write!(line, "spin off");
     }
@@ -437,10 +442,11 @@ pub fn draw(
 }
 
 /// The touch buttons: x, y, width, height, label, what a tap does.
-pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 6] = [
+pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
     (500, 374, 104, 34, "SPIN", Action::SpinToggle),
     (612, 374, 60, 34, "-", Action::SpinSlower),
     (680, 374, 60, 34, "+", Action::SpinFaster),
+    (748, 374, 44, 34, "<>", Action::SpinReverse),
     (500, 414, 80, 34, "Z-", Action::ZoomOut),
     (588, 414, 80, 34, "Z+", Action::ZoomIn),
     (676, 414, 116, 34, "WORLD", Action::World),
@@ -486,7 +492,7 @@ pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32)> {
     ))
 }
 
-/// The globe turning by itself, and how fast (degrees per second).
+/// The globe turning by itself, and how fast (degrees per second; negative = the other way round).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Spin {
     pub on: bool,
@@ -521,6 +527,8 @@ pub enum Action {
     SpinToggle,
     SpinFaster,
     SpinSlower,
+    /// Turns the other way round (the default is the Earth's own direction).
+    SpinReverse,
     /// Look at this point (a tap on the globe).
     Center {
         lat: f32,
@@ -556,10 +564,13 @@ pub fn apply(view: &mut View, spin: &mut Spin, action: Action) {
         Action::World => view.zoom = 1.0,
         Action::SpinToggle => spin.on = !spin.on,
         Action::SpinFaster => {
-            spin.dps = (spin.dps * 1.5).clamp(Spin::MIN, Spin::MAX);
+            spin.dps = spin.dps.signum() * (abs(spin.dps) * 1.5).clamp(Spin::MIN, Spin::MAX);
             spin.on = true;
         }
-        Action::SpinSlower => spin.dps = (spin.dps / 1.5).clamp(Spin::MIN, Spin::MAX),
+        Action::SpinSlower => {
+            spin.dps = spin.dps.signum() * (abs(spin.dps) / 1.5).clamp(Spin::MIN, Spin::MAX)
+        }
+        Action::SpinReverse => spin.dps = -spin.dps,
         Action::Center { lat, lon } => {
             view.lat = lat.clamp(-89.5, 89.5);
             view.lon = wrap_lon(lon);
@@ -622,6 +633,28 @@ fn truncate(s: &str, n: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spin_can_be_reversed() {
+        let mut view = View::new(0.0, 10.0);
+        let mut spin = Spin::new();
+        apply(&mut view, &mut spin, Action::SpinToggle);
+        advance(&mut view, spin, 1.0);
+        assert!(
+            view.lon < 10.0,
+            "the default turns like the Earth: the view moves west"
+        );
+        let west = view.lon;
+        assert_eq!(hit(view, 760, 390), Action::SpinReverse);
+        apply(&mut view, &mut spin, Action::SpinReverse);
+        advance(&mut view, spin, 2.0);
+        assert!(view.lon > west, "reversed: the view moves east");
+        apply(&mut view, &mut spin, Action::SpinFaster);
+        assert!(
+            spin.dps < 0.0 && abs(spin.dps) > 12.0,
+            "faster keeps the direction"
+        );
+    }
 
     #[test]
     fn state_packets_round_trip() {

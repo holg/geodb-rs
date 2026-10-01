@@ -4079,7 +4079,8 @@ async fn run() -> Result<(), String> {
     let spin_deg_s = param("spin")
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(SPIN_DEG_S)
-        .clamp(0.0, SPIN_MAX_DEG_S);
+        // negative turns it the other way round (the default is the Earth's own direction)
+        .clamp(-SPIN_MAX_DEG_S, SPIN_MAX_DEG_S);
     let renderer_base_view = renderer.primary_view();
     let app = Rc::new(RefCell::new(App {
         doc: doc.clone(),
@@ -4274,7 +4275,7 @@ async fn run() -> Result<(), String> {
                 .value()
                 .parse::<f64>()
                 .unwrap_or(SPIN_DEG_S)
-                .clamp(0.0, SPIN_MAX_DEG_S);
+                .clamp(-SPIN_MAX_DEG_S, SPIN_MAX_DEG_S);
             let mut app = app.borrow_mut();
             app.spin_deg_s = v;
             set_html(&app.doc, "spin-value", &format!("{v:.0}°/s"));
