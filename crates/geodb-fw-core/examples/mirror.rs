@@ -130,20 +130,22 @@ fn main() {
     geodb_fw_core::coast::halve(&earth_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_px);
     let mut coarse_plain_px = vec![0u8; ui::EARTH_W * ui::EARTH_H / 2];
     geodb_fw_core::coast::halve(&plain_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_plain_px);
-    let coarse = geodb_fw_core::render::Texture {
-        w: ui::EARTH_W / 2,
-        h: ui::EARTH_H / 2,
-        px: &coarse_px,
-    };
-    let quick_earth = geodb_fw_core::render::Earth {
-        tex: coarse,
-        plain: Some(geodb_fw_core::render::Texture {
-            w: ui::EARTH_W / 2,
-            h: ui::EARTH_H / 2,
-            px: &coarse_plain_px,
-        }),
-        dem: None,
-    };
+    // the strokes of a moving globe are baked into the coarse earth, as on the board (again when the layers
+    // change: in the loop)
+    fn dem_of(dem_px: &[u8]) -> Option<geodb_fw_core::relief::Dem<'_>> {
+        (!dem_px.is_empty()).then_some(geodb_fw_core::relief::Dem {
+            w: 1024,
+            h: 512,
+            px: dem_px,
+        })
+    }
+    {
+        let dem = dem_of(&dem_px);
+        let (w, h) = (ui::EARTH_W / 2, ui::EARTH_H / 2);
+        ui::bake_moving_layers(&mut coarse_px, w, h, &img, dem.as_ref());
+        ui::bake_moving_layers(&mut coarse_plain_px, w, h, &img, dem.as_ref());
+    }
+    let mut baked = ui::bake_signature();
     let mut move_lut = geodb_fw_core::render::GlobeLut::new(Box::leak(
         vec![geodb_fw_core::render::LutCell::EMPTY; ui::MOVE_LUT_CELLS].into_boxed_slice(),
     ));
@@ -158,7 +160,7 @@ fn main() {
             h: ui::EARTH_H,
             px: &plain_px,
         }),
-        dem: (!dem_px.is_empty()).then(|| geodb_fw_core::relief::Dem {
+        dem: (!dem_px.is_empty()).then_some(geodb_fw_core::relief::Dem {
             w: 1024,
             h: 512,
             px: &dem_px,
@@ -317,6 +319,15 @@ fn main() {
         if view != last_view {
             (last_view, last_change) = (view, Instant::now());
         }
+        if ui::bake_signature() != baked {
+            geodb_fw_core::coast::halve(&earth_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_px);
+            geodb_fw_core::coast::halve(&plain_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_plain_px);
+            let dem = dem_of(&dem_px);
+            let (w, h) = (ui::EARTH_W / 2, ui::EARTH_H / 2);
+            ui::bake_moving_layers(&mut coarse_px, w, h, &img, dem.as_ref());
+            ui::bake_moving_layers(&mut coarse_plain_px, w, h, &img, dem.as_ref());
+            baked = ui::bake_signature();
+        }
         let moving = spin.on || last_change.elapsed() < Duration::from_millis(250);
         let quick = moving && have_full;
         let mut fb = Fb { px: &mut buf, w, h };
@@ -329,12 +340,24 @@ fn main() {
                 spin,
                 &mut move_lut,
                 &[],
-                &quick_earth,
+                &geodb_fw_core::render::Earth {
+                    tex: geodb_fw_core::render::Texture {
+                        w: ui::EARTH_W / 2,
+                        h: ui::EARTH_H / 2,
+                        px: &coarse_px,
+                    },
+                    plain: Some(geodb_fw_core::render::Texture {
+                        w: ui::EARTH_W / 2,
+                        h: ui::EARTH_H / 2,
+                        px: &coarse_plain_px,
+                    }),
+                    dem: dem_of(&dem_px),
+                },
             );
         if !drawn_quick {
             // (a moving scope view is a full frame too: without the strokes, as on the board)
             ui::STROKES.store(
-                !(moving && now_view.zoom >= ui::SCOPE_ZOOM),
+                !(moving && now_view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
                 std::sync::atomic::Ordering::Relaxed,
             );
             ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);

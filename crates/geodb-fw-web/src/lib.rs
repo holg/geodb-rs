@@ -283,6 +283,8 @@ pub extern "C" fn start() -> i32 {
     });
     let mut status = String::new();
     let _ = write!(status, "web: {} cities, geodb.fw", img.len());
+    // (the browser has the time to stroke the vectors in quick frames; the board bakes them into the picture)
+    ui::VECTOR_STROKES_MOVING.store(true, std::sync::atomic::Ordering::Relaxed);
     let board = Board {
         img,
         renderer: 2,
@@ -677,7 +679,7 @@ impl Board {
                 &Earth {
                     tex: coarse_tex,
                     plain: Some(plain_coarse),
-                    dem: None,
+                    dem,
                 },
             );
         if drawn_quick {
@@ -686,7 +688,7 @@ impl Board {
         } else {
             // (a moving scope view is a full frame too: without the strokes, as on the board)
             ui::STROKES.store(
-                !(motion && self.view.zoom >= ui::SCOPE_ZOOM),
+                !(motion && self.view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
                 std::sync::atomic::Ordering::Relaxed,
             );
             ui::draw(
@@ -754,12 +756,12 @@ impl Board {
                 &Earth {
                     tex: coarse_tex,
                     plain: Some(plain_coarse),
-                    dem: None,
+                    dem,
                 },
             );
         } else {
             ui::STROKES.store(
-                !(moving && view.zoom >= ui::SCOPE_ZOOM),
+                !(moving && view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
                 std::sync::atomic::Ordering::Relaxed,
             );
             ui::draw(

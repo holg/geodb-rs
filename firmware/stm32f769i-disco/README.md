@@ -195,7 +195,7 @@ cities.
 ## Layers and touch (the same on the board, in the mirror window and in the browser)
 
 * **LAYERS** (bottom button) opens a menu in place of the nearest-city list with a check box for each layer:
-  relief shading, isohypses, coastlines, city dots, query ring. The board keeps the shaded and the plain earth
+  relief shading, isohypses, coastlines, city dots, query ring, layers while moving. The board keeps the shaded and the plain earth
   (the plain copy sits in its own cacheable SDRAM window), so switching relief off is free. The layers and the menu
   are part of the state packet (now 24 bytes: the options byte and the selected city), so the mirror shows the
   same screen; clicks in the mirror are sent to the board as taps and change its layers.
@@ -208,3 +208,11 @@ cities.
   coastline and contour strokes while it moves (`ui::STROKES`), as quick frames do: 23 ms instead of 61 ms per frame
   on the board (32 fps; the strokes come back when it rests). `ui::PROFILE` times the parts of a quick frame (the
   log line `32fps 19ms: g15 n0 p2` is the frame, the globe, the nearest cities, the panel text, in ms).
+* **Layers while moving.** Stroking the vector coastline and the isohypses costs 35 to 70 ms a frame at the middle
+  zooms, so a quick frame cannot do it. With the option on, the board *bakes* the two strokes into the coarse
+  1024 x 512 earth the moving globe is drawn from (`relief::bake_coast`, `bake_contours`, `ui::bake_moving_layers`:
+  equirectangular lines, soft like the picture, free per frame); it makes that picture again, in a few hundred ms and
+  only at rest, whenever the relief, isohypses, coastlines or this option change (`ui::bake_signature`). The sharp
+  vector strokes are drawn over the full frame at rest as before. Measured on the board while spinning:
+  32 fps at zoom 1 to 8 (16 ms at zoom 8), 17 fps in the scope view (zoom 16: a full frame with the strokes,
+  53 ms; switch the option off for 32 fps there).

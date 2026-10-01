@@ -66,6 +66,25 @@ struct Earth<'a> {
     dem: Option<geodb_fw_core::relief::Dem<'a>>,
 }
 
+/// The earth pictures as the draw functions take them (made afresh each frame from the buffers, which
+/// the baking rewrites when the layers change).
+fn earth_of<'a>(
+    full: &'a [u8],
+    coarse: &'a [u8],
+    plain: &'a [u8],
+    plain_coarse: &'a [u8],
+    dem: Option<geodb_fw_core::relief::Dem<'a>>,
+) -> Earth<'a> {
+    let tex = |w: usize, h: usize, px: &'a [u8]| Texture { w, h, px };
+    Earth {
+        full: tex(ui::EARTH_W, ui::EARTH_H, full),
+        coarse: tex(ui::EARTH_W / 2, ui::EARTH_H / 2, coarse),
+        plain: tex(ui::EARTH_W, ui::EARTH_H, plain),
+        plain_coarse: tex(ui::EARTH_W / 2, ui::EARTH_H / 2, plain_coarse),
+        dem,
+    }
+}
+
 /// A tiny valid image (no coast, one city "No image"): what runs when the flash holds no usable city
 /// image (a new image format, an update that was cut off): the network and the updates keep working
 /// and the LCD says so. `make_image --placeholder` writes it.
@@ -399,29 +418,23 @@ async fn main(spawner: Spawner) {
     };
     geodb_fw_core::coast::halve(plain_px, ui::EARTH_W, ui::EARTH_H, plain_mip_px);
     watchdog.pet();
-    let earth = Earth {
-        full: Texture {
-            w: ui::EARTH_W,
-            h: ui::EARTH_H,
-            px: &*earth_px,
-        },
-        coarse: Texture {
-            w: ui::EARTH_W / 2,
-            h: ui::EARTH_H / 2,
-            px: &*mip_px,
-        },
-        plain: Texture {
-            w: ui::EARTH_W,
-            h: ui::EARTH_H,
-            px: &*plain_px,
-        },
-        plain_coarse: Texture {
-            w: ui::EARTH_W / 2,
-            h: ui::EARTH_H / 2,
-            px: &*plain_mip_px,
-        },
-        dem: dem_ref,
-    };
+    // The strokes of a moving globe are baked into the coarse earth (the vectors cost 35 to 70 ms a frame):
+    // again whenever the layers change (the loop below).
+    ui::bake_moving_layers(
+        mip_px,
+        ui::EARTH_W / 2,
+        ui::EARTH_H / 2,
+        &img,
+        dem_ref.as_ref(),
+    );
+    ui::bake_moving_layers(
+        plain_mip_px,
+        ui::EARTH_W / 2,
+        ui::EARTH_H / 2,
+        &img,
+        dem_ref.as_ref(),
+    );
+    let mut baked = ui::bake_signature();
 
     // ---- the first screen ----
     let mut view = View::new(30.0, 10.0);
@@ -440,7 +453,7 @@ async fn main(spawner: Spawner) {
         0,
         status.as_str(),
         &extras,
-        &earth,
+        &earth_of(&*earth_px, &*mip_px, &*plain_px, &*plain_mip_px, dem_ref),
     )
     .await;
     green.set_high();
@@ -679,6 +692,18 @@ async fn main(spawner: Spawner) {
             || grab.is_some_and(|g| g.dragging)
             || vel.0.abs() + vel.1.abs() > STOP_PX_S
             || inj_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(80));
+        // The layers changed: bake them into the coarse earth again (a few hundred ms, at rest only).
+        if !motion && grab.is_none() && ui::bake_signature() != baked {
+            watchdog.pet();
+            geodb_fw_core::coast::halve(earth_px, ui::EARTH_W, ui::EARTH_H, mip_px);
+            geodb_fw_core::coast::halve(plain_px, ui::EARTH_W, ui::EARTH_H, plain_mip_px);
+            let (w, h) = (ui::EARTH_W / 2, ui::EARTH_H / 2);
+            ui::bake_moving_layers(mip_px, w, h, &img, dem_ref.as_ref());
+            ui::bake_moving_layers(plain_mip_px, w, h, &img, dem_ref.as_ref());
+            baked = ui::bake_signature();
+            watchdog.pet();
+            full = 2;
+        }
         if !motion && dirty {
             // Came to rest: bring the panel and the dots up to date in both buffers.
             dirty = false;
@@ -750,7 +775,7 @@ async fn main(spawner: Spawner) {
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
             // (a moving scope view is a full frame: without the strokes, which would cost 40 ms)
             ui::STROKES.store(
-                !(motion && view.zoom >= ui::SCOPE_ZOOM),
+                !(motion && view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
                 core::sync::atomic::Ordering::Relaxed,
             );
             let draw_ms = draw_and_show(
@@ -765,7 +790,7 @@ async fn main(spawner: Spawner) {
                 fps,
                 status.as_str(),
                 &extras,
-                &earth,
+                &earth_of(&*earth_px, &*mip_px, &*plain_px, &*plain_mip_px, dem_ref),
             )
             .await;
             if quick {
@@ -782,10 +807,11 @@ async fn main(spawner: Spawner) {
                     |i: usize| ui::PROFILE[i].load(core::sync::atomic::Ordering::Relaxed) / 216_000;
                 let _ = write!(
                     line,
-                    "{}fps {}ms: g{} n{} p{}",
+                    "{}fps {}ms:g{} s{} n{} p{}",
                     fps,
                     draw_ms,
                     p(0),
+                    p(3),
                     p(1),
                     p(2)
                 );
@@ -839,7 +865,7 @@ async fn draw_and_show(
             &geodb_fw_core::render::Earth {
                 tex: earth.coarse,
                 plain: Some(earth.plain_coarse),
-                dem: None,
+                dem: earth.dem,
             },
         );
         ui::draw_fps(&mut fb, fps);

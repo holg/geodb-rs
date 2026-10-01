@@ -150,7 +150,7 @@ pub static PORTRAIT: Layout = Layout {
     footer: None,
     buttons: &PORTRAIT_BUTTONS,
     button_scale: 3,
-    menu: (24, 838, 56, 672, 48, 3),
+    menu: (24, 838, 52, 672, 46, 3),
     card: (560, 200, 3, 2, 40),
 };
 
@@ -350,7 +350,8 @@ fn picture<'a>(earth: &'a Earth<'a>) -> &'a render::Texture<'a> {
 static CLOCK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// Last quick frame: globe, nearest cities and markers, panel text (ticks of the clock set by [`set_clock`]).
-pub static PROFILE: [core::sync::atomic::AtomicU32; 3] = [
+pub static PROFILE: [core::sync::atomic::AtomicU32; 4] = [
+    core::sync::atomic::AtomicU32::new(0),
     core::sync::atomic::AtomicU32::new(0),
     core::sync::atomic::AtomicU32::new(0),
     core::sync::atomic::AtomicU32::new(0),
@@ -390,6 +391,16 @@ pub fn draw_moving(
     let t0 = ticks();
     lut.draw(fb, l.gx, l.gy, l.gr, view, picture(earth), MOVE_STEP);
     let t1 = ticks();
+    // The strokes of a moving globe are baked into the coarse earth (see [`bake_moving_layers`]); only
+    // the browser simulation, which has the time, strokes the vectors itself.
+    if VECTOR_STROKES_MOVING.load(core::sync::atomic::Ordering::Relaxed)
+        && layer_on(layer::MOVING)
+        && view.zoom >= MOVING_STROKES_ZOOM
+    {
+        coast_lines(fb, img, view, COAST);
+        contour_lines(fb, view, earth.dem.as_ref());
+    }
+    let t_strokes = ticks();
     // The nearest cities change as the globe turns: their markers and the list are redrawn too
     // (the buttons, the title block's static lines and the footer stay as they are).
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
@@ -403,8 +414,15 @@ pub fn draw_moving(
     side_panel(fb, img, view, spin, extras, &nearest[..n], shown, None);
     let t3 = ticks();
     PROFILE[0].store(t1.wrapping_sub(t0), core::sync::atomic::Ordering::Relaxed);
-    PROFILE[1].store(t2.wrapping_sub(t1), core::sync::atomic::Ordering::Relaxed);
+    PROFILE[1].store(
+        t2.wrapping_sub(t_strokes),
+        core::sync::atomic::Ordering::Relaxed,
+    );
     PROFILE[2].store(t3.wrapping_sub(t2), core::sync::atomic::Ordering::Relaxed);
+    PROFILE[3].store(
+        t_strokes.wrapping_sub(t1),
+        core::sync::atomic::Ordering::Relaxed,
+    );
     true
 }
 
@@ -711,6 +729,43 @@ pub static CONTOURS: core::sync::atomic::AtomicBool = core::sync::atomic::Atomic
 
 const CONTOUR_LAND: u16 = rgb565(205, 160, 105);
 const CONTOUR_SEA: u16 = rgb565(90, 140, 200);
+/// Whether a quick frame strokes the vector coastline and contours itself (the browser simulation, which has
+/// the time). The board does not: its quick frames draw from a coarse earth into which the strokes were baked
+/// ([`bake_moving_layers`]), which costs nothing per frame (stroking them took 35 to 70 ms there).
+pub static VECTOR_STROKES_MOVING: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Bakes the layers that are on (coastline, isohypses) into the coarse earth, when the "layers while moving"
+/// option is on: call it after every `halve` of the earth, and again when the options change. `px` is the
+/// coarse earth (`w` x `h`).
+pub fn bake_moving_layers(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    img: &FwImage<'_>,
+    dem: Option<&crate::relief::Dem<'_>>,
+) {
+    if !layer_on(layer::MOVING) {
+        return;
+    }
+    if layer_on(layer::CONTOURS) {
+        if let Some(dem) = dem {
+            crate::relief::bake_contours(px, w, h, dem, &LEVELS_COARSE, CONTOUR_LAND, CONTOUR_SEA);
+        }
+    }
+    if layer_on(layer::COAST) {
+        crate::relief::bake_coast(px, w, h, img.coast(), COAST);
+    }
+}
+
+/// The options that change the baked coarse earth: when they change it has to be made again.
+pub fn bake_signature() -> u8 {
+    options() & (layer::RELIEF | layer::CONTOURS | layer::COAST | layer::MOVING)
+}
+
+/// Strokes on a moving (not scope) globe from this zoom on.
+const MOVING_STROKES_ZOOM: f32 = 3.0;
+
 /// Contour lines from this zoom on (a hemisphere's worth of cells would be far too many).
 const CONTOUR_ZOOM: f32 = 2.5;
 const LEVELS_COARSE: [i16; 12] = [
@@ -980,16 +1035,19 @@ pub mod layer {
     pub const COAST: u8 = 4;
     pub const DOTS: u8 = 8;
     pub const RING: u8 = 16;
+    /// Keep the coastline and contour strokes while the globe moves (zoomed in from 3: they cost little then).
+    pub const MOVING: u8 = 32;
     /// Not a layer: the layers menu is open (it is part of the screen the mirror must show too).
     pub const MENU: u8 = 128;
-    pub const ALL: u8 = RELIEF | CONTOURS | COAST | DOTS | RING;
+    pub const ALL: u8 = RELIEF | CONTOURS | COAST | DOTS | RING | MOVING;
     /// Names of the layers in the menu, by bit index.
-    pub const NAMES: [&str; 5] = [
+    pub const NAMES: [&str; 6] = [
         "relief shading",
         "isohypses",
         "coastlines",
         "city dots",
         "query ring",
+        "layers while moving",
     ];
 }
 
@@ -1191,7 +1249,7 @@ pub fn apply(view: &mut View, spin: &mut Spin, action: Action) {
         }
         Action::SpinReverse => spin.dps = -spin.dps,
         Action::Layers => set_options(options() ^ layer::MENU),
-        Action::Toggle(i) if i < 5 => set_options(options() ^ (1 << i)),
+        Action::Toggle(i) if i < 6 => set_options(options() ^ (1 << i)),
         Action::Toggle(_) => {}
         Action::Center { lat, lon } => {
             view.lat = lat.clamp(-89.5, 89.5);

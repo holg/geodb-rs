@@ -368,6 +368,86 @@ pub fn apply_in_place(
     }
 }
 
+/// Draws a one pixel line into an RGB565 byte picture (`w` x `h`, 2 bytes a pixel), clipped.
+fn line_px(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    (x0, y0): (i32, i32),
+    (x1, y1): (i32, i32),
+    color: u16,
+) {
+    let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+    let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+    let (mut x, mut y, mut err) = (x0, y0, dx + dy);
+    for _ in 0..=(dx - dy) {
+        if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+            let at = 2 * (y as usize * w + x as usize);
+            px[at..at + 2].copy_from_slice(&color.to_le_bytes());
+        }
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
+/// Bakes the vector coastline into an equirectangular RGB565 picture (the coarse earth the globe is drawn from
+/// while it moves: the strokes cost nothing per frame then, at the price of being as soft as the picture).
+pub fn bake_coast(px: &mut [u8], w: usize, h: usize, coast: crate::coast::Coast<'_>, color: u16) {
+    let to = |p: [i32; 2]| {
+        (
+            ((p[0] as f32 * 0.01 + 180.0) / 360.0 * w as f32) as i32,
+            ((90.0 - p[1] as f32 * 0.01) / 180.0 * h as f32) as i32,
+        )
+    };
+    coast.for_each_edge(|a, b| {
+        let (pa, pb) = (to(a), to(b));
+        if (pa.0 - pb.0).abs() < w as i32 / 2 {
+            line_px(px, w, h, pa, pb, color);
+        }
+    });
+}
+
+/// Bakes the isohypses (marching squares over the whole elevation picture) into an equirectangular picture:
+/// land levels in `land`, sea floor levels in `sea`.
+pub fn bake_contours(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    dem: &Dem<'_>,
+    levels: &[i16],
+    land: u16,
+    sea: u16,
+) {
+    let to = |la: f32, lo: f32| {
+        (
+            ((lo + 180.0) / 360.0 * w as f32) as i32,
+            ((90.0 - la) / 180.0 * h as f32) as i32,
+        )
+    };
+    contours(
+        dem,
+        (-90.0, 90.0),
+        (-180.0, 180.0),
+        levels,
+        |la0, lo0, la1, lo1, lv| {
+            let (a, b) = (to(la0, lo0), to(la1, lo1));
+            if (a.0 - b.0).abs() < w as i32 / 2 {
+                line_px(px, w, h, a, b, if lv < 0 { sea } else { land });
+            }
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
