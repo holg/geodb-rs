@@ -12,6 +12,8 @@ SECTIONS
   .ethbuf (NOLOAD) : ALIGN(32)
   {
     __sethbuf = .;
+    /* the debug-probe link block (src/link.rs) first: at 0x20060000, where the host looks */
+    KEEP(*(.geodb_link))
     *(.ethbuf .ethbuf.*)
     /* the stack's global packet pool (xarxa-driver) */
     *(.bss._ZN12xarxa_driver3buf4POOL*)

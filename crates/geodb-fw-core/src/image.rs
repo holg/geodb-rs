@@ -8,19 +8,19 @@
 //! | 0 | magic `GDFW` |
 //! | 4 | version u16, flags u16 |
 //! | 8 | cities u32, countries u32, named cities u32 |
-//! | 20 | texture width u16, height u16 |
+//! | 20 | coastline length u32 |
 //! | 24 | offsets: geoids, country ids, named index, name offsets, names |
-//! | 44 | names length; offsets: countries, country names, texture |
+//! | 44 | names length; offsets: countries, country names, coastline |
 //! | 60 | total length |
 //!
 //! Sections: `geoids` (cities × u32, sorted), `country ids` (cities × u8),
 //! `named index` (named × u32 city indices, ascending), `name offsets`
 //! ((named + 1) × u32 into `names`), `names` (ASCII, NUL-terminated),
 //! `countries` (countries × 4: ISO2, u16 offset into `country names`),
-//! `country names` (ASCII, NUL-terminated), `texture` (RGB565, row-major).
+//! `country names` (ASCII, NUL-terminated), `coast` (the packed rings, see [`crate::coast`]).
 
 pub const MAGIC: [u8; 4] = *b"GDFW";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 pub const HEADER_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub struct FwImage<'a> {
     cities: usize,
     countries: usize,
     named: usize,
-    tex: (usize, usize),
+    coast_len: usize,
     off_geoids: usize,
     off_country: usize,
     off_named: usize,
@@ -47,7 +47,7 @@ pub struct FwImage<'a> {
     off_names: usize,
     off_countries: usize,
     off_country_names: usize,
-    off_texture: usize,
+    off_coast: usize,
 }
 
 fn u32_at(b: &[u8], at: usize) -> usize {
@@ -72,7 +72,7 @@ impl<'a> FwImage<'a> {
             cities: u32_at(bytes, 8),
             countries: u32_at(bytes, 12),
             named: u32_at(bytes, 16),
-            tex: (u16_at(bytes, 20), u16_at(bytes, 22)),
+            coast_len: u32_at(bytes, 20),
             off_geoids: u32_at(bytes, 24),
             off_country: u32_at(bytes, 28),
             off_named: u32_at(bytes, 32),
@@ -80,7 +80,7 @@ impl<'a> FwImage<'a> {
             off_names: u32_at(bytes, 40),
             off_countries: u32_at(bytes, 48),
             off_country_names: u32_at(bytes, 52),
-            off_texture: u32_at(bytes, 56),
+            off_coast: u32_at(bytes, 56),
         };
         let names_len = u32_at(bytes, 44);
         let fits = |off: usize, len: usize| {
@@ -96,7 +96,7 @@ impl<'a> FwImage<'a> {
             && fits(img.off_names, names_len)
             && fits(img.off_countries, img.countries * 4)
             && fits(img.off_country_names, 0)
-            && fits(img.off_texture, img.tex.0 * img.tex.1 * 2);
+            && fits(img.off_coast, img.coast_len);
         if ok {
             Ok(img)
         } else {
@@ -181,14 +181,9 @@ impl<'a> FwImage<'a> {
         (city, self.cstr(self.off_names + off))
     }
 
-    /// The earth picture: width, height and RGB565 little-endian pixels.
-    pub fn texture(&self) -> (usize, usize, &'a [u8]) {
-        let (w, h) = self.tex;
-        (
-            w,
-            h,
-            &self.bytes[self.off_texture..self.off_texture + w * h * 2],
-        )
+    /// The packed coastline rings.
+    pub fn coast(&self) -> crate::coast::Coast<'a> {
+        crate::coast::Coast::new(&self.bytes[self.off_coast..self.off_coast + self.coast_len])
     }
 
     /// First city whose geoid is >= `g`.

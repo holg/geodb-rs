@@ -19,15 +19,17 @@ extern crate alloc;
 
 #[cfg(any(feature = "std", test))]
 pub mod build;
+pub mod coast;
 pub mod fmath;
 pub mod geo;
 pub mod image;
+pub mod link;
 pub mod query;
 pub mod render;
 pub mod ui;
 
 pub use image::{FwImage, ImageError};
-pub use query::Hit;
+pub use query::{Answer, Hit};
 
 #[cfg(test)]
 mod tests {
@@ -70,13 +72,13 @@ mod tests {
             .step_by(37)
             .map(|i| (i, alloc::format!("City {i}")))
             .collect();
-        let tex = alloc::vec![0x55u8; 16 * 8 * 2];
+        let coast = crate::coast::tests::square();
         build::build(&build::Source {
             geoids: &geoids,
             country_ids: &country_ids,
             countries: &countries,
             names: &names,
-            texture: (16, 8, &tex),
+            coast: &coast,
         })
     }
 
@@ -92,8 +94,7 @@ mod tests {
         assert_eq!(img.name(37), Some("City 37"));
         assert_eq!(img.name(38), None);
         assert_eq!(img.named_at(2), (74, "City 74"));
-        let (w, h, px) = img.texture();
-        assert_eq!((w, h, px.len()), (16, 8, 256));
+        assert_eq!(img.coast().bytes(), &crate::coast::tests::square()[..]);
         // Damage is caught.
         assert_eq!(
             FwImage::parse(&bytes[..bytes.len() - 4]).err(),
@@ -140,6 +141,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_link_round_trips() {
+        use link::Command;
+        for c in [
+            Command::Tap { x: 560, y: 390 },
+            Command::Drag { dx: -7, dy: 3 },
+            Command::Release,
+            Command::Query {
+                lat: 48.14,
+                lon: 11.58,
+                km: 300.0,
+            },
+        ] {
+            assert_eq!(Command::decode(c.encode()), Some(c));
+        }
+        assert_eq!(
+            Command::parse("!query 35.68 139.69 300"),
+            Some(Command::Query {
+                lat: 35.68,
+                lon: 139.69,
+                km: 300.0
+            })
+        );
+        let view = render::View::new(-33.9, 151.2);
+        let p = ui::encode_state(view, ui::Spin::new(), 31);
+        assert_eq!(link::state_of(&link::state_words(&p)), p);
+        let bytes = image_of(5000);
+        let img = FwImage::parse(&bytes).unwrap();
+        let mut t = 0;
+        let a = img.answer(10.0, 20.0, 800.0, || {
+            t += 7;
+            t
+        });
+        let b = link::answer_of(&link::answer_words(&a));
+        assert_eq!(
+            (b.count, b.tested, b.radius_us, b.found),
+            (a.count, a.tested, 7, a.found)
+        );
+        assert_eq!(b.nearest[..b.found], a.nearest[..a.found]);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 #![no_main]
 
 mod display;
+mod link;
 mod net;
 mod ota;
 mod touch;
@@ -25,7 +26,7 @@ use embassy_stm32::rng::{self, Rng};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, peripherals, Config};
 use embassy_time::{with_timeout, Duration, Instant, Timer};
-use geodb_fw_core::render::{GlobeLut, LutCell, View};
+use geodb_fw_core::render::{GlobeLut, LutCell, Texture, View};
 use geodb_fw_core::{geo, ui, FwImage, Hit};
 use panic_probe as _;
 use {defmt_rtt as _, embassy_stm32 as _};
@@ -35,6 +36,12 @@ use {defmt_rtt as _, embassy_stm32 as _};
 /// `probe-rs download --binary-format bin --base-address 0x080C0000 geodb.fw`.
 const IMAGE_ADDR: usize = 0x080C_0000;
 const IMAGE_MAX: usize = 0x14_0000;
+
+/// SDRAM beyond the framebuffers and the globe tables (about 2.1 MB): the earth picture and the
+/// scratch of its rasterizer.
+const EARTH_AT: usize = 0x0040_0000;
+const SCRATCH_AT: usize = 0x0080_0000;
+const SCRATCH_LEN: usize = 0x0020_0000;
 
 /// The image in flash: its header names the length (an erased flash gives a length that is clamped
 /// and does not parse).
@@ -196,6 +203,7 @@ async fn main(spawner: Spawner) {
     display::init_sdram(sdram);
     // (the MPU now maps the Ethernet window non-cacheable)
     unsafe { net::clear_buffers() };
+    link::init();
 
     // ---- the panel: reset PJ15, TE PJ2, backlight enable PI14 (BL_CTRL: no DSI command lights the
     // panel while it is low) ----
@@ -258,6 +266,31 @@ async fn main(spawner: Spawner) {
         ),
     );
 
+    // ---- the earth: the coastline rings of the image rasterized into a 2048 x 1024 RGB565 picture
+    // (4 MB) in SDRAM, with a scratch area for the crossings behind it ----
+    watchdog.pet();
+    let earth_px: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(
+            (display::SDRAM_BASE + EARTH_AT) as *mut u8,
+            ui::EARTH_W * ui::EARTH_H * 2,
+        )
+    };
+    let scratch: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut((display::SDRAM_BASE + SCRATCH_AT) as *mut u8, SCRATCH_LEN)
+    };
+    let t = Instant::now();
+    match geodb_fw_core::coast::rasterize(img.coast(), ui::EARTH_W, ui::EARTH_H, earth_px, scratch)
+    {
+        Ok(()) => info!("earth rasterized in {} ms", t.elapsed().as_millis()),
+        Err(_) => error!("the coastline does not rasterize"),
+    }
+    watchdog.pet();
+    let earth = Texture {
+        w: ui::EARTH_W,
+        h: ui::EARTH_H,
+        px: &*earth_px,
+    };
+
     // ---- the first screen ----
     let mut view = View::new(30.0, 10.0);
     let mut spin = ui::Spin::new();
@@ -274,6 +307,7 @@ async fn main(spawner: Spawner) {
         0,
         status.as_str(),
         &extras,
+        &earth,
     )
     .await;
     green.set_high();
@@ -436,6 +470,19 @@ async fn main(spawner: Spawner) {
                 }
             }
         }
+        // commands through the debug probe: touches as from the mirror, queries answered here
+        if let Some(cmd) = link::poll() {
+            match cmd {
+                geodb_fw_core::link::Command::Query { lat, lon, km } => {
+                    let a = img.answer(lat, lon, km, || DWT::cycle_count() / 216);
+                    link::done(Some(&a));
+                }
+                touch_cmd => {
+                    net::inject(touch_cmd);
+                    link::done(None);
+                }
+            }
+        }
         // input injected from the mirror window (UDP commands): the same as a finger
         let (idx, idy) = (
             net::INJ_DX.swap(0, core::sync::atomic::Ordering::Relaxed),
@@ -507,6 +554,7 @@ async fn main(spawner: Spawner) {
                 ui::draw_status(&mut disp.fb[fb].fb(), line.as_str());
             }
         }
+        link::publish(&ui::encode_state(view, spin, fps));
         // the viewer on the host mirrors the screen from this: the view, a few bytes
         if net_state == 2
             && last_state.elapsed() >= Duration::from_millis(if motion { 15 } else { 500 })
@@ -543,6 +591,7 @@ async fn main(spawner: Spawner) {
                 fps,
                 status.as_str(),
                 &extras,
+                &earth,
             )
             .await;
             if quick {
@@ -589,13 +638,14 @@ async fn draw_and_show(
     fps: u32,
     status: &str,
     extras: &[ui::Extra],
+    earth: &Texture<'_>,
 ) -> u32 {
     red.set_high();
     let back = 1 - *front;
     let cycles = DWT::cycle_count();
     if quick {
         let mut fb = disp.fb[back].fb();
-        ui::draw_moving(&mut fb, img, view, spin, &mut lut.1, extras);
+        ui::draw_moving(&mut fb, img, view, spin, &mut lut.1, extras, earth);
         ui::draw_fps(&mut fb, fps);
         ui::draw_status(&mut fb, status);
     } else {
@@ -606,6 +656,7 @@ async fn draw_and_show(
             spin,
             Some(&mut lut.0),
             extras,
+            earth,
         );
     }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;

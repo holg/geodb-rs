@@ -33,6 +33,9 @@ pub const QUERY_KM: f32 = 1000.0;
 const GLOBE_STEP: i32 = 2;
 
 /// Cells of the [`GlobeLut`] the globe needs.
+/// The earth picture the board rasterizes at start (RGB565, 4 MB in SDRAM).
+pub const EARTH_W: usize = 2048;
+pub const EARTH_H: usize = 1024;
 pub const LUT_CELLS: usize = render::lut_cells(GLOBE_R, GLOBE_STEP);
 /// A moving globe is drawn in coarser blocks (and so needs a table of its own).
 const MOVE_STEP: i32 = 4;
@@ -169,13 +172,12 @@ pub fn draw_moving(
     spin: Spin,
     lut: &mut GlobeLut<'_>,
     extras: &[Extra],
+    earth: &Texture<'_>,
 ) -> bool {
     if view.zoom >= SCOPE_ZOOM {
         return false;
     }
-    let (w, h, px) = img.texture();
-    let tex = Texture { w, h, px };
-    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, MOVE_STEP);
+    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, MOVE_STEP);
     // The nearest cities change as the globe turns: their markers and the list are redrawn too
     // (the buttons, the title block's static lines and the footer stay as they are).
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
@@ -314,7 +316,7 @@ fn side_panel(
     }
 }
 
-/// Draws everything for the globe centred on `view`. Returns how many
+/// Draws everything for the globe centred on `view`; `earth` is the rasterized coast ([`crate::coast`]). Returns how many
 /// nearest cities are listed.
 pub fn draw(
     fb: &mut Fb<'_>,
@@ -323,6 +325,7 @@ pub fn draw(
     spin: Spin,
     lut: Option<&mut GlobeLut<'_>>,
     extras: &[Extra],
+    earth: &Texture<'_>,
 ) -> usize {
     fb.fill(BG);
     let r = GLOBE_R as f32;
@@ -356,12 +359,10 @@ pub fn draw(
             }
         }
     } else {
-        let (w, h, px) = img.texture();
-        let tex = Texture { w, h, px };
         match lut {
             // Spinning: the table only needs the turn, no trigonometry per pixel.
-            Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, GLOBE_STEP),
-            None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &tex, GLOBE_STEP),
+            Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, GLOBE_STEP),
+            None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, earth, GLOBE_STEP),
         }
     }
 

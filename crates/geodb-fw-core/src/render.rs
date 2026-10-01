@@ -218,7 +218,7 @@ pub fn draw_globe(
 pub struct LutCell {
     /// Longitude offset from the view centre, in texels x 256.
     du: i32,
-    /// Texture row x 256 ([`EMPTY`] = the block is outside the disc).
+    /// Texture row x 32 ([`EMPTY`] = the block is outside the disc; 1024 rows still fit a u16).
     v: u16,
     /// Brightness x 128.
     shade: u8,
@@ -301,8 +301,7 @@ impl<'a> GlobeLut<'a> {
                 let rim = (1.0 - z) * (1.0 - z) * (1.0 - z);
                 *cell = LutCell {
                     du: floorf(dlon / 360.0 * tw as f32 * 256.0 + 0.5) as i32,
-                    v: ((90.0 - lat) / 180.0 * th as f32 * 256.0 - 128.0).clamp(0.0, 65534.0)
-                        as u16,
+                    v: ((90.0 - lat) / 180.0 * th as f32 * 32.0 - 16.0).clamp(0.0, 65534.0) as u16,
                     shade: ((0.30 + 0.85 * lambert) * 128.0).clamp(0.0, 255.0) as u8,
                     rim: (rim * 0.55 * 255.0).clamp(0.0, 255.0) as u8,
                 };
@@ -393,10 +392,10 @@ const GLOW: [u32; 3] = [77, 140, 255];
 const LIGHT: [f32; 3] = [-0.42, 0.50, 0.76];
 
 /// Bilinear texel lookup in fixed point: `u` in texels x 256 (already
-/// wrapped), `v` in rows x 256. RGB channels 0..255.
+/// wrapped), `v` in rows x 32. RGB channels 0..255.
 fn sample_fixed(tex: &Texture<'_>, u: i32, v: i32, rows: i32) -> [u32; 3] {
     let (x0, fx) = ((u >> 8) as usize, (u & 255) as u32);
-    let (y0, fy) = ((v >> 8).min(rows - 1) as usize, (v & 255) as u32);
+    let (y0, fy) = ((v >> 5).min(rows - 1) as usize, ((v & 31) << 3) as u32);
     let x1 = if x0 + 1 == tex.w { 0 } else { x0 + 1 };
     let y1 = (y0 + 1).min(rows as usize - 1);
     let px = |x: usize, y: usize| -> [u32; 3] {

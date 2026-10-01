@@ -89,6 +89,21 @@ fn main() {
     let bytes =
         std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e} (make_image writes it)"));
     let img = FwImage::parse(&bytes).expect("image");
+    // the earth, rasterized from the image's coast as the board does it
+    let mut earth_px = vec![0u8; ui::EARTH_W * ui::EARTH_H * 2];
+    geodb_fw_core::coast::rasterize(
+        img.coast(),
+        ui::EARTH_W,
+        ui::EARTH_H,
+        &mut earth_px,
+        &mut vec![0u8; 8 << 20],
+    )
+    .expect("rasterize the coast");
+    let earth = geodb_fw_core::render::Texture {
+        w: ui::EARTH_W,
+        h: ui::EARTH_H,
+        px: &earth_px,
+    };
 
     let sock =
         UdpSocket::bind(("0.0.0.0", STATE_PORT)).expect("UDP port 7881 (another viewer running?)");
@@ -207,7 +222,7 @@ fn main() {
             ui::advance(&mut now_view, spin, stamp.elapsed().as_secs_f32().min(0.2));
         }
         let mut fb = Fb { px: &mut buf, w, h };
-        ui::draw(&mut fb, &img, now_view, spin, None, &[]);
+        ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);
         // the frame rates, rounded (the trend matters, not the digit) and their history
         let live = heard.is_some_and(|at| at.elapsed() < Duration::from_secs(2));
         let hud = format!(

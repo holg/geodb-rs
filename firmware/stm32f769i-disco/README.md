@@ -73,7 +73,7 @@ queries: identical counts; nearest within 0.021 km).
 What made it fast: the Cortex-M7 runs from flash (7 wait states at 216 MHz), so
 the I- and D-cache must be on; `libm`'s sinf / cosf / atan2f compute in software
 double precision on this single-precision-FPU target, so `fmath` has f32-only
-versions; the globe is computed per 2 x 2 pixel block (the texture is 256 x 128);
+versions; the globe is computed per 2 x 2 pixel block (the earth is 2048 x 1024);
 and a wide view neither counts nor draws its 80,000 dots.
 
 ## Names, tests and control from the host (Ethernet)
@@ -147,3 +147,13 @@ Notes:
   reset, so `!reset` and an update work after a debug session; a power cycle clears it as well.
 * The boot log has room for about 2000 records (16 bytes each; an update writes 3-4); erasing it when full
   is not implemented.
+
+## The earth
+
+The picture on the globe is not stored: the image carries the coastline as vector rings (Natural Earth
+1:50m, the web demo's packed rings, 73 KB, points about 1 km apart). At start the board rasterizes them
+into a 2048 x 1024 RGB565 picture in SDRAM (4 MB, `coast::rasterize`: even-odd fill, lakes are holes, four
+scanlines per pixel row with exact coverage along each, so the coast is anti-aliased; sea, land by
+latitude, ice at the poles). One pixel is 0.18 degrees (20 km at the equator), 14 times finer than the
+256 x 128 picture it replaced, for the same flash. The image format is version 2 (coast instead of texture),
+so the image has to be flashed again (`flash-first.sh`; an image update over the network is not built).

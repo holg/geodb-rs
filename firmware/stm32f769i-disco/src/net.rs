@@ -1,11 +1,13 @@
 //! The Ethernet link (LAN8742 PHY over RMII, DHCP) and the question/answer transport to the host.
 
 use core::mem::MaybeUninit;
+use cortex_m::peripheral::DWT;
 use embassy_net::udp::UdpSocket;
 use embassy_net::wire::Ipv4Addr;
 use embassy_net::{Runner, Stack, StackStorage};
 use embassy_stm32::eth::{Ethernet, GenericPhy, PacketQueue, Sma};
 use embassy_stm32::peripherals::{ETH, ETH_SMA};
+use geodb_fw_core::FwImage;
 use static_cell::StaticCell;
 
 pub type Device = Ethernet<'static, ETH, GenericPhy<Sma<'static, ETH_SMA>>>;
@@ -81,6 +83,24 @@ pub const COMMAND_PORT: u16 = 7880;
 
 /// Touch input injected from the host (the mirror window): drag deltas accumulate, a tap is the last
 /// tap (bit 31 set, x in bits 16..26, y in bits 0..10), release ends a drag. main.rs takes them.
+/// A touch command (from the probe link) into the same path as the UDP ones.
+pub fn inject(cmd: geodb_fw_core::link::Command) {
+    use core::sync::atomic::Ordering;
+    use geodb_fw_core::link::Command;
+    match cmd {
+        Command::Tap { x, y } => {
+            let (x, y) = (x.clamp(0, 799) as u32, y.clamp(0, 479) as u32);
+            INJ_TAP.store(1 << 31 | x << 16 | y, Ordering::Relaxed);
+        }
+        Command::Drag { dx, dy } => {
+            INJ_DX.fetch_add(dx.clamp(-800, 800), Ordering::Relaxed);
+            INJ_DY.fetch_add(dy.clamp(-480, 480), Ordering::Relaxed);
+        }
+        Command::Release => INJ_RELEASE.store(true, Ordering::Relaxed),
+        Command::Query { .. } => {}
+    }
+}
+
 pub static INJ_DX: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
 pub static INJ_DY: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
 pub static INJ_TAP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -94,7 +114,7 @@ pub static FPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::n
 
 /// Reply text under construction.
 struct Out {
-    bytes: [u8; 96],
+    bytes: [u8; 256],
     len: usize,
 }
 
@@ -114,6 +134,8 @@ impl core::fmt::Write for Out {
 /// * `!info` -> uptime, frame rate, build
 /// * `!blast N` -> N datagrams of 512 bytes (`!blast I` + padding): throughput and loss
 /// * `!tap X Y`, `!drag DX DY`, `!release` -> touch input from the mirror window (no reply)
+/// * `!query LAT LON KM` -> `!query COUNT TESTED RADIUS_US NEAREST_US INDEX:KM ...`: the cities
+///   within KM and the ten nearest, timed on the chip (`geodb-board compare`)
 /// * `!ota begin LEN CRC32HEX` -> erases the other slot; data chunks (`0x01`, offset u32 LE, bytes)
 ///   -> `!ota ack NEXT`; `!ota end` -> checks the CRC, marks the slot pending, restarts
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
@@ -156,7 +178,7 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
         if n >= 5 && cmd[0] == 1 {
             let offset = u32::from_le_bytes([cmd[1], cmd[2], cmd[3], cmd[4]]);
             let mut out = Out {
-                bytes: [0; 96],
+                bytes: [0; 256],
                 len: 0,
             };
             match ota.data(offset, &cmd[5..n]) {
@@ -173,7 +195,7 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
         let text = core::str::from_utf8(&cmd[..n]).unwrap_or("").trim();
         let mut words = text.split_whitespace();
         let mut out = Out {
-            bytes: [0; 96],
+            bytes: [0; 256],
             len: 0,
         };
         match words.next() {
@@ -200,7 +222,7 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                 let mut packet = [b'.'; 512];
                 for i in 0..count {
                     let mut head = Out {
-                        bytes: [0; 96],
+                        bytes: [0; 256],
                         len: 0,
                     };
                     let _ = write!(head, "!blast {i} ");
@@ -208,6 +230,19 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                     let _ = socket.send_to(&packet, from).await;
                 }
                 let _ = write!(out, "!blast done {count}");
+            }
+            Some("!query") => {
+                let mut num = || words.next().and_then(|v| v.parse::<f32>().ok());
+                match (num(), num(), num(), FwImage::parse(crate::flash_image())) {
+                    (Some(lat), Some(lon), Some(km), Ok(img)) => {
+                        let a = img.answer(lat, lon, km, || DWT::cycle_count() / 216);
+                        let _ = out.write_str("!query ");
+                        let _ = a.write(&mut out);
+                    }
+                    _ => {
+                        let _ = out.write_str("!query ?");
+                    }
+                }
             }
             Some("!tap") => {
                 let x: u32 = words

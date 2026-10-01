@@ -15,8 +15,8 @@ pub struct Source<'a> {
     pub countries: &'a [(String, String)],
     /// (city index, ASCII name), ascending by city.
     pub names: &'a [(u32, String)],
-    /// Earth picture: width, height, RGB565 little-endian pixels.
-    pub texture: (u16, u16, &'a [u8]),
+    /// The packed coastline rings (`coast::Coast` payload).
+    pub coast: &'a [u8],
 }
 
 fn align4(v: &mut Vec<u8>) {
@@ -33,8 +33,6 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         src.names.windows(2).all(|w| w[0].0 < w[1].0),
         "names ascending"
     );
-    let (tw, th, tex) = src.texture;
-    assert_eq!(tex.len(), usize::from(tw) * usize::from(th) * 2);
     let mut out = alloc::vec![0u8; HEADER_LEN];
     let put = |out: &mut Vec<u8>, bytes: &[u8]| -> usize {
         align4(out);
@@ -71,7 +69,7 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
     assert!(cnames.len() <= usize::from(u16::MAX));
     let off_countries = put(&mut out, &table);
     let off_country_names = put(&mut out, &cnames);
-    let off_texture = put(&mut out, tex);
+    let off_coast = put(&mut out, src.coast);
     align4(&mut out);
     let total = out.len();
     let w32 = |out: &mut Vec<u8>, at: usize, v: usize| {
@@ -82,8 +80,7 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
     w32(&mut out, 8, src.geoids.len());
     w32(&mut out, 12, src.countries.len());
     w32(&mut out, 16, src.names.len());
-    out[20..22].copy_from_slice(&tw.to_le_bytes());
-    out[22..24].copy_from_slice(&th.to_le_bytes());
+    w32(&mut out, 20, src.coast.len());
     for (at, v) in [
         (24, off_geoids),
         (28, off_country),
@@ -93,7 +90,7 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         (44, names_len),
         (48, off_countries),
         (52, off_country_names),
-        (56, off_texture),
+        (56, off_coast),
         (60, total),
     ] {
         w32(&mut out, at, v);

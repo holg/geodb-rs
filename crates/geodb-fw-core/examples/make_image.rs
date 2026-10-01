@@ -125,13 +125,26 @@ fn main() {
         .enumerate()
         .map(|(k, (_, name))| (k as u32, name.clone()))
         .collect();
-    let texture = std::fs::read(root.join("assets/earth-256x128.rgb565")).expect("texture");
+    // The coastline: the web demo's packed rings (gzip inside), kept as the raw payload.
+    let coast_file = std::fs::read(assets.join("coast.bin")).expect("coast.bin");
+    assert_eq!(&coast_file[..4], b"GDBC", "coast.bin");
+    let coast = {
+        let payload = &coast_file[5..];
+        if payload.starts_with(&[0x1f, 0x8b]) {
+            let mut raw = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(payload), &mut raw)
+                .expect("gunzip coast");
+            raw
+        } else {
+            payload.to_vec()
+        }
+    };
     let bytes = build(&Source {
         geoids: &geoids,
         country_ids: &country_ids,
         countries: &countries,
         names: &chosen,
-        texture: (256, 128, &texture),
+        coast: &coast,
     });
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).expect("output directory");
@@ -142,14 +155,14 @@ fn main() {
         .filter(|&&(i, _)| db.cities[i].rank == GlobeRank::Capital)
         .count();
     println!(
-        "{}: {} bytes for {n} of {all} cities (all named, {capitals} capitals, {} countries)\n  geoids {} + country ids {} + names ~{} + texture {}",
+        "{}: {} bytes for {n} of {all} cities (all named, {capitals} capitals, {} countries)\n  geoids {} + country ids {} + names ~{} + coast {}",
         out.display(),
         bytes.len(),
         countries.len(),
         geoids.len() * 4,
         n,
         used - fixed,
-        texture.len()
+        coast.len()
     );
 
     // ------------------------------------------------------------- verify
@@ -216,6 +229,23 @@ fn main() {
     );
     assert!(worst_km < 0.35, "nearest differs by {worst_km} km");
 
+    // The earth: the coast rasterized as the board does it, 2048 x 1024.
+    let (ew, eh) = (ui::EARTH_W, ui::EARTH_H);
+    let mut earth_px = vec![0u8; ew * eh * 2];
+    let mut scratch = vec![0u8; 8 << 20];
+    let t = std::time::Instant::now();
+    geodb_fw_core::coast::rasterize(img.coast(), ew, eh, &mut earth_px, &mut scratch)
+        .expect("rasterize");
+    println!(
+        "  earth {ew} x {eh} rasterized in {:.0} ms on the host",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
+    let earth = geodb_fw_core::render::Texture {
+        w: ew,
+        h: eh,
+        px: &earth_px,
+    };
+
     // ------------------------------------------------------------ preview
     let shots = [
         (
@@ -244,7 +274,7 @@ fn main() {
             w: ui::WIDTH,
             h: ui::HEIGHT,
         };
-        ui::draw(&mut fb, &img, view, ui::Spin::new(), None, &[]);
+        ui::draw(&mut fb, &img, view, ui::Spin::new(), None, &[], &earth);
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let rgb: Vec<u8> = buf
             .iter()

@@ -95,3 +95,105 @@ impl FwImage<'_> {
         found
     }
 }
+
+/// Nearest cities an [`Answer`] lists.
+pub const ANSWER_NEAREST: usize = 10;
+
+/// One query of the comparison between the board, the web simulator and the host (the board's
+/// `!query`, `geodb-board compare`): the cities within a radius and the nearest ten, each timed.
+#[derive(Debug, Clone, Copy)]
+pub struct Answer {
+    /// Cities within the radius, and how many the index made it test.
+    pub count: u32,
+    pub tested: u32,
+    pub radius_us: u32,
+    pub nearest_us: u32,
+    pub nearest: [Hit; ANSWER_NEAREST],
+    pub found: usize,
+}
+
+impl FwImage<'_> {
+    /// [`radius`](Self::radius) and [`nearest`](Self::nearest) at (lat, lon), timed by
+    /// `clock_us` (any microsecond counter; wrapping is fine).
+    pub fn answer(
+        &self,
+        lat: f32,
+        lon: f32,
+        radius_km: f32,
+        mut clock_us: impl FnMut() -> u32,
+    ) -> Answer {
+        let t0 = clock_us();
+        let mut count = 0u32;
+        let tested = self.radius_index(lat, lon, radius_km, |_, _| count += 1) as u32;
+        let t1 = clock_us();
+        let mut nearest = [Hit { index: 0, km: 0.0 }; ANSWER_NEAREST];
+        let found = self.nearest(lat, lon, &mut nearest);
+        let t2 = clock_us();
+        Answer {
+            count,
+            tested,
+            radius_us: t1.wrapping_sub(t0),
+            nearest_us: t2.wrapping_sub(t1),
+            nearest,
+            found,
+        }
+    }
+}
+
+impl Answer {
+    /// `COUNT TESTED RADIUS_US NEAREST_US INDEX:KM ...` (the board's reply after `!query `).
+    pub fn write(&self, w: &mut impl core::fmt::Write) -> core::fmt::Result {
+        write!(
+            w,
+            "{} {} {} {}",
+            self.count, self.tested, self.radius_us, self.nearest_us
+        )?;
+        for h in &self.nearest[..self.found] {
+            write!(w, " {}:{:.3}", h.index, h.km)?;
+        }
+        Ok(())
+    }
+
+    /// The inverse of [`write`](Self::write).
+    pub fn parse(text: &str) -> Option<Answer> {
+        let mut words = text.split_whitespace();
+        let mut num = || words.next()?.parse::<u32>().ok();
+        let (count, tested, radius_us, nearest_us) = (num()?, num()?, num()?, num()?);
+        let mut nearest = [Hit { index: 0, km: 0.0 }; ANSWER_NEAREST];
+        let mut found = 0;
+        for w in text.split_whitespace().skip(4).take(ANSWER_NEAREST) {
+            let (i, d) = w.split_once(':')?;
+            nearest[found] = Hit {
+                index: i.parse().ok()?,
+                km: d.parse().ok()?,
+            };
+            found += 1;
+        }
+        Some(Answer {
+            count,
+            tested,
+            radius_us,
+            nearest_us,
+            nearest,
+            found,
+        })
+    }
+}
+
+/// The queries the board, the web simulator and the host compare (`geodb-board compare`, the
+/// page's Compare button): place, latitude, longitude, radius (km). The README's two (Munich and
+/// Tokyo, 300 km) first, then dense, sparse, the date line and the poles.
+pub const COMPARE: [(&str, f32, f32, f32); 12] = [
+    ("Munich", 48.137, 11.575, 300.0),
+    ("Tokyo", 35.68, 139.69, 300.0),
+    ("Munich 1000", 48.137, 11.575, 1000.0),
+    ("Paris", 48.857, 2.352, 25.0),
+    ("New York", 40.713, -74.006, 100.0),
+    ("Delhi", 28.614, 77.209, 500.0),
+    ("Sydney", -33.87, 151.21, 2000.0),
+    ("Fiji, date line", -17.7, 179.99, 500.0),
+    ("Reykjavik", 64.1, -21.9, 800.0),
+    ("McMurdo", -77.8, 166.7, 1500.0),
+    ("Atlantic", 0.0, -30.0, 3000.0),
+    ("North Pole", 89.9, 10.0, 2000.0),
+];
