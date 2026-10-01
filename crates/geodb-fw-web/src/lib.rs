@@ -287,9 +287,12 @@ pub extern "C" fn start() -> i32 {
         relief: None,
         view: View::new(30.0, 10.0),
         spin: ui::Spin::new(),
-        lut: (table(ui::LUT_CELLS), table(ui::MOVE_LUT_CELLS)),
-        fb: vec![0; ui::WIDTH * ui::HEIGHT],
-        rgba: vec![255; ui::WIDTH * ui::HEIGHT * 4],
+        lut: (
+            table(ui::layout().fine_cells()),
+            table(ui::layout().move_cells()),
+        ),
+        fb: vec![0; ui::layout().width * ui::layout().height],
+        rgba: vec![255; ui::layout().width * ui::layout().height * 4],
         touch: None,
         grab: None,
         vel: (0.0, 0.0),
@@ -333,7 +336,38 @@ pub extern "C" fn frame(dt_ms: f32) -> i32 {
     BOARD.with(|b| b.borrow_mut().as_mut().map_or(0, |b| b.step(dt_ms)))
 }
 
-/// The screen, 800 x 480 RGBA.
+/// The width of the screen in pixels (800 landscape, 720 portrait).
+#[no_mangle]
+pub extern "C" fn screen_w() -> u32 {
+    ui::layout().width as u32
+}
+
+/// The height of the screen (480 landscape, 1280 portrait).
+#[no_mangle]
+pub extern "C" fn screen_h() -> u32 {
+    ui::layout().height as u32
+}
+
+/// The screen shape: 0 the board's 800 x 480 landscape, 1 the portrait 720 x 1280 of the 5 inch
+/// ESP32-P4 board. Resizes the screen (read `screen_w()` / `screen_h()` again) and redraws.
+#[no_mangle]
+pub extern "C" fn set_layout(portrait: i32) {
+    ui::set_portrait(portrait != 0);
+    let l = ui::layout();
+    BOARD.with(|b| {
+        if let Some(b) = b.borrow_mut().as_mut() {
+            b.fb = vec![0; l.width * l.height];
+            b.rgba = vec![255; l.width * l.height * 4];
+            // (the old tables are left behind; the globe is bigger in the portrait layout)
+            b.lut = (table(l.fine_cells()), table(l.move_cells()));
+            (b.grab, b.touch, b.vel) = (None, None, (0.0, 0.0));
+            b.full = true;
+            b.dirty = false;
+        }
+    });
+}
+
+/// The screen, `screen_w()` x `screen_h()` RGBA.
 #[no_mangle]
 pub extern "C" fn pixels() -> *const u8 {
     BOARD.with(|b| {
@@ -573,8 +607,8 @@ impl Board {
         let dem = self.dem();
         let mut fb = Fb {
             px: &mut self.fb,
-            w: ui::WIDTH,
-            h: ui::HEIGHT,
+            w: ui::layout().width,
+            h: ui::layout().height,
         };
         let drawn_quick = quick
             && ui::draw_moving(
@@ -636,8 +670,8 @@ impl Board {
         let dem = self.dem();
         let mut fb = Fb {
             px: &mut self.fb,
-            w: ui::WIDTH,
-            h: ui::HEIGHT,
+            w: ui::layout().width,
+            h: ui::layout().height,
         };
         if quick {
             ui::draw_moving(

@@ -46,6 +46,131 @@ pub const MOVE_LUT_CELLS: usize = render::lut_cells(GLOBE_R, MOVE_STEP);
 /// Nearest cities listed.
 pub const LIST: usize = 10;
 
+/// Where the text of the panel goes: title, info, position, view, the "nearest cities" label, the
+/// spin note and the list (all pixel coordinates; `*_scale` multiplies the 8 x 8 font).
+pub struct Panel {
+    pub title: (i32, i32, i32),
+    pub info: (i32, i32, i32),
+    pub coord: (i32, i32, i32),
+    pub view: (i32, i32, i32),
+    pub label: (i32, i32, i32),
+    /// Right edge, y and scale of the spin note.
+    pub spin: (i32, i32, i32),
+    /// x, first y, row pitch, scale, longest name.
+    pub list: (i32, i32, i32, i32, usize),
+    /// Right edge, y offset in the row and scale of the distance.
+    pub dist: (i32, i32, i32),
+}
+
+/// Everything that depends on the screen shape: its size, the globe, the panel, the buttons.
+pub struct Layout {
+    pub width: usize,
+    pub height: usize,
+    /// Globe centre and radius.
+    pub gx: i32,
+    pub gy: i32,
+    pub gr: i32,
+    pub panel: Panel,
+    /// What a quick frame repaints around the list (x, y, w, h).
+    pub clear: (i32, i32, i32, i32),
+    /// The frame rate: right edge and y; the status line: x, y, width.
+    pub fps: (i32, i32),
+    pub status: (i32, i32, i32),
+    /// The footer note (landscape only).
+    pub footer: Option<(i32, i32)>,
+    pub buttons: &'static [(i32, i32, i32, i32, &'static str, Action)],
+    /// The font scale of the button labels.
+    pub button_scale: i32,
+}
+
+impl Layout {
+    /// Cells of the tables the globe needs (fine and coarse) for [`GlobeLut`].
+    pub const fn fine_cells(&self) -> usize {
+        render::lut_cells(self.gr, GLOBE_STEP)
+    }
+    pub const fn move_cells(&self) -> usize {
+        render::lut_cells(self.gr, MOVE_STEP)
+    }
+}
+
+/// The board's screen: 800 x 480, the globe at the left, the panel at the right.
+pub static LANDSCAPE: Layout = Layout {
+    width: WIDTH,
+    height: HEIGHT,
+    gx: GLOBE_X,
+    gy: GLOBE_Y,
+    gr: GLOBE_R,
+    panel: Panel {
+        title: (500, 16, 3),
+        info: (500, 50, 1),
+        coord: (500, 70, 2),
+        view: (500, 94, 1),
+        label: (500, 112, 1),
+        spin: (792, 112, 1),
+        list: (500, 130, 24, 2, 11),
+        dist: (792, 4, 1),
+    },
+    clear: (500, 8, 300, 364),
+    fps: (792, 14),
+    status: (500, 468, 292),
+    footer: Some((500, 456)),
+    buttons: &BUTTONS,
+    button_scale: 2,
+};
+
+/// A portrait screen of 720 x 1280 (the 5 inch DSI panel of the ESP32-P4 board): the globe on top, the
+/// text and the nearest cities below, the buttons at the bottom.
+pub static PORTRAIT: Layout = Layout {
+    width: 720,
+    height: 1280,
+    gx: 360,
+    gy: 410,
+    gr: 330,
+    panel: Panel {
+        title: (24, 12, 4),
+        info: (24, 56, 2),
+        coord: (24, 752, 3),
+        view: (24, 786, 2),
+        label: (24, 812, 2),
+        spin: (696, 812, 2),
+        list: (24, 838, 32, 3, 16),
+        dist: (696, 8, 2),
+    },
+    clear: (0, 744, 720, 416),
+    fps: (696, 16),
+    status: (24, 1269, 672),
+    footer: None,
+    buttons: &PORTRAIT_BUTTONS,
+    button_scale: 3,
+};
+
+pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 7] = [
+    (24, 1166, 240, 48, "SPIN", Action::SpinToggle),
+    (276, 1166, 120, 48, "-", Action::SpinSlower),
+    (408, 1166, 120, 48, "+", Action::SpinFaster),
+    (540, 1166, 156, 48, "<>", Action::SpinReverse),
+    (24, 1218, 240, 48, "Z-", Action::ZoomOut),
+    (276, 1218, 240, 48, "Z+", Action::ZoomIn),
+    (528, 1218, 168, 48, "WORLD", Action::World),
+];
+
+static PORTRAIT_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Picks the screen shape (the board always runs the landscape one; the browser simulation can show the
+/// portrait one).
+pub fn set_portrait(on: bool) {
+    PORTRAIT_ON.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The layout in use.
+pub fn layout() -> &'static Layout {
+    if PORTRAIT_ON.load(core::sync::atomic::Ordering::Relaxed) {
+        &PORTRAIT
+    } else {
+        &LANDSCAPE
+    }
+}
+
 /// A small formatting buffer (no allocation).
 struct Line {
     b: [u8; 40],
@@ -180,13 +305,15 @@ pub fn draw_moving(
     if view.zoom >= SCOPE_ZOOM {
         return false;
     }
-    lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &earth.tex, MOVE_STEP);
+    let l = layout();
+    lut.draw(fb, l.gx, l.gy, l.gr, view, &earth.tex, MOVE_STEP);
     // The nearest cities change as the globe turns: their markers and the list are redrawn too
     // (the buttons, the title block's static lines and the footer stay as they are).
     let mut nearest = [Hit { index: 0, km: 0.0 }; LIST];
     let n = img.nearest(view.lat, view.lon, &mut nearest);
     markers(fb, img, view, extras, &nearest[..n]);
-    fb.rect(500, 8, 300, 364, BG);
+    let c = l.clear;
+    fb.rect(c.0, c.1, c.2, c.3, BG);
     let shown = view.span() * EARTH_RADIUS_KM * 0.75 <= DOTS_MAX_KM;
     side_panel(fb, img, view, spin, extras, &nearest[..n], shown, None);
     true
@@ -194,28 +321,31 @@ pub fn draw_moving(
 
 /// The network line, bottom of the side panel (drawn over whatever is there).
 pub fn draw_status(fb: &mut Fb<'_>, text: &str) {
-    fb.rect(500, 468, 292, 10, BG);
-    render::text(fb, 500, 469, text, 1, DIM);
+    let (x, y, w) = layout().status;
+    fb.rect(x, y, w, 10, BG);
+    render::text(fb, x, y + 1, text, 1, DIM);
 }
 
 /// The frame rate, top right (over the side panel, until the next full draw).
 pub fn draw_fps(fb: &mut Fb<'_>, fps: u32) {
     let mut line = Line::new();
     let _ = write!(line, "{fps} fps");
-    fb.rect(700, 10, 92, 24, BG);
+    let (right, y) = layout().fps;
+    fb.rect(right - 92, y - 4, 92, 24, BG);
     let wd = render::text_width(line.as_str(), 2);
-    render::text(fb, 792 - wd, 14, line.as_str(), 2, ACCENT);
+    render::text(fb, right - wd, y, line.as_str(), 2, ACCENT);
 }
 
 /// The nearest cities as numbered dots on the globe (with their names on the scope), and the view
 /// centre.
 fn markers(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, extras: &[Extra], nearest: &[Hit]) {
-    let r = GLOBE_R as f32;
+    let l = layout();
+    let r = l.gr as f32;
     let scope = view.zoom >= SCOPE_ZOOM;
     for (i, hit) in nearest.iter().enumerate() {
         let idx = hit.index as usize;
         let (la, lo) = crate::geo::to_deg(img.geoid(idx));
-        if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
+        if let Some((x, y, _)) = render::project(view, r, l.gx, l.gy, la, lo) {
             render::dot(fb, x, y, 3, ACCENT);
             let mut tag = Line::new();
             let _ = write!(tag, "{}", (i + 1) % 10);
@@ -228,7 +358,7 @@ fn markers(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, extras: &[Extra], nea
         }
     }
     // The view centre.
-    render::ring(fb, GLOBE_X, GLOBE_Y, 6, TEXT);
+    render::ring(fb, l.gx, l.gy, 6, TEXT);
 }
 
 /// The text of the side panel: title, position, view, the nearest cities. (The buttons and the
@@ -245,12 +375,11 @@ fn side_panel(
     count: Option<usize>,
 ) {
     let visible_km = view.span() * EARTH_RADIUS_KM;
-    // Side panel.
-    let x0 = 500;
-    render::text(fb, x0, 16, "GeoDB", 3, ACCENT);
+    let p = &layout().panel;
+    render::text(fb, p.title.0, p.title.1, "GeoDB", p.title.2, ACCENT);
     let mut line = Line::new();
     let _ = write!(line, "{} cities {} KB", img.len(), img.byte_len() / 1024);
-    render::text(fb, x0, 50, line.as_str(), 1, DIM);
+    render::text(fb, p.info.0, p.info.1, line.as_str(), p.info.2, DIM);
     let mut line = Line::new();
     let _ = write!(
         line,
@@ -260,7 +389,7 @@ fn side_panel(
         abs(view.lon),
         if view.lon >= 0.0 { 'E' } else { 'W' }
     );
-    render::text(fb, x0, 70, line.as_str(), 2, TEXT);
+    render::text(fb, p.coord.0, p.coord.1, line.as_str(), p.coord.2, TEXT);
     let mut line = Line::new();
     if !shown || count.is_none() {
         let _ = write!(line, "view {:.0} km", visible_km);
@@ -274,8 +403,8 @@ fn side_panel(
             count.unwrap_or(0)
         );
     }
-    render::text(fb, x0, 94, line.as_str(), 1, DIM);
-    render::text(fb, x0, 112, "nearest cities", 1, DIM);
+    render::text(fb, p.view.0, p.view.1, line.as_str(), p.view.2, DIM);
+    render::text(fb, p.label.0, p.label.1, "nearest cities", p.label.2, DIM);
     let mut line = Line::new();
     if spin.on {
         let _ = write!(
@@ -287,35 +416,50 @@ fn side_panel(
     } else {
         let _ = write!(line, "spin off");
     }
-    let wd = render::text_width(line.as_str(), 1);
+    let wd = render::text_width(line.as_str(), p.spin.2);
     render::text(
         fb,
-        792 - wd,
-        112,
+        p.spin.0 - wd,
+        p.spin.1,
         line.as_str(),
-        1,
+        p.spin.2,
         if spin.on { ACCENT } else { DIM },
     );
+    let (lx, ly, pitch, scale, name_len) = p.list;
     for (i, hit) in nearest.iter().enumerate() {
-        let y = 130 + i as i32 * 24;
+        let y = ly + i as i32 * pitch;
         let idx = hit.index as usize;
         let mut name = Line::new();
         let _ = match name_of(img, extras, idx) {
-            Some(s) => write!(name, "{}", truncate(s, 11)),
+            Some(s) => write!(name, "{}", truncate(s, name_len)),
             None => write!(name, "(unnamed)"),
         };
         let mut line = Line::new();
         let iso = img.country_iso(img.country(idx));
-        let _ = write!(line, "{} {:<11} {}", (i + 1) % 10, name.as_str(), iso);
-        render::text(fb, x0, y, line.as_str(), 2, TEXT);
+        let _ = write!(
+            line,
+            "{} {:<w$} {}",
+            (i + 1) % 10,
+            name.as_str(),
+            iso,
+            w = name_len
+        );
+        render::text(fb, lx, y, line.as_str(), scale, TEXT);
         let mut dist = Line::new();
         if hit.km < 100.0 {
             let _ = write!(dist, "{:.1}", hit.km);
         } else {
             let _ = write!(dist, "{:.0}", hit.km);
         }
-        let wd = render::text_width(dist.as_str(), 1);
-        render::text(fb, 792 - wd, y + 4, dist.as_str(), 1, DIM);
+        let wd = render::text_width(dist.as_str(), p.dist.2);
+        render::text(
+            fb,
+            p.dist.0 - wd,
+            y + p.dist.1,
+            dist.as_str(),
+            p.dist.2,
+            DIM,
+        );
     }
 }
 
@@ -349,7 +493,7 @@ fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_
     if !CONTOURS.load(core::sync::atomic::Ordering::Relaxed) || view.zoom < CONTOUR_ZOOM {
         return;
     }
-    let r = GLOBE_R as f32;
+    let r = layout().gr as f32;
     let span = view.span() / DEG_TO_RAD + 1.0;
     let lat_range = ((view.lat - span).max(-90.0), (view.lat + span).min(90.0));
     let c = cosf((abs(view.lat) + span).min(89.0) * DEG_TO_RAD);
@@ -366,8 +510,8 @@ fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_
         levels,
         |la0, lo0, la1, lo1, lv| {
             if let (Some((x0, y0, _)), Some((x1, y1, _))) = (
-                render::project(view, r, GLOBE_X, GLOBE_Y, la0, lo0),
-                render::project(view, r, GLOBE_X, GLOBE_Y, la1, lo1),
+                render::project(view, r, layout().gx, layout().gy, la0, lo0),
+                render::project(view, r, layout().gx, layout().gy, la1, lo1),
             ) {
                 if (x1 - x0).abs() < 100 && (y1 - y0).abs() < 100 {
                     render::line(
@@ -390,7 +534,7 @@ fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
     if !COAST_LINES.load(core::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    let r = GLOBE_R as f32;
+    let r = layout().gr as f32;
     let span = view.span() / DEG_TO_RAD + 1.0; // degrees from the view centre that can be seen
     let polar = abs(view.lat) + span > 85.0; // near a pole longitude says little
     img.coast().for_each_edge(|a, b| {
@@ -409,8 +553,8 @@ fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
         }
         let (lo1, la1) = (b[0] as f32 * 0.01, b[1] as f32 * 0.01);
         if let (Some((x0, y0, _)), Some((x1, y1, _))) = (
-            render::project(view, r, GLOBE_X, GLOBE_Y, la, lo),
-            render::project(view, r, GLOBE_X, GLOBE_Y, la1, lo1),
+            render::project(view, r, layout().gx, layout().gy, la, lo),
+            render::project(view, r, layout().gx, layout().gy, la1, lo1),
         ) {
             // (an edge that wraps the other way round the antimeridian would be a long line)
             if (x1 - x0).abs() < 200 && (y1 - y0).abs() < 200 {
@@ -432,15 +576,15 @@ pub fn draw(
     earth: &Earth<'_>,
 ) -> usize {
     fb.fill(BG);
-    let r = GLOBE_R as f32;
+    let r = layout().gr as f32;
     let scope = view.zoom >= SCOPE_ZOOM;
     let visible_km = view.span() * EARTH_RADIUS_KM;
     if scope {
         // Just the plane: a dark disc with distance rings.
-        for y in -GLOBE_R..=GLOBE_R {
-            for x in -GLOBE_R..=GLOBE_R {
-                if x * x + y * y <= GLOBE_R * GLOBE_R {
-                    fb.set(GLOBE_X + x, GLOBE_Y + y, SCOPE);
+        for y in -layout().gr..=layout().gr {
+            for x in -layout().gr..=layout().gr {
+                if x * x + y * y <= layout().gr * layout().gr {
+                    fb.set(layout().gx + x, layout().gy + y, SCOPE);
                 }
             }
         }
@@ -449,7 +593,8 @@ pub fn draw(
             for k in 0..n {
                 let bearing = k as f32 / n as f32 * core::f32::consts::TAU;
                 let (la, lo) = destination(view.lat, view.lon, km, bearing);
-                if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
+                if let Some((x, y, _)) = render::project(view, r, layout().gx, layout().gy, la, lo)
+                {
                     fb.set(x, y, GRID);
                 }
             }
@@ -458,16 +603,32 @@ pub fn draw(
             if ring_px >= 24 {
                 let mut label = Line::new();
                 let _ = write!(label, "{km} km");
-                let x = GLOBE_X - render::text_width(label.as_str(), 1) / 2;
-                render::text(fb, x, GLOBE_Y - ring_px - 10, label.as_str(), 1, DIM);
+                let x = layout().gx - render::text_width(label.as_str(), 1) / 2;
+                render::text(fb, x, layout().gy - ring_px - 10, label.as_str(), 1, DIM);
             }
         }
         coast_lines(fb, img, view, COAST_SCOPE);
     } else {
         match lut {
             // Spinning: the table only needs the turn, no trigonometry per pixel.
-            Some(lut) => lut.draw(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &earth.tex, GLOBE_STEP),
-            None => render::draw_globe(fb, GLOBE_X, GLOBE_Y, GLOBE_R, view, &earth.tex, GLOBE_STEP),
+            Some(lut) => lut.draw(
+                fb,
+                layout().gx,
+                layout().gy,
+                layout().gr,
+                view,
+                &earth.tex,
+                GLOBE_STEP,
+            ),
+            None => render::draw_globe(
+                fb,
+                layout().gx,
+                layout().gy,
+                layout().gr,
+                view,
+                &earth.tex,
+                GLOBE_STEP,
+            ),
         }
         coast_lines(fb, img, view, COAST);
         contour_lines(fb, view, earth.dem.as_ref());
@@ -484,7 +645,8 @@ pub fn draw(
             let size = if scope { 1 } else { 0 };
             img.radius_index(view.lat, view.lon, query_km, |index, _| {
                 let (la, lo) = crate::geo::to_deg(img.geoid(index as usize));
-                if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
+                if let Some((x, y, _)) = render::project(view, r, layout().gx, layout().gy, la, lo)
+                {
                     render::dot(fb, x, y, size, DOT);
                 }
             });
@@ -495,7 +657,7 @@ pub fn draw(
         for k in 0..120 {
             let bearing = k as f32 / 120.0 * core::f32::consts::TAU;
             let (la, lo) = destination(view.lat, view.lon, query_km, bearing);
-            if let Some((x, y, _)) = render::project(view, r, GLOBE_X, GLOBE_Y, la, lo) {
+            if let Some((x, y, _)) = render::project(view, r, layout().gx, layout().gy, la, lo) {
                 fb.set(x, y, RING);
             }
         }
@@ -514,7 +676,7 @@ pub fn draw(
         shown,
         Some(count),
     );
-    for (x, y, w, h, label, action) in BUTTONS {
+    for (x, y, w, h, label, action) in layout().buttons.iter().copied() {
         let label = match action {
             Action::SpinToggle if spin.on => "STOP",
             _ => label,
@@ -533,8 +695,9 @@ pub fn draw(
             fb.set(x, y + k, GRID);
             fb.set(x + w - 1, y + k, GRID);
         }
-        let tw = render::text_width(label, 2);
-        render::text(fb, x + (w - tw) / 2, y + (h - 16) / 2, label, 2, TEXT);
+        let sc = layout().button_scale;
+        let tw = render::text_width(label, sc);
+        render::text(fb, x + (w - tw) / 2, y + (h - 8 * sc) / 2, label, sc, TEXT);
     }
     // The nearest city's detail from the host (state, country), else the unit note.
     let detail = nearest[..n]
@@ -545,7 +708,9 @@ pub fn draw(
                 .find(|e| e.index == h.index && e.detail_len > 0)
         })
         .map_or("km, positions within 300 m", Extra::detail);
-    render::text(fb, 500, 456, detail, 1, DIM);
+    if let Some((fx, fy)) = layout().footer {
+        render::text(fb, fx, fy, detail, 1, DIM);
+    }
     n
 }
 
@@ -646,15 +811,15 @@ pub enum Action {
 
 /// The action of a tap at screen pixel (x, y).
 pub fn hit(view: View, x: i32, y: i32) -> Action {
-    for &(bx, by, bw, bh, _, action) in BUTTONS.iter() {
+    for &(bx, by, bw, bh, _, action) in layout().buttons.iter() {
         // A finger is bigger than the button: a little slack (the rows are close).
         if x >= bx - 4 && x < bx + bw + 4 && y >= by - 4 && y < by + bh + 4 {
             return action;
         }
     }
-    let (dx, dy) = (x - GLOBE_X, y - GLOBE_Y);
-    if dx * dx + dy * dy <= GLOBE_R * GLOBE_R {
-        let r = GLOBE_R as f32;
+    let (dx, dy) = (x - layout().gx, y - layout().gy);
+    if dx * dx + dy * dy <= layout().gr * layout().gr {
+        let r = layout().gr as f32;
         if let Some((lat, lon, _)) = render::unproject(view, dx as f32 / r, -(dy as f32) / r) {
             return Action::Center { lat, lon };
         }
@@ -706,7 +871,7 @@ pub fn pan(view: &mut View, dx: i32, dy: i32) {
 
 /// [`pan`] in fractional pixels (a coasting globe moves less than a pixel a frame).
 pub fn pan_f(view: &mut View, dx: f32, dy: f32) {
-    let deg_per_px = view.span() / DEG_TO_RAD / GLOBE_R as f32;
+    let deg_per_px = view.span() / DEG_TO_RAD / layout().gr as f32;
     let cos_lat = crate::fmath::cos(view.lat * DEG_TO_RAD).max(0.05);
     view.lon = wrap_lon(view.lon - dx * deg_per_px / cos_lat);
     view.lat = (view.lat + dy * deg_per_px).clamp(-89.5, 89.5);
@@ -741,6 +906,38 @@ fn truncate(s: &str, n: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_portrait_layout_fits_its_screen_and_its_buttons_do_not_overlap() {
+        let l = &PORTRAIT;
+        let inside = |x: i32, y: i32, w: i32, h: i32| {
+            x >= 0 && y >= 0 && x + w <= l.width as i32 && y + h <= l.height as i32
+        };
+        assert!(
+            inside(l.gx - l.gr, l.gy - l.gr, 2 * l.gr, 2 * l.gr),
+            "the globe"
+        );
+        for &(x, y, w, h, label, _) in l.buttons {
+            assert!(inside(x, y, w, h), "{label}");
+        }
+        for (i, a) in l.buttons.iter().enumerate() {
+            for b in &l.buttons[i + 1..] {
+                let apart =
+                    a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
+                assert!(apart, "{} and {} overlap", a.4, b.4);
+            }
+        }
+        // the list ends above the buttons, the status line below them
+        let (_, y0, pitch, scale, _) = l.panel.list;
+        let list_end = y0 + (LIST as i32 - 1) * pitch + 8 * scale;
+        assert!(list_end <= l.buttons[0].1, "{list_end}");
+        assert!(l.status.1 >= l.buttons[4].1 + l.buttons[4].3);
+        // the same actions as the landscape screen
+        let acts = |b: &[(i32, i32, i32, i32, &str, Action)]| {
+            b.iter().map(|t| t.5).collect::<alloc::vec::Vec<_>>()
+        };
+        assert_eq!(acts(l.buttons), acts(LANDSCAPE.buttons));
+    }
 
     #[test]
     fn the_spin_can_be_reversed() {
@@ -794,7 +991,7 @@ mod tests {
         assert_eq!(hit(view, 740, 430), Action::World);
         assert_eq!(hit(view, 790, 20), Action::None);
         // A tap in the middle of the globe stays put and zooms in.
-        match hit(view, GLOBE_X, GLOBE_Y) {
+        match hit(view, layout().gx, layout().gy) {
             Action::Center { lat, lon } => {
                 assert!(
                     (lat - 48.0).abs() < 0.1 && (lon - 11.0).abs() < 0.1,
@@ -803,7 +1000,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let tap = hit(view, GLOBE_X + 100, GLOBE_Y);
+        let tap = hit(view, layout().gx + 100, layout().gy);
         apply(&mut view, &mut spin, tap);
         assert!(view.lon > 11.0 && view.zoom == 2.0, "{view:?}");
         apply(&mut view, &mut spin, Action::ZoomIn);

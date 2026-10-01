@@ -82,7 +82,8 @@
             .board { padding: 8px; border-radius: 12px; }
             .label { font-size: 9px; }
         }
-        #relief label { margin: 0 10px; font-size: 13px; }
+        #shape button.on { background: #2a4a78; border-color: #6a9fe0; color: #fff; }
+    #relief label { margin: 0 10px; font-size: 13px; }
     #renderers button.on { background: #2a4a78; border-color: #6a9fe0; color: #fff; }
     #renderers button:disabled { opacity: .4; }
 </style>
@@ -94,6 +95,11 @@
         <div class="label"><b>STM32F769I-DISCO</b><span id="info">geodb firmware · in the browser</span></div>
     </div>
     <p id="status">Loading…</p>
+    <div class="link" id="shape" title="the screen shape: the board's landscape LCD, or the portrait 5 inch panel of an ESP32-P4 board">
+        <span>screen</span>
+        <button data-s="0" class="on">Landscape 800×480 (the board)</button>
+        <button data-s="1">Portrait 720×1280 (ESP32-P4 5 inch)</button>
+    </div>
     <div class="link" id="relief" title="relief from an 8-bit elevation picture (ETOPO 2022)">
         <span>relief</span>
         <label>hill shading <input type="range" id="shade" min="0" max="512" value="230"/></label>
@@ -140,7 +146,7 @@ const status = document.getElementById("status");
 const info = document.getElementById("info");
 const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d");
-const W = 800, H = 480;
+let W = 800, H = 480; // the screen shape: set_layout() changes it
 const kb = (n) => (n / 1024).toFixed(0) + " KB";
 
 try {
@@ -194,6 +200,20 @@ try {
     relief(); // the sliders' start values (the board's)
     document.getElementById("contours").onchange = (e) => fw.set_contours(e.target.checked ? 1 : 0);
     demSel.onchange = async () => { await loadDem(demSel.value); relief(); };
+
+    // the screen shape: the canvas follows the layout (width x height as the wasm reports them)
+    const shapeButtons = [...document.querySelectorAll("#shape button")];
+    const reshape = (portrait) => {
+        fw.set_layout(portrait);
+        W = fw.screen_w(); H = fw.screen_h();
+        canvas.width = W; canvas.height = H;
+        canvas.style.aspectRatio = `${W} / ${H}`;
+        canvas.style.maxHeight = portrait ? "78vh" : "";
+        canvas.style.width = portrait ? "auto" : "";
+        shapeButtons.forEach((b, i) => b.classList.toggle("on", i === portrait));
+    };
+    shapeButtons.forEach((b, i) => b.onclick = () => reshape(i));
+    if (new URLSearchParams(location.search).get("layout") === "portrait") reshape(1);
 
     // the pointer, in screen pixels, as the touch controller reports it
     const at = (e) => {
