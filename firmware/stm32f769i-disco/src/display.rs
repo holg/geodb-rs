@@ -76,6 +76,30 @@ fn sdram_mpu() {
     }
 }
 
+/// Two cacheable windows in the SDRAM, for what only the CPU touches and mostly reads: the globe tables
+/// (2 MB at 0xC020_0000) and the earth picture with its coarse copy (8 MB at 0xC080_0000). Without it
+/// every texel and table cell is a slow uncached SDRAM access (the spin fell from 32 to 14 fps).
+/// Normal, write-back, write-allocate, not shareable. Call after `init_sdram` (its memory test must
+/// go to the chips, not to the cache).
+pub fn sdram_cached() {
+    let mpu = unsafe { &*cortex_m::peripheral::MPU::PTR };
+    unsafe {
+        cortex_m::asm::dmb();
+        mpu.ctrl.write(0);
+        // XN | AP=full | TEX=001 C=1 B=1 | SIZE | ENABLE
+        let attrs = (1 << 28) | (0b011 << 24) | (0b001 << 19) | (1 << 17) | (1 << 16) | 1;
+        mpu.rnr.write(2);
+        mpu.rbar.write((SDRAM_BASE + 0x0020_0000) as u32);
+        mpu.rasr.write(attrs | (20 << 1)); // 2 MB
+        mpu.rnr.write(3);
+        mpu.rbar.write((SDRAM_BASE + 0x0080_0000) as u32);
+        mpu.rasr.write(attrs | (22 << 1)); // 8 MB
+        mpu.ctrl.write((1 << 2) | 1);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+    }
+}
+
 /// Bring up the SDRAM, map it as normal memory and verify a few words. Returns the base pointer.
 pub fn init_sdram(mut sdram: Sdram) -> *mut u32 {
     let ptr = sdram.init(&mut embassy_time::Delay);

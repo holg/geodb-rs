@@ -268,6 +268,33 @@ pub fn rasterize(
     Ok(())
 }
 
+/// Halves an RGB565 picture (`w` x `h`, 2 bytes a pixel) into `dst` (`w / 2` x `h / 2`) by averaging
+/// 2 x 2 pixels: the coarse earth the globe is drawn from while it moves (fewer texels per block, so
+/// no shimmer, and 4 times less memory to read).
+pub fn halve(src: &[u8], w: usize, h: usize, dst: &mut [u8]) {
+    let px =
+        |x: usize, y: usize| u16::from_le_bytes([src[2 * (y * w + x)], src[2 * (y * w + x) + 1]]);
+    for y in 0..h / 2 {
+        for x in 0..w / 2 {
+            let q = [
+                px(2 * x, 2 * y),
+                px(2 * x + 1, 2 * y),
+                px(2 * x, 2 * y + 1),
+                px(2 * x + 1, 2 * y + 1),
+            ];
+            let avg = |shift: u32, mask: u16| {
+                ((q.iter()
+                    .map(|&c| u32::from((c >> shift) & mask))
+                    .sum::<u32>()
+                    + 2)
+                    / 4) as u16
+            };
+            let c = (avg(11, 0x1f) << 11) | (avg(5, 0x3f) << 5) | avg(0, 0x1f);
+            dst[2 * (y * (w / 2) + x)..2 * (y * (w / 2) + x) + 2].copy_from_slice(&c.to_le_bytes());
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -296,6 +323,23 @@ pub(crate) mod tests {
             put(&mut out, zig(dy));
         }
         out
+    }
+
+    #[test]
+    fn halving_averages_four_pixels() {
+        let (w, h) = (4, 2);
+        let mut src = alloc::vec![0u8; w * h * 2];
+        for (i, c) in [0xFFFFu16, 0x0000, 0xFFFF, 0xFFFF, 0, 0, 0xFFFF, 0xFFFF]
+            .iter()
+            .enumerate()
+        {
+            src[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
+        }
+        let mut dst = alloc::vec![0u8; 4];
+        halve(&src, w, h, &mut dst);
+        assert_eq!(u16::from_le_bytes([dst[2], dst[3]]), 0xFFFF);
+        let c = u16::from_le_bytes([dst[0], dst[1]]);
+        assert!(c > 0x4000 && c < 0xC000, "{c:x}"); // 2 of 4 white: about half
     }
 
     #[test]

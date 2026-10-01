@@ -37,11 +37,19 @@ use {defmt_rtt as _, embassy_stm32 as _};
 const IMAGE_ADDR: usize = 0x080C_0000;
 const IMAGE_MAX: usize = 0x14_0000;
 
-/// SDRAM beyond the framebuffers and the globe tables (about 2.1 MB): the earth picture and the
-/// scratch of its rasterizer.
-const EARTH_AT: usize = 0x0040_0000;
-const SCRATCH_AT: usize = 0x0080_0000;
+/// SDRAM beyond the two framebuffers (0..1.5 MB): the globe tables, the scratch of the coast rasterizer
+/// and the earth picture with its coarse copy (see `display::sdram_cached`).
+const LUT_AT: usize = 0x0020_0000; // cacheable window, 2 MB (display::sdram_cached)
+const SCRATCH_AT: usize = 0x0040_0000; // not cached
+const EARTH_AT: usize = 0x0080_0000; // cacheable window, 8 MB
+const MIP_AT: usize = EARTH_AT + 0x0040_0000;
 const SCRATCH_LEN: usize = 0x0020_0000;
+
+/// The earth picture: full size for the screen at rest and at spin speed, half size while dragging.
+struct Earth<'a> {
+    full: Texture<'a>,
+    coarse: Texture<'a>,
+}
 
 /// A tiny valid image (no coast, one city "No image"): what runs when the flash holds no usable city
 /// image (a new image format, an update that was cut off): the network and the updates keep working
@@ -215,6 +223,7 @@ async fn main(spawner: Spawner) {
     display::init_sdram(sdram);
     // (the MPU now maps the Ethernet window non-cacheable)
     unsafe { net::clear_buffers() };
+    display::sdram_cached();
     link::init();
 
     // ---- the panel: reset PJ15, TE PJ2, backlight enable PI14 (BL_CTRL: no DSI command lights the
@@ -268,7 +277,7 @@ async fn main(spawner: Spawner) {
         };
         GlobeLut::new(cells)
     };
-    let fine_at = 2 * display::FB_BYTES;
+    let fine_at = LUT_AT;
     // (the fine table for rest and spin, the coarse one for a globe that is being dragged)
     let mut lut = (
         lut_table(fine_at, ui::LUT_CELLS),
@@ -296,11 +305,26 @@ async fn main(spawner: Spawner) {
         Ok(()) => info!("earth rasterized in {} ms", t.elapsed().as_millis()),
         Err(_) => error!("the coastline does not rasterize"),
     }
+    // the coarse earth (half size) for the globe while it moves
+    let mip_px: &'static mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(
+            (display::SDRAM_BASE + MIP_AT) as *mut u8,
+            ui::EARTH_W * ui::EARTH_H / 2,
+        )
+    };
+    geodb_fw_core::coast::halve(earth_px, ui::EARTH_W, ui::EARTH_H, mip_px);
     watchdog.pet();
-    let earth = Texture {
-        w: ui::EARTH_W,
-        h: ui::EARTH_H,
-        px: &*earth_px,
+    let earth = Earth {
+        full: Texture {
+            w: ui::EARTH_W,
+            h: ui::EARTH_H,
+            px: &*earth_px,
+        },
+        coarse: Texture {
+            w: ui::EARTH_W / 2,
+            h: ui::EARTH_H / 2,
+            px: &*mip_px,
+        },
     };
 
     // ---- the first screen ----
@@ -669,14 +693,14 @@ async fn draw_and_show(
     fps: u32,
     status: &str,
     extras: &[ui::Extra],
-    earth: &Texture<'_>,
+    earth: &Earth<'_>,
 ) -> u32 {
     red.set_high();
     let back = 1 - *front;
     let cycles = DWT::cycle_count();
     if quick {
         let mut fb = disp.fb[back].fb();
-        ui::draw_moving(&mut fb, img, view, spin, &mut lut.1, extras, earth);
+        ui::draw_moving(&mut fb, img, view, spin, &mut lut.1, extras, &earth.coarse);
         ui::draw_fps(&mut fb, fps);
         ui::draw_status(&mut fb, status);
     } else {
@@ -687,7 +711,7 @@ async fn draw_and_show(
             spin,
             Some(&mut lut.0),
             extras,
-            earth,
+            &earth.full,
         );
     }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;
