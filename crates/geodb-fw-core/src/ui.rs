@@ -650,6 +650,8 @@ pub fn draw(
             }
         }
         coast_lines(fb, img, view, COAST_SCOPE);
+        // (the scope view has no earth picture, but the isohypses give it ground to stand on)
+        contour_lines(fb, view, earth.dem.as_ref());
     } else {
         match lut {
             // Spinning: the table only needs the turn, no trigonometry per pixel.
