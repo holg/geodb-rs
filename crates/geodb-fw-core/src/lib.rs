@@ -81,6 +81,7 @@ mod tests {
             names: &names,
             coast: &coast,
             marble: &[],
+            elev: None,
         })
     }
 

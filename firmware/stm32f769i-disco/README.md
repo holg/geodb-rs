@@ -180,3 +180,14 @@ picture (the placeholder) gets the procedural colours. The coastlines are stroke
 The rasterizer's working memory sits in the cacheable SDRAM window (uncached it would take seconds). Rolling
 out a new image version: update the program over Ethernet first (it runs on the placeholder), then the image.
 The image budget (1.25 MB of flash) now holds 49,264 cities.
+
+### Relief (image version 4)
+
+The image also carries the elevation picture (1024 x 512, one byte a cell, ETOPO 2022 reduced by
+`crates/geodb-fw-core/scripts/make_elev.py`; stored packed, 200 KB: median predictor and an adaptive Rice code,
+`relief::pack`). At start the board unpacks it into the cacheable SDRAM window, turns it into a hill-shade field
+(slopes made `ui::SHADE_EXAGGERATION` times steeper, light from the north-west) and mixes that into the earth
+colours (`ui::SHADE_STRENGTH`), then halves the shaded earth for the globe while it moves. Zoomed in (from zoom
+2.5) the full redraws also stroke contour lines (isohypses) found on the elevation grid by marching squares: land in
+tan, sea floor in blue (every 1000 m, every 500 m from zoom 6). The 200 KB come out of the city budget: 40,928
+cities.

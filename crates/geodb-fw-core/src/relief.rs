@@ -1,6 +1,9 @@
 //! Relief from an 8-bit elevation picture (ETOPO 2022 reduced by `scripts/make_elev.py`): hill shading
 //! under the earth colours, and contour lines (isohypses) found on the grid by marching squares.
 //!
+//! The picture is stored packed in the image (`pack` / `unpack`): the JPEG-LS median predictor and an
+//! adaptive Rice code, 2.6 times smaller than the raw bytes (1024 x 512: about 200 KB).
+//!
 //! One byte a cell, north up, longitude -180..180, cell centres at (x + 0.5) / w. The height is coded
 //! non-linearly: 0..64 is the sea floor from -6000 m to 0 in 93 m steps, 64..255 the land from 0 to
 //! 6500 m as `v = 64 + 191 sqrt(h / 6500)` (finest near sea level).
@@ -168,6 +171,189 @@ pub fn contours(
     }
 }
 
+// ---- the packed form: median (MED) predictor from the left, upper and upper-left cells, residuals
+// zigzagged and Rice coded, the Rice parameter adapting to the running mean (LOCO-I style); bits MSB
+// first: the quotient in unary (that many ones, then a zero), then the `k` low bits.
+
+fn med(a: i32, b: i32, c: i32) -> i32 {
+    if c >= a.max(b) {
+        a.min(b)
+    } else if c <= a.min(b) {
+        a.max(b)
+    } else {
+        a + b - c
+    }
+}
+
+/// The prediction for cell (x, y) from the cells decoded so far (`px` holds rows `0..y` and `0..x` of row y).
+fn predict(px: &[u8], w: usize, x: usize, y: usize) -> i32 {
+    let at = |xx: usize, yy: usize| i32::from(px[yy * w + xx]);
+    match (x > 0, y > 0) {
+        (false, false) => 0,
+        (true, false) => at(x - 1, y),
+        (false, true) => at(x, y - 1),
+        (true, true) => med(at(x - 1, y), at(x, y - 1), at(x - 1, y - 1)),
+    }
+}
+
+/// The Rice parameter for the running sum `a` over `n` residuals.
+fn rice_k(a: u32, n: u32) -> u32 {
+    let mut k = 0;
+    while (n << k) < a {
+        k += 1;
+    }
+    k
+}
+
+fn adapt(a: &mut u32, n: &mut u32, residual: i32) {
+    *a += residual.unsigned_abs();
+    *n += 1;
+    if *n >= 64 {
+        *a >>= 1;
+        *n >>= 1;
+    }
+}
+
+/// Unpacks `src` into `out` (`w * h` bytes): false when the data runs out.
+pub fn unpack(src: &[u8], w: usize, h: usize, out: &mut [u8]) -> bool {
+    if out.len() < w * h {
+        return false;
+    }
+    let (mut byte, mut bit) = (0usize, 0u32);
+    let mut next_bit = || -> Option<u32> {
+        let b = *src.get(byte)?;
+        let v = u32::from(b >> (7 - bit)) & 1;
+        bit += 1;
+        if bit == 8 {
+            bit = 0;
+            byte += 1;
+        }
+        Some(v)
+    };
+    let (mut a, mut n) = (2u32, 1u32);
+    for y in 0..h {
+        for x in 0..w {
+            let k = rice_k(a, n);
+            let mut q = 0u32;
+            loop {
+                match next_bit() {
+                    Some(1) => q += 1,
+                    Some(_) => break,
+                    None => return false,
+                }
+                if q > 600 {
+                    return false;
+                }
+            }
+            let mut low = 0u32;
+            for _ in 0..k {
+                let Some(b) = next_bit() else { return false };
+                low = (low << 1) | b;
+            }
+            let u = (q << k) | low;
+            let residual = if u & 1 == 0 {
+                (u >> 1) as i32
+            } else {
+                -(((u + 1) >> 1) as i32)
+            };
+            let v = predict(out, w, x, y) + residual;
+            if !(0..=255).contains(&v) {
+                return false;
+            }
+            out[y * w + x] = v as u8;
+            adapt(&mut a, &mut n, residual);
+        }
+    }
+    true
+}
+
+/// Packs `px` (`w * h` bytes) for [`unpack`].
+#[cfg(any(feature = "std", test))]
+pub fn pack(px: &[u8], w: usize, h: usize) -> alloc::vec::Vec<u8> {
+    struct Bits {
+        out: alloc::vec::Vec<u8>,
+        cur: u8,
+        n: u32,
+    }
+    impl Bits {
+        fn put(&mut self, b: u32) {
+            self.cur = (self.cur << 1) | b as u8;
+            self.n += 1;
+            if self.n == 8 {
+                self.out.push(self.cur);
+                (self.cur, self.n) = (0, 0);
+            }
+        }
+    }
+    let mut bits = Bits {
+        out: alloc::vec::Vec::new(),
+        cur: 0,
+        n: 0,
+    };
+    let (mut a, mut n) = (2u32, 1u32);
+    for y in 0..h {
+        for x in 0..w {
+            let residual = i32::from(px[y * w + x]) - predict(px, w, x, y);
+            let u = if residual >= 0 {
+                (residual as u32) << 1
+            } else {
+                ((-residual as u32) << 1) - 1
+            };
+            let k = rice_k(a, n);
+            for _ in 0..(u >> k) {
+                bits.put(1);
+            }
+            bits.put(0);
+            for i in (0..k).rev() {
+                bits.put((u >> i) & 1);
+            }
+            adapt(&mut a, &mut n, residual);
+        }
+    }
+    while bits.n != 0 {
+        bits.put(0);
+    }
+    bits.out
+}
+
+/// [`apply`] over one picture in place.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_in_place(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    shade: &[u8],
+    sw: usize,
+    sh: usize,
+    strength: i32,
+) {
+    for y in 0..h {
+        let v = ((2 * y + 1) * sh * 128 / h) as i32 - 128;
+        let (y0, fy) = ((v >> 8).clamp(0, sh as i32 - 1) as usize, (v & 255).max(0));
+        let y1 = (y0 + 1).min(sh - 1);
+        for x in 0..w {
+            let u = ((2 * x + 1) * sw * 128 / w) as i32 - 128;
+            let x0 = (u >> 8).rem_euclid(sw as i32) as usize;
+            let (x1, fx) = ((x0 + 1) % sw, u & 255);
+            let at = |xx: usize, yy: usize| i32::from(shade[yy * sw + xx]);
+            let top = at(x0, y0) * (256 - fx) + at(x1, y0) * fx;
+            let bottom = at(x0, y1) * (256 - fx) + at(x1, y1) * fx;
+            let s = (top * (256 - fy) + bottom * fy) >> 16;
+            let factor = 256 + strength * (s - 128) / 128;
+            let i = 2 * (y * w + x);
+            let c = u16::from_le_bytes([px[i], px[i + 1]]);
+            let (r, g, b) = (
+                i32::from(c >> 11) & 31,
+                i32::from(c >> 5) & 63,
+                i32::from(c) & 31,
+            );
+            let sc = |v: i32, max: i32| ((v * factor) >> 8).clamp(0, max) as u16;
+            let c = (sc(r, 31) << 11) | (sc(g, 63) << 5) | sc(b, 31);
+            px[i..i + 2].copy_from_slice(&c.to_le_bytes());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +363,34 @@ mod tests {
         (0..=255u8)
             .min_by_key(|&v| ((elev_m(v) - h).abs() * 100.0) as i64)
             .unwrap()
+    }
+
+    #[test]
+    fn the_packed_picture_unpacks_to_the_same_bytes() {
+        let (w, h) = (96, 48);
+        let mut px = vec![0u8; w * h];
+        let mut seed = 12345u32;
+        for y in 0..h {
+            for x in 0..w {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let hill = ((x as f32 / 9.0).sin() * (y as f32 / 7.0).cos() * 60.0 + 100.0) as i32;
+                let noise = ((seed >> 24) % 7) as i32 - 3;
+                px[y * w + x] = (hill + noise).clamp(0, 255) as u8;
+            }
+        }
+        // the extremes too
+        px[5] = 0;
+        px[6] = 255;
+        px[7] = 0;
+        let packed = pack(&px, w, h);
+        assert!(packed.len() < px.len(), "{} vs {}", packed.len(), px.len());
+        let mut back = vec![0u8; w * h];
+        assert!(unpack(&packed, w, h, &mut back));
+        assert_eq!(back, px);
+        assert!(
+            !unpack(&packed[..packed.len() / 2], w, h, &mut back),
+            "cut off data is refused"
+        );
     }
 
     #[test]

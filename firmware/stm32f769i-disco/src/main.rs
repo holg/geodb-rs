@@ -42,6 +42,9 @@ const IMAGE_MAX: usize = 0x14_0000;
 const LUT_AT: usize = 0x0020_0000; // cacheable window, 2 MB (display::sdram_cached)
 const EARTH_AT: usize = 0x0080_0000; // cacheable window, 8 MB
 const MIP_AT: usize = EARTH_AT + 0x0040_0000;
+/// The unpacked elevation picture (up to 512 KB), the last of the window.
+const DEM_AT: usize = EARTH_AT + 0x0078_0000;
+const DEM_MAX: usize = 0x0008_0000;
 // the rasterizer's working memory is in the cacheable window too (uncached SDRAM would make the
 // hybrid take seconds): the colour fields, then the crossings
 const WORK_AT: usize = EARTH_AT + 0x0050_0000;
@@ -52,6 +55,8 @@ const SCRATCH_LEN: usize = 0x0020_0000;
 struct Earth<'a> {
     full: Texture<'a>,
     coarse: Texture<'a>,
+    /// The elevation picture for the contour lines (when the image has one).
+    dem: Option<geodb_fw_core::relief::Dem<'a>>,
 }
 
 /// A tiny valid image (no coast, one city "No image"): what runs when the flash holds no usable city
@@ -323,6 +328,45 @@ async fn main(spawner: Spawner) {
         ),
         Err(_) => error!("the coastline does not rasterize"),
     }
+    // the elevation picture: unpacked, turned into a shade field (in the scratch, free by now) that is
+    // mixed into the earth's colours; the picture itself stays for the contour lines
+    let mut dem_ref = None;
+    if let Some((packed, dw, dh)) = img.elev().filter(|&(_, w, h)| w * h <= DEM_MAX) {
+        let t = Instant::now();
+        let dem_px: &'static mut [u8] = unsafe {
+            core::slice::from_raw_parts_mut((display::SDRAM_BASE + DEM_AT) as *mut u8, dw * dh)
+        };
+        if geodb_fw_core::relief::unpack(packed, dw, dh, dem_px) {
+            watchdog.pet();
+            let dem = geodb_fw_core::relief::Dem {
+                w: dw,
+                h: dh,
+                px: &*dem_px,
+            };
+            let shade = &mut crossings[..dw * dh];
+            geodb_fw_core::relief::shade_field(&dem, ui::SHADE_EXAGGERATION, shade);
+            watchdog.pet();
+            geodb_fw_core::relief::apply_in_place(
+                earth_px,
+                ui::EARTH_W,
+                ui::EARTH_H,
+                shade,
+                dw,
+                dh,
+                ui::SHADE_STRENGTH,
+            );
+            ui::CONTOURS.store(true, core::sync::atomic::Ordering::Relaxed);
+            dem_ref = Some(dem);
+            info!(
+                "relief {}x{} unpacked and shaded in {} ms",
+                dw,
+                dh,
+                t.elapsed().as_millis()
+            );
+        } else {
+            error!("the elevation picture does not unpack");
+        }
+    }
     // the coarse earth (half size) for the globe while it moves
     let mip_px: &'static mut [u8] = unsafe {
         core::slice::from_raw_parts_mut(
@@ -343,6 +387,7 @@ async fn main(spawner: Spawner) {
             h: ui::EARTH_H / 2,
             px: &*mip_px,
         },
+        dem: dem_ref,
     };
 
     // ---- the first screen ----
@@ -742,7 +787,7 @@ async fn draw_and_show(
             extras,
             &geodb_fw_core::render::Earth {
                 tex: earth.full,
-                dem: None,
+                dem: earth.dem,
             },
         );
     }

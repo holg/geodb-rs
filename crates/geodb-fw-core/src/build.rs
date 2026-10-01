@@ -19,6 +19,8 @@ pub struct Source<'a> {
     pub coast: &'a [u8],
     /// The colour picture, 256 x 128 RGB565 little-endian (or empty).
     pub marble: &'a [u8],
+    /// The elevation picture: raw bytes, width, height (packed into the image), or none.
+    pub elev: Option<(&'a [u8], usize, usize)>,
 }
 
 fn align4(v: &mut Vec<u8>) {
@@ -76,10 +78,18 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         src.marble.is_empty()
             || src.marble.len() == crate::image::MARBLE_W * crate::image::MARBLE_H * 2
     );
+    let elev_packed = src.elev.map_or(alloc::vec::Vec::new(), |(px, w, h)| {
+        crate::relief::pack(px, w, h)
+    });
     let off_marble = if src.marble.is_empty() {
         0
     } else {
         put(&mut out, src.marble)
+    };
+    let off_elev = if elev_packed.is_empty() {
+        0
+    } else {
+        put(&mut out, &elev_packed)
     };
     align4(&mut out);
     let total = out.len();
@@ -92,6 +102,10 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
     w32(&mut out, 12, src.countries.len());
     w32(&mut out, 16, src.names.len());
     w32(&mut out, 20, src.coast.len());
+    if let Some((_, w, h)) = src.elev {
+        out[80..82].copy_from_slice(&(w as u16).to_le_bytes());
+        out[82..84].copy_from_slice(&(h as u16).to_le_bytes());
+    }
     for (at, v) in [
         (24, off_geoids),
         (28, off_country),
@@ -104,6 +118,8 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         (56, off_coast),
         (64, off_marble),
         (68, src.marble.len()),
+        (72, off_elev),
+        (76, elev_packed.len()),
         (60, total),
     ] {
         w32(&mut out, at, v);

@@ -51,6 +51,7 @@ fn main() {
             names: &[(0, "No image".to_string())],
             coast: &[0], // no layers: all sea
             marble: &[],
+            elev: None,
         });
         let path = root.join("../../firmware/stm32f769i-disco/placeholder.fw");
         std::fs::write(&path, &bytes).expect("write placeholder");
@@ -128,8 +129,17 @@ fn main() {
     };
     // The colour picture (Blue Marble, 256 x 128 RGB565): the hybrid earth's colours.
     let marble = std::fs::read(root.join("assets/earth-256x128.rgb565")).expect("marble");
-    let fixed =
-        countries.len() * 30 + coast.len() + marble.len() + 4096 + geodb_fw_core::image::HEADER_LEN;
+    // The elevation picture (make_elev.py), packed into the image: hill shading and contour lines.
+    let (ew_dem, eh_dem) = (1024, 512);
+    let elev_raw =
+        std::fs::read(root.join(format!("assets/elev-{ew_dem}x{eh_dem}.u8"))).expect("elevation");
+    let elev_packed_len = geodb_fw_core::relief::pack(&elev_raw, ew_dem, eh_dem).len();
+    let fixed = countries.len() * 30
+        + coast.len()
+        + marble.len()
+        + elev_packed_len
+        + 4096
+        + geodb_fw_core::image::HEADER_LEN;
     let mut used = fixed;
     let mut kept: Vec<(usize, String)> = Vec::new();
     for (i, name) in candidates {
@@ -164,6 +174,7 @@ fn main() {
         names: &chosen,
         coast: &coast,
         marble: &marble,
+        elev: Some((&elev_raw, ew_dem, eh_dem)),
     });
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).expect("output directory");
@@ -174,7 +185,7 @@ fn main() {
         .filter(|&&(i, _)| db.cities[i].rank == GlobeRank::Capital)
         .count();
     println!(
-        "{}: {} bytes for {n} of {all} cities (all named, {capitals} capitals, {} countries)\n  geoids {} + country ids {} + names ~{} + coast {} + colour picture {}",
+        "{}: {} bytes for {n} of {all} cities (all named, {capitals} capitals, {} countries)\n  geoids {} + country ids {} + names ~{} + coast {} + colour picture {} + elevation {} (packed)",
         out.display(),
         bytes.len(),
         countries.len(),
@@ -182,7 +193,8 @@ fn main() {
         n,
         used - fixed,
         coast.len(),
-        marble.len()
+        marble.len(),
+        elev_packed_len
     );
 
     // ------------------------------------------------------------- verify
@@ -261,10 +273,43 @@ fn main() {
         "  earth {ew} x {eh} rasterized in {:.0} ms on the host",
         t.elapsed().as_secs_f64() * 1000.0
     );
-    let earth = geodb_fw_core::render::Texture {
-        w: ew,
-        h: eh,
-        px: &earth_px,
+    // hill shading and contour lines from the image's elevation picture, as the board does
+    let mut dem_px = Vec::new();
+    if let Some((packed, dw, dh)) = img.elev() {
+        dem_px = vec![0u8; dw * dh];
+        assert!(
+            geodb_fw_core::relief::unpack(packed, dw, dh, &mut dem_px),
+            "unpack the elevation"
+        );
+        let dem = geodb_fw_core::relief::Dem {
+            w: dw,
+            h: dh,
+            px: &dem_px,
+        };
+        let mut shade = vec![0u8; dw * dh];
+        geodb_fw_core::relief::shade_field(&dem, ui::SHADE_EXAGGERATION, &mut shade);
+        geodb_fw_core::relief::apply_in_place(
+            &mut earth_px,
+            ew,
+            eh,
+            &shade,
+            dw,
+            dh,
+            ui::SHADE_STRENGTH,
+        );
+        ui::CONTOURS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let earth = geodb_fw_core::render::Earth {
+        tex: geodb_fw_core::render::Texture {
+            w: ew,
+            h: eh,
+            px: &earth_px,
+        },
+        dem: (!dem_px.is_empty()).then(|| geodb_fw_core::relief::Dem {
+            w: 1024,
+            h: 512,
+            px: &dem_px,
+        }),
     };
 
     // ------------------------------------------------------------ preview
@@ -295,18 +340,7 @@ fn main() {
             w: ui::WIDTH,
             h: ui::HEIGHT,
         };
-        ui::draw(
-            &mut fb,
-            &img,
-            view,
-            ui::Spin::new(),
-            None,
-            &[],
-            &geodb_fw_core::render::Earth {
-                tex: earth,
-                dem: None,
-            },
-        );
+        ui::draw(&mut fb, &img, view, ui::Spin::new(), None, &[], &earth);
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let rgb: Vec<u8> = buf
             .iter()

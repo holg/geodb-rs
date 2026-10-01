@@ -323,6 +323,11 @@ fn side_panel(
 /// simulation switches it to compare the renderers).
 pub static COAST_LINES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
+/// The hill shading the board (and the previews) apply: how much of it is mixed in (0..=256) and how steep
+/// the slopes are made.
+pub const SHADE_STRENGTH: i32 = 190;
+pub const SHADE_EXAGGERATION: f32 = 40.0;
+
 /// Whether [`draw`] strokes the contour lines (isohypses) when zoomed in (and the picture is there).
 pub static CONTOURS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
