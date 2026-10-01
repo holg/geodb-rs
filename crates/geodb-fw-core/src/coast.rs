@@ -129,16 +129,16 @@ fn land(lat_abs: f32) -> [f32; 3] {
 
 const SEA: [f32; 3] = [14.0, 44.0, 104.0];
 
-/// Rasterizes the coast into `out`, `w` x `h` RGB565 little-endian bytes (2 bytes a pixel), row 0 at
-/// 90 degrees north. `scratch` holds the crossings (a few hundred KB; the error says how many bytes).
-pub fn rasterize(
+/// Fills the coast into scanline coverage and hands each pixel row to `emit(row, coverage)`: one
+/// u16 per pixel, 0 (sea) to 256 (land), anti-aliased. Row 0 is at 90 degrees north.
+fn raster_rows(
     coast: Coast<'_>,
     w: usize,
     h: usize,
-    out: &mut [u8],
     scratch: &mut [u8],
+    emit: &mut dyn FnMut(usize, &[u16]),
 ) -> Result<(), RasterError> {
-    if w > 2048 || w == 0 || h == 0 || out.len() < w * h * 2 {
+    if w > 2048 || w == 0 || h == 0 {
         return Err(RasterError::Size);
     }
     let lines = h * SUB;
@@ -252,11 +252,30 @@ pub fn rasterize(
                 }
             }
         }
+        emit(r, &acc[..w]);
+    }
+    Ok(())
+}
+
+/// Rasterizes the coast into `out`, `w` x `h` RGB565 little-endian bytes (2 bytes a pixel), row 0 at
+/// 90 degrees north. `scratch` holds the crossings (a few hundred KB; the error says how many bytes).
+/// Sea and land are coloured procedurally (land by latitude, ice at the poles).
+pub fn rasterize(
+    coast: Coast<'_>,
+    w: usize,
+    h: usize,
+    out: &mut [u8],
+    scratch: &mut [u8],
+) -> Result<(), RasterError> {
+    if out.len() < w * h * 2 {
+        return Err(RasterError::Size);
+    }
+    raster_rows(coast, w, h, scratch, &mut |r, acc| {
         let lat = 90.0 - (r as f32 + 0.5) / h as f32 * 180.0;
         let l = land(if lat < 0.0 { -lat } else { lat });
         let row = &mut out[r * w * 2..(r + 1) * w * 2];
-        for x in 0..w {
-            let c = (acc[x].min(256) as f32) / 256.0;
+        for (x, &a) in acc.iter().enumerate() {
+            let c = (a.min(256) as f32) / 256.0;
             let px = rgb565(
                 (SEA[0] + (l[0] - SEA[0]) * c) as u8,
                 (SEA[1] + (l[1] - SEA[1]) * c) as u8,
@@ -264,8 +283,174 @@ pub fn rasterize(
             );
             row[2 * x..2 * x + 2].copy_from_slice(&px.to_le_bytes());
         }
+    })
+}
+
+/// Bytes of `work` that [`rasterize_hybrid`] needs for a `mw` x `mh` colour picture.
+pub const fn hybrid_work(mw: usize, mh: usize) -> usize {
+    mw * mh * 7
+}
+
+fn unpack565(c: u16) -> [i32; 3] {
+    let (r, g, b) = (
+        i32::from(c >> 11) & 31,
+        i32::from(c >> 5) & 63,
+        i32::from(c) & 31,
+    );
+    [
+        (r << 3) | (r >> 2),
+        (g << 2) | (g >> 4),
+        (b << 3) | (b >> 2),
+    ]
+}
+
+/// Fills the texels `known` has not marked from their known neighbours (8-neighbourhood, wrapping in
+/// longitude), at most `passes` rounds; what is still unknown gets `default`.
+fn dilate(field: &mut [u8], known: &mut [u8], mw: usize, mh: usize, passes: usize, default: u16) {
+    let get = |f: &[u8], i: usize| u16::from_le_bytes([f[2 * i], f[2 * i + 1]]);
+    for _ in 0..passes {
+        let mut changed = false;
+        for y in 0..mh {
+            for x in 0..mw {
+                let i = y * mw + x;
+                if known[i] != 0 {
+                    continue;
+                }
+                let (mut sum, mut n) = ([0i32; 3], 0);
+                for dy in [-1isize, 0, 1] {
+                    for dx in [-1isize, 0, 1] {
+                        let (yy, xx) = (y as isize + dy, (x as isize + dx).rem_euclid(mw as isize));
+                        if yy < 0 || yy >= mh as isize || (dx == 0 && dy == 0) {
+                            continue;
+                        }
+                        let j = yy as usize * mw + xx as usize;
+                        if known[j] == 1 {
+                            let c = unpack565(get(field, j));
+                            sum = [sum[0] + c[0], sum[1] + c[1], sum[2] + c[2]];
+                            n += 1;
+                        }
+                    }
+                }
+                if n > 0 {
+                    let c = rgb565((sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8);
+                    field[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
+                    known[i] = 2; // known from the next round on (no chaining inside one)
+                    changed = true;
+                }
+            }
+        }
+        for k in known.iter_mut() {
+            if *k == 2 {
+                *k = 1;
+            }
+        }
+        if !changed {
+            break;
+        }
     }
-    Ok(())
+    for i in 0..mw * mh {
+        if known[i] == 0 {
+            field[2 * i..2 * i + 2].copy_from_slice(&default.to_le_bytes());
+        }
+    }
+}
+
+/// The hybrid earth: the vector coast decides what is land and sea (crisp, anti-aliased, `w` x `h`
+/// RGB565 into `out`), the colours come from a coarse colour picture of the Earth (`marble`, `mw` x
+/// `mh` RGB565, such as Blue Marble). The picture has sea colour in its coastal land texels and the
+/// other way round, so it is split by the coast into a land-only and a sea-only colour field
+/// (texels the coast covers fully or not at all, the rest filled from their neighbours) and each
+/// output pixel mixes the two fields by its coverage. `work` is [`hybrid_work`] bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_hybrid(
+    coast: Coast<'_>,
+    marble: &[u8],
+    mw: usize,
+    mh: usize,
+    w: usize,
+    h: usize,
+    out: &mut [u8],
+    work: &mut [u8],
+    scratch: &mut [u8],
+) -> Result<(), RasterError> {
+    if marble.len() < mw * mh * 2 || out.len() < w * h * 2 || work.len() < hybrid_work(mw, mh) {
+        return Err(RasterError::Size);
+    }
+    let texels = mw * mh;
+    // work = coverage at the colour picture's resolution | land field | sea field | known x 2
+    let (cov, rest) = work.split_at_mut(texels);
+    let (land_f, rest) = rest.split_at_mut(texels * 2);
+    let (sea_f, rest) = rest.split_at_mut(texels * 2);
+    let (land_known, sea_known) = rest.split_at_mut(texels);
+    raster_rows(coast, mw, mh, scratch, &mut |r, acc| {
+        for (x, &a) in acc.iter().enumerate() {
+            cov[r * mw + x] = a.min(255) as u8;
+        }
+    })?;
+    for i in 0..texels {
+        let c16 = [marble[2 * i], marble[2 * i + 1]];
+        land_f[2 * i..2 * i + 2].copy_from_slice(&c16);
+        sea_f[2 * i..2 * i + 2].copy_from_slice(&c16);
+        land_known[i] = u8::from(cov[i] >= 230); // (nearly) all land
+        sea_known[i] = u8::from(cov[i] <= 25); // (nearly) all sea, lakes included
+    }
+    dilate(land_f, land_known, mw, mh, 6, rgb565(70, 110, 60));
+    dilate(
+        sea_f,
+        sea_known,
+        mw,
+        mh,
+        12,
+        rgb565(SEA[0] as u8, SEA[1] as u8, SEA[2] as u8),
+    );
+
+    // the output: bilinear colours from the fields, mixed by the pixel's own coverage
+    let fetch =
+        |f: &[u8], x0: usize, x1: usize, y0: usize, y1: usize, fx: i32, fy: i32| -> [i32; 3] {
+            let px = |x: usize, y: usize| {
+                unpack565(u16::from_le_bytes([
+                    f[2 * (y * mw + x)],
+                    f[2 * (y * mw + x) + 1],
+                ]))
+            };
+            let (a, b, c, d) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+            let mut o = [0i32; 3];
+            for k in 0..3 {
+                let top = a[k] * (256 - fx) + b[k] * fx;
+                let bottom = c[k] * (256 - fx) + d[k] * fx;
+                o[k] = (top * (256 - fy) + bottom * fy) >> 16;
+            }
+            o
+        };
+    raster_rows(coast, w, h, scratch, &mut |r, acc| {
+        let v = ((2 * r + 1) * mh * 128 / h) as i32 - 128; // rows x 256
+        let (y0, fy) = ((v >> 8).clamp(0, mh as i32 - 1) as usize, (v & 255).max(0));
+        let y1 = (y0 + 1).min(mh - 1);
+        let row = &mut out[r * w * 2..(r + 1) * w * 2];
+        for (x, &a) in acc.iter().enumerate() {
+            let u = ((2 * x + 1) * mw * 128 / w) as i32 - 128; // texels x 256
+            let x0 = (u >> 8).rem_euclid(mw as i32) as usize;
+            let (x1, fx) = ((x0 + 1) % mw, u & 255);
+            let c = i32::from(a.min(256));
+            let rgb = if c >= 256 {
+                fetch(land_f, x0, x1, y0, y1, fx, fy)
+            } else if c == 0 {
+                fetch(sea_f, x0, x1, y0, y1, fx, fy)
+            } else {
+                let (l, s) = (
+                    fetch(land_f, x0, x1, y0, y1, fx, fy),
+                    fetch(sea_f, x0, x1, y0, y1, fx, fy),
+                );
+                [
+                    (s[0] * (256 - c) + l[0] * c) >> 8,
+                    (s[1] * (256 - c) + l[1] * c) >> 8,
+                    (s[2] * (256 - c) + l[2] * c) >> 8,
+                ]
+            };
+            let px = rgb565(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8);
+            row[2 * x..2 * x + 2].copy_from_slice(&px.to_le_bytes());
+        }
+    })
 }
 
 /// Halves an RGB565 picture (`w` x `h`, 2 bytes a pixel) into `dst` (`w / 2` x `h / 2`) by averaging
@@ -340,6 +525,62 @@ pub(crate) mod tests {
         assert_eq!(u16::from_le_bytes([dst[2], dst[3]]), 0xFFFF);
         let c = u16::from_le_bytes([dst[0], dst[1]]);
         assert!(c > 0x4000 && c < 0xC000, "{c:x}"); // 2 of 4 white: about half
+    }
+
+    #[test]
+    fn the_hybrid_takes_land_and_sea_colours_from_the_picture_and_the_edge_from_the_coast() {
+        // A coarse colour picture 6 x 3 (60 degree texels) of the square of land (lon -90..90, lat
+        // -45..45): green only in the texels wholly on land, blue everywhere else, so the texels the
+        // coast cuts through (x = 1, 4 and the top and bottom rows) hold sea blue where there is land.
+        let (mw, mh) = (6, 3);
+        let mut marble = alloc::vec![0u8; mw * mh * 2];
+        for y in 0..mh {
+            for x in 0..mw {
+                let land = y == 1 && (x == 2 || x == 3);
+                let c = if land {
+                    rgb565(40, 170, 50)
+                } else {
+                    rgb565(20, 60, 160)
+                };
+                marble[2 * (y * mw + x)..2 * (y * mw + x) + 2].copy_from_slice(&c.to_le_bytes());
+            }
+        }
+        let raw = square();
+        let (w, h) = (64, 32);
+        let mut out = alloc::vec![0u8; w * h * 2];
+        let mut work = alloc::vec![0u8; hybrid_work(mw, mh)];
+        let mut scratch = alloc::vec![0u8; 1 << 16];
+        rasterize_hybrid(
+            Coast::new(&raw),
+            &marble,
+            mw,
+            mh,
+            w,
+            h,
+            &mut out,
+            &mut work,
+            &mut scratch,
+        )
+        .unwrap();
+        let px = |x: usize, y: usize| {
+            u16::from_le_bytes([out[2 * (y * w + x)], out[2 * (y * w + x) + 1]])
+        };
+        let green = |c: u16| ((c >> 5) & 0x3f) > 2 * (c & 0x1f) + 8;
+        let blue = |c: u16| (c & 0x1f) > ((c >> 11) & 0x1f) * 2;
+        assert!(blue(px(2, 2)), "sea outside the square: {:x}", px(2, 2));
+        assert!(green(px(45, 16)), "land on a green texel: {:x}", px(45, 16));
+        // Land inside the square over a texel the coast cuts through: the blue of that texel is
+        // replaced by the land colour of its neighbours, and just across the coast it is sea again.
+        assert!(
+            green(px(19, 16)),
+            "land over a mixed texel: {:x}",
+            px(19, 16)
+        );
+        assert!(
+            blue(px(10, 16)),
+            "sea just west of the coast: {:x}",
+            px(10, 16)
+        );
     }
 
     #[test]
