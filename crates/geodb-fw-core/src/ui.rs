@@ -319,9 +319,16 @@ fn side_panel(
     }
 }
 
+/// Whether [`draw`] strokes the vector coastline over the globe (on the board always; the browser
+/// simulation switches it to compare the renderers).
+pub static COAST_LINES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
 /// The vector coastline (the image's rings, lakes included) as one pixel lines: crisp at any zoom,
 /// where the rasterized earth is soft. Only edges near the view are projected.
 fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
+    if !COAST_LINES.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let r = GLOBE_R as f32;
     let span = view.span() / DEG_TO_RAD + 1.0; // degrees from the view centre that can be seen
     let polar = abs(view.lat) + span > 85.0; // near a pole longitude says little
