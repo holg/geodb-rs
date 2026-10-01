@@ -76,7 +76,7 @@ pub const STATE_BROADCAST: (Ipv4Addr, u16) = (Ipv4Addr::BROADCAST, STATE_PORT);
 
 pub const BROADCAST: (Ipv4Addr, u16) = (Ipv4Addr::BROADCAST, HOST_PORT);
 
-/// UDP port of the board's command server (see `scripts/board_ctl.py`).
+/// UDP port of the board's command server (see `geodb-board`).
 pub const COMMAND_PORT: u16 = 7880;
 
 /// Touch input injected from the host (the mirror window): drag deltas accumulate, a tap is the last

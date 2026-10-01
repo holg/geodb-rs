@@ -76,23 +76,24 @@ double precision on this single-precision-FPU target, so `fmath` has f32-only
 versions; the globe is computed per 2 x 2 pixel block (the texture is 256 x 128);
 and a wide view neither counts nor draws its 80,000 dots.
 
-## Names from the host
+## Names, tests and control from the host (Ethernet)
 
-Every city in flash has a name (the build drops unnamed ones: `make_image --budget BYTES`, `--countries DE,AT`, `--bbox LAT0,LON0,LAT1,LON1` choose what is kept, biggest first). For the nearest city the
-others the board asks a host script, over **Ethernet** (RJ45, LAN8742 over
-RMII, DHCP) when a cable is in, else over the ST-LINK's virtual COM port
-(USART1, 115200 8N1). The question is `?LAT,LON` (degrees x 1e5), the answer
-`=LAT,LON|Name|State, Country` from the full dataset:
+`geodb-board` (`crates/geodb-board`, Rust) is the host side. Every city in flash has a
+name; the host adds the state and country of the nearest city (the footer line).
 
-    python3 firmware/stm32f769i-disco/scripts/serve_names.py            # UDP 7878
-    python3 firmware/stm32f769i-disco/scripts/serve_names.py --serial   # ST-LINK port (pyserial)
+    cargo run --release -p geodb-board -- serve            # answers the board (UDP 7878), prints its log lines
+    cargo run --release -p geodb-board -- test --host IP   # info, 200 pings, a 1000 x 512 byte blast
+    cargo run --release -p geodb-board -- reset --host IP  # restarts the board over the network
 
-On Ethernet the board *broadcasts* the question (UDP port 7878), so it needs no
-address of the host; the script answers the sender. The board asks when the
-globe comes to rest, for the listed cities without a name, and shows the answers
-in the list (the nearest city's state and country in the footer). Without the
-script the list shows `(unnamed)` and the board asks again only every 5 s.
+The board gets an address by DHCP (the LCD's bottom line shows it) and broadcasts
+`?LAT,LON` (degrees x 1e5); the server answers `=LAT,LON|Name|State, Country`.
+Commands go to the board's UDP port 7880 (`!info`, `!ping N`, `!blast N`,
+`!reset`, and `!tap X Y`, `!drag DX DY`, `!release` for the mirror window).
+Without `--host` the client finds the board by its state packets (UDP 7881; not
+while the mirror window is open: it holds that port) and then by broadcast, which
+needs a single network interface, so pass `--host` when in doubt.
 
-The Ethernet DMA cannot reach the DTCM and ignores the data cache, so `.bss`
-(with the stack's packet pool) is linked into SRAM1 at 0x20060000
-(`ethbuf.x`) and an MPU region makes it non-cacheable.
+The Ethernet DMA cannot reach the DTCM and ignores the data cache, so only its
+buffers (the stack's packet pool) are linked into SRAM1 at 0x20060000 (`ethbuf.x`),
+cleared at start, and an MPU region makes that window non-cacheable and
+not shareable (LDREX/STREX fault on anything else but the DTCM or cacheable memory).

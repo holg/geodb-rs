@@ -22,8 +22,7 @@ use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::ltdc::{self, Ltdc, LtdcLayer};
 use embassy_stm32::rng::{self, Rng};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::usart::{self, Uart};
-use embassy_stm32::{bind_interrupts, dma, peripherals, Config};
+use embassy_stm32::{bind_interrupts, peripherals, Config};
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use geodb_fw_core::render::{GlobeLut, LutCell, View};
 use geodb_fw_core::{geo, ui, FwImage, Hit};
@@ -39,9 +38,6 @@ bind_interrupts!(struct Irqs {
     DSI => dsihost::InterruptHandler<peripherals::DSIHOST>;
     ETH => eth::InterruptHandler<peripherals::ETH>;
     RNG => rng::InterruptHandler<peripherals::RNG>;
-    USART1 => usart::InterruptHandler<peripherals::USART1>;
-    DMA2_STREAM7 => dma::InterruptHandler<peripherals::DMA2_CH7>;
-    DMA2_STREAM5 => dma::InterruptHandler<peripherals::DMA2_CH5>;
 });
 
 #[embassy_executor::main]
@@ -212,18 +208,6 @@ async fn main(spawner: Spawner) {
     i2c_cfg.frequency = Hertz(100_000);
     let mut touch = touch::Touch::new(I2c::new_blocking(p.I2C4, p.PD12, p.PB7, i2c_cfg));
 
-    // ---- the host link: the ST-LINK's virtual COM port (USART1, PA9/PA10) asks a script on the
-    // host (scripts/serve_names.py) for the names the flash does not hold ----
-    let mut uart = Uart::new(
-        p.USART1,
-        p.PA9,
-        p.PA10,
-        p.DMA2_CH7,
-        p.DMA2_CH5,
-        Irqs,
-        usart::Config::default(), // 115200 8N1
-    )
-    .ok();
     let mut status = Buf::new();
     let _ = status.write_str("net: no cable");
     let mut net_state = 0u8;
@@ -472,9 +456,8 @@ async fn main(spawner: Spawner) {
             if key != resolved_for && Instant::now() >= host_retry {
                 resolved_for = key;
                 let net_up = net_state == 2;
-                let mut link = match (udp.as_mut(), uart.as_mut()) {
-                    (Some(u), _) if net_up => Some(Link::Udp(u)),
-                    (_, Some(u)) => Some(Link::Serial(u)),
+                let mut link = match udp.as_mut() {
+                    Some(u) if net_up => Some(Link::Udp(u)),
                     _ => None,
                 };
                 if let Some(link) = link.as_mut() {
@@ -654,7 +637,7 @@ impl core::fmt::Write for Buf {
 /// Asks the host for the names of the nearest cities the flash has no name for. Returns whether
 /// anything new arrived, or `None` when the host did not answer (not running).
 async fn resolve(
-    link: &mut Link<'_, '_>,
+    link: &mut Link<'_>,
     img: &FwImage<'_>,
     view: View,
     extras: &mut [ui::Extra],
@@ -703,13 +686,12 @@ async fn resolve(
     Some(changed)
 }
 
-/// The way to the host: the network (broadcast question, unicast answer) or the serial port.
-enum Link<'a, 'd> {
+/// The way to the host: a broadcast question and a unicast answer on the network.
+enum Link<'a> {
     Udp(&'a mut embassy_net::udp::UdpSocket<'static>),
-    Serial(&'a mut Uart<'d, embassy_stm32::mode::Async>),
 }
 
-impl Link<'_, '_> {
+impl Link<'_> {
     /// Sends `ask`, waits for the answer; `None` when the host does not answer.
     async fn ask(&mut self, ask: &[u8], reply: &mut [u8]) -> Option<usize> {
         match self {
@@ -726,13 +708,6 @@ impl Link<'_, '_> {
                 .await
                 .ok()?
                 .ok()
-            }
-            Link::Serial(uart) => {
-                uart.write(ask).await.ok()?;
-                with_timeout(Duration::from_millis(100), uart.read_until_idle(reply))
-                    .await
-                    .ok()?
-                    .ok()
             }
         }
     }

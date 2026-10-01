@@ -1195,6 +1195,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "geodb-board"
+version = "0.1.6"
+dependencies = [
+ "deunicode",
+ "flate2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "geodb-cli"
 version = "0.1.6"
 dependencies = [

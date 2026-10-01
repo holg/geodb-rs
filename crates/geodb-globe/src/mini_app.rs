@@ -647,7 +647,9 @@ impl App {
 
         let spinning = self.spin || self.fps_bench.is_some();
         if spinning && self.press.is_none() {
-            let lon = crate::geo::wrap_lon(self.cam.lon + self.spin_deg_s * dt);
+            // The Earth turns eastward: seen from outside, the surface moves to the right, so the
+            // longitude under the view centre decreases (the same as the board's spin).
+            let lon = crate::geo::wrap_lon(self.cam.lon - self.spin_deg_s * dt);
             self.cam.lon = lon;
             self.cam.fly_to(self.cam.lat, lon, self.cam.target_dist());
             self.dirty = true;

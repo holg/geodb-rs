@@ -10,6 +10,7 @@ repository.workspace = true
 readme = "README.md"
 [workspace]
 members = [
+    "crates/geodb-board",
     "crates/geodb-cli",
     "crates/geodb-core",
     "crates/geodb-ffi",
