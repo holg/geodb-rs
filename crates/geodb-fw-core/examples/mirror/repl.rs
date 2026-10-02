@@ -16,7 +16,6 @@
 use acadlisp::{Expr, Interpreter};
 use geodb_fw_core::render::View;
 use geodb_fw_core::ui;
-use std::io::Write;
 use std::net::{IpAddr, UdpSocket};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -297,20 +296,18 @@ impl Repl {
         // the prompt: reads lines from the terminal, one form at a time, and waits for each result
         let lines = to_worker.clone();
         std::thread::spawn(move || {
-            let stdin = std::io::stdin();
+            // line editing with history (cursor keys) from rustyline
+            let Ok(mut editor) = rustyline::DefaultEditor::new() else {
+                return;
+            };
             println!("Lisp prompt (AutoLISP): (help) lists the board functions");
-            loop {
-                print!("lisp> ");
-                let _ = std::io::stdout().flush();
-                let mut line = String::new();
-                match stdin.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) if line.trim().is_empty() => continue,
-                    Ok(_) => {
-                        if lines.send(line).is_err() || finished.recv().is_err() {
-                            break;
-                        }
-                    }
+            while let Ok(line) = editor.readline("lisp> ") {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let _ = editor.add_history_entry(line.as_str());
+                if lines.send(line).is_err() || finished.recv().is_err() {
+                    break;
                 }
             }
         });
