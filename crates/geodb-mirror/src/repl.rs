@@ -72,13 +72,13 @@ pub const BOARD: &str = "THE BOARD";
 pub const GEODB: &str = "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)";
 
 pub const DOCS: &[Doc] = &[
-    doc("view", BOARD, "(view lat lon zoom)", "Sets the view. Zoom 1 shows the whole globe, 12 and more the scope view, 4000 is street level.", "(view 48.1 11.6 8)"),
+    doc("view", BOARD, "(view lat lon [zoom]) (view \"place\" [zoom])", "Sets the view at once. A place is a name, a find or city result, or lat lon. Zoom 1 shows the whole globe, 12 and more the scope view, 4000 is street level.", "(view \"Olfen\" 8)"),
     doc("spin", BOARD, "(spin T|nil [dps])", "Spin on (T) or off (nil), optionally at dps degrees per second; a negative speed turns the other way.", "(spin T -25)"),
     doc("layers", BOARD, "(layers bits)", "Sets the layers: 1 relief, 2 isohypses, 4 coastline, 8 city dots, 16 query ring (add 64 for the LAYERS button's direction).", "(layers 5)   ; coast and relief"),
     doc("tap", BOARD, "(tap x y)", "A touch at x y of the 800 x 480 screen, like a finger (buttons, a city, a point on the globe).", "(tap 640 454)   ; the LAYERS button"),
     doc("drag", BOARD, "(drag dx dy)", "Pans the globe by pixels, like a finger dragging; (release) lets go.", "(drag 40 0) (release)"),
     doc("release", BOARD, "(release)", "Ends a drag (the globe may coast on).", "(release)"),
-    doc("fly", BOARD, "(fly lat lon zoom ms)", "A smooth move of the view in ms: ease in and out, the zoom changes geometrically, the longitude takes the short way.", "(fly 35.7 139.7 5 3000)"),
+    doc("fly", BOARD, "(fly place [zoom ms]) (fly from to [zoom ms])", "A smooth move to a place (lat lon, a name, a find or city result): ease in and out, the longitude takes the short way. With two places it is a trip from the first to the second: out to the whole globe, across, in (zoom 5, 5000 ms).", "(fly \"Ludinghausen\" \"Wuhan\")"),
     doc("sleep", BOARD, "(sleep ms)", "Waits ms (in a headless video: renders ms of video). The window never freezes meanwhile; Ctrl-C stops a script.", "(sleep 2000)"),
     doc("state", BOARD, "(state)", "What the board shows now: (lat lon zoom spinning fps layers).", "(state)"),
     doc("lat", BOARD, "(lat) (lon) (zoom) (fps) (spin-dps)", "Single readings of the board's state.", "(+ (lon) 10)"),
@@ -93,7 +93,7 @@ pub const DOCS: &[Doc] = &[
     doc("find", GEODB, "(find \"text\" [n])", "Cities, states and countries matching a text, best first (at most n, default 8): a list of (kind name state country lat lon). Writes nothing found when there is no match. A call is (find \"x\"), not find(\"x\").", "(find \"Olfen\")"),
     doc("city", GEODB, "(city \"name\")", "The best match for a name (a city, else a state or country): (lat lon name country), or nil.", "(city \"Munich\")"),
     doc("goto", GEODB, "(goto \"name\" [zoom])", "Shows a place on the board at once (zoom 6 by default) and returns its name.", "(goto \"Bavaria\" 4)"),
-    doc("hop", GEODB, "(hop \"name\" [zoom ms])", "A trip to a place: out to the whole globe, across, in to zoom (default 5, in 4000 ms). Returns the name.", "(hop \"Tokyo\" 5 5000)"),
+    doc("hop", GEODB, "(hop place [zoom ms]) (hop from to [zoom ms])", "A trip to a place from where the view is (or from the first of two): out to the whole globe, across, in to zoom (default 5, in 4000 ms). Returns the name.", "(hop \"Tokyo\" 5 5000)"),
     doc("nearest", GEODB, "(nearest lat lon [n]) (nearest \"place\" [n])", "The n nearest cities (default 5): a list of (name country km lat lon).", "(nearest \"Olfen\" 3)"),
     doc("here", GEODB, "(here [n])", "The n cities nearest to where the board looks (default 5), like its side panel.", "(foreach c (here 5) (princ (car c)) (princ \" \"))"),
     doc("country", GEODB, "(country \"DE\")", "A country by its ISO code: (name capital region lat lon), or nil.", "(country \"JP\")"),
@@ -419,6 +419,96 @@ fn flag(on: bool) -> Expr {
     }
 }
 
+/// What a call that moves the view asks for, found from the types of its arguments (see [`plan`]).
+struct Plan {
+    /// Where the trip starts, when two places were given (else: where the view is).
+    from: Option<(f64, f64)>,
+    to: (f64, f64),
+    zoom: Option<f64>,
+    ms: Option<f64>,
+    /// The name of the place `to`, when it was one.
+    label: String,
+}
+
+/// Routes the arguments of `view`, `fly` and `hop` by their types, so each reads naturally:
+///
+/// * a place is a name `"Olfen"`, a `find` or `city` result, or a point as two numbers `48.1 11.6`;
+/// * one place is where to go, two places are from and to (`(fly "Ludinghausen" "Wuhan")`);
+/// * the plain numbers that follow are the zoom, then the milliseconds.
+fn plan(data: &Dataset, args: &[Expr]) -> Option<Plan> {
+    let mut places: Vec<((f64, f64), String)> = Vec::new();
+    let mut scalars: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match (&args[i], args.get(i + 1)) {
+            // two numbers in a row before any zoom: a point
+            (a, Some(b))
+                if places.is_empty()
+                    && scalars.is_empty()
+                    && num(a).is_some()
+                    && num(b).is_some() =>
+            {
+                places.push(((num(a)?, num(b)?), String::new()));
+                i += 2;
+                continue;
+            }
+            (a, _) if num(a).is_some() => scalars.push(num(a)?),
+            (e @ (Expr::String(_) | Expr::List(_)), _) => {
+                let found = dataset(data).and_then(|db| {
+                    let label = match e {
+                        Expr::String(name) => find_places(db, name, 1).pop().map(|p| p.1),
+                        _ => None,
+                    };
+                    position_of(db, e).map(|pos| (pos, label.unwrap_or_default()))
+                });
+                match found {
+                    Some(p) => places.push(p),
+                    None => {
+                        say(&format!("no place matches {e}"));
+                        return None;
+                    }
+                }
+            }
+            (other, _) => {
+                say(&format!("I do not know what to do with {other}: a place is a name, a find result or lat lon"));
+                return None;
+            }
+        }
+        i += 1;
+    }
+    let (from, to) = match places.as_slice() {
+        [to] => (None, to.clone()),
+        [from, to] => (Some(from.0), to.clone()),
+        _ => {
+            say("wants a place: (fly \"Olfen\"), (fly \"Olfen\" \"Wuhan\"), (fly 48.1 11.6 5)");
+            return None;
+        }
+    };
+    Some(Plan {
+        from,
+        to: to.0,
+        zoom: scalars.first().copied(),
+        ms: scalars.get(1).copied(),
+        label: to.1,
+    })
+}
+
+/// A trip: out to the whole globe, across, in to `zoom`; it starts at `from` (a jump there first).
+fn route(board: &dyn Board, from: (f64, f64), to: (f64, f64), zoom: f64, ms: f64) {
+    let here = board.state().view;
+    if (f64::from(here.lat) - from.0).abs() > 0.01 || (f64::from(here.lon) - from.1).abs() > 0.01 {
+        board.send(&format!(
+            "!view {} {} {}",
+            from.0,
+            from.1,
+            f64::from(here.zoom).max(1.3)
+        ));
+    }
+    fly(board, from.0, from.1, 1.3, ms * 0.25);
+    fly(board, to.0, to.1, 1.3, ms * 0.35);
+    fly(board, to.0, to.1, zoom.max(1.0), ms * 0.4);
+}
+
 /// A smooth move of the view to (la, lo, zoom) in `ms`: the zoom changes geometrically, the longitude takes
 /// the short way, an ease in and out.
 fn fly(board: &dyn Board, la: f64, lo: f64, zoom: f64, ms: f64) {
@@ -582,6 +672,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
         move |text: String| flag(board.send(&text))
     };
     let mut it = Interpreter::new();
+    let data: Dataset = Arc::new(OnceLock::new());
     let n = n_of;
     {
         let send = send.clone();
@@ -600,14 +691,13 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
         defc(&mut it, &board, "release", move |_| send("!release".into()));
     }
     {
-        let send = send.clone();
-        defc(&mut it, &board, "view", move |a| {
-            send(format!(
-                "!view {} {} {}",
-                n(a, 0),
-                n(a, 1),
-                n(a, 2).max(1.0)
-            ))
+        let (data, board) = (data.clone(), board.clone());
+        defc(&mut it, &board.clone(), "view", move |a| {
+            let Some(p) = plan(&data, a) else {
+                return Expr::Nil;
+            };
+            let zoom = p.zoom.unwrap_or_else(|| f64::from(board.state().view.zoom));
+            flag(board.send(&format!("!view {} {} {}", p.to.0, p.to.1, zoom.max(1.0))))
         });
     }
     {
@@ -691,20 +781,35 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     }
     // smooth moves (the demo scripts use them): the board gets a view every 40 ms, `sleep` in between
     {
-        let board = board.clone();
+        let (data, board) = (data.clone(), board.clone());
         defc(&mut it, &board.clone(), "fly", move |a| {
-            fly(
-                &*board,
-                n_of(a, 0),
-                n_of(a, 1),
-                n_of(a, 2).max(1.0),
-                n_of(a, 3),
-            );
+            let Some(p) = plan(&data, a) else {
+                return Expr::Nil;
+            };
+            match p.from {
+                // from one place to another: there, then the trip (out, across, in)
+                Some(from) => route(
+                    &*board,
+                    from,
+                    p.to,
+                    p.zoom.unwrap_or(5.0),
+                    p.ms.unwrap_or(5000.0),
+                ),
+                None => {
+                    let zoom = p.zoom.unwrap_or_else(|| f64::from(board.state().view.zoom));
+                    fly(
+                        &*board,
+                        p.to.0,
+                        p.to.1,
+                        zoom.max(1.0),
+                        p.ms.unwrap_or(3000.0),
+                    );
+                }
+            }
             Expr::T
         });
     }
     // the geodb-core functions
-    let data: Dataset = Arc::new(OnceLock::new());
     {
         let data = data.clone();
         def(&mut it, "find", move |a| {
@@ -832,27 +937,21 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     {
         let (data, board) = (data.clone(), board.clone());
         defc(&mut it, &board.clone(), "hop", move |a| {
-            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+            let Some(p) = plan(&data, a) else {
                 return Expr::Nil;
             };
-            let z = a.get(1).and_then(num).unwrap_or(5.0).max(1.0);
-            let ms = a.get(2).and_then(num).unwrap_or(4000.0);
-            let Some((_, name, _, _, la, lo)) = find_places(db, q, 1).pop() else {
-                say(&format!("no place matches {q:?}"));
-                return Expr::Nil;
-            };
-            // out to the whole globe, across, in
             let s = board.state();
-            fly(
+            let from = p
+                .from
+                .unwrap_or((f64::from(s.view.lat), f64::from(s.view.lon)));
+            route(
                 &*board,
-                f64::from(s.view.lat),
-                f64::from(s.view.lon),
-                1.3,
-                ms * 0.25,
+                from,
+                p.to,
+                p.zoom.unwrap_or(5.0),
+                p.ms.unwrap_or(4000.0),
             );
-            fly(&*board, la, lo, 1.3, ms * 0.35);
-            fly(&*board, la, lo, z, ms * 0.4);
-            Expr::String(name)
+            Expr::String(p.label)
         });
     }
     {
@@ -1064,5 +1163,39 @@ mod help_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), DOCS.len());
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn args(text: &str) -> Vec<Expr> {
+        let form = acadlisp::parser::Parser::from_input(text)
+            .parse_all()
+            .remove(0);
+        match form {
+            Expr::List(mut items) => items.drain(1..).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_types_of_the_arguments_route_them() {
+        let data: Dataset = Arc::new(OnceLock::new());
+        // a point and the numbers after it
+        let p = plan(&data, &args("(fly 48.1 11.6 5 3000)")).unwrap();
+        assert_eq!(
+            (p.from, p.to, p.zoom, p.ms),
+            (None, (48.1, 11.6), Some(5.0), Some(3000.0))
+        );
+        // two places: from and to; the numbers are zoom and time
+        let p = plan(&data, &args("(fly \"Ludinghausen\" \"Wuhan\" 4 2000)")).unwrap();
+        assert!(p.from.is_some() && (p.to.0 - 30.6).abs() < 1.0);
+        assert_eq!((p.zoom, p.ms), (Some(4.0), Some(2000.0)));
+        // a place and then zoom and time (not a second point)
+        let p = plan(&data, &args("(fly \"Wuhan\" 8 3000)")).unwrap();
+        assert!(p.from.is_none() && p.zoom == Some(8.0) && p.ms == Some(3000.0));
+        assert!(plan(&data, &args("(fly)")).is_none());
     }
 }
