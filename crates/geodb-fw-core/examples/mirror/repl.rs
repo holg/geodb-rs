@@ -1,5 +1,6 @@
-//! A Lisp console in the mirror window (AutoLISP, from the `acadlisp` crate): Tab (or F2; on a Mac F2 needs fn) opens it, Enter evaluates, Up and
-//! Down walk the history, Ctrl-C interrupts a script that sleeps, Esc closes it.
+//! A Lisp prompt in the terminal the mirror was started from (AutoLISP, the `acadlisp` crate): type a form, Enter
+//! evaluates it. `(help)` lists the board functions, one a line. Ctrl-D (end of input) closes the prompt only; the
+//! window keeps running.
 //!
 //! The interpreter runs on its own thread, so a script with `(sleep ...)` never freezes the window. It drives the
 //! board with the same UDP commands the mouse sends (`!tap`, `!drag`, `!view`, `!spin`, `!layers`) and reads the
@@ -13,8 +14,9 @@
 //! ```
 
 use acadlisp::{Expr, Interpreter};
-use geodb_fw_core::render::{rgb565, text, Fb, View};
+use geodb_fw_core::render::View;
 use geodb_fw_core::ui;
+use std::io::Write;
 use std::net::{IpAddr, UdpSocket};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,8 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const COMMAND_PORT: u16 = 7880;
-const ROWS: usize = 11;
-const COLS: usize = 98;
 
 /// What the board last said (the main loop fills it from the state packets).
 #[derive(Clone, Copy)]
@@ -42,20 +42,30 @@ pub enum Request {
     Screenshot(String),
 }
 
-struct Interrupted;
+const HELP: [&str; 20] = [
+    "(view lat lon zoom)   the view (zoom 1 = the whole globe)",
+    "(spin T|nil [dps])    spin on/off, optional speed (negative: the other way)",
+    "(layers bits)         layer bits: 1 relief, 2 isohypses, 4 coast, 8 dots, 16 ring (+64 direction)",
+    "(tap x y)             a touch at screen x y (800 x 480)",
+    "(drag dx dy)          pan by pixels; (release) lets go",
+    "(sleep ms)            wait (Ctrl-C does not interrupt it in a terminal: use a short sleep)",
+    "(state)               (lat lon zoom spinning fps layers)",
+    "(lat) (lon) (zoom)    single readings; (fps) (spin-dps) (layer-bits) (selected)",
+    "(info)                the board's !info line",
+    "(screenshot \"f.png\") the window as a png",
+    "(load \"f.lsp\")       run a script file",
+    "plus AutoLISP: setq defun repeat while if cond + - * / sin cos list car cdr ...",
+    "",
+    "examples:",
+    "  (view 48 11 4)",
+    "  (spin T 40)",
+    "  (layers 5)",
+    "  (setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))",
+    "  (defun go (lat lon) (view lat lon 6)) (go 35.7 139.7)",
+    "",
+];
 
-pub struct Repl {
-    pub open: bool,
-    input: String,
-    lines: Vec<String>,
-    history: Vec<String>,
-    at: Option<usize>,
-    to_worker: Sender<String>,
-    from_worker: Receiver<String>,
-    requests: Receiver<Request>,
-    abort: Arc<AtomicBool>,
-    pub typed: Arc<Mutex<Vec<char>>>,
-}
+struct Interrupted;
 
 fn num(e: &Expr) -> Option<f64> {
     match e {
@@ -228,12 +238,10 @@ fn interpreter(
         });
     }
     def(&mut it, "help", |_| {
-        Expr::String(
-            "(view lat lon zoom) (spin T|nil [dps]) (layers bits) (tap x y) (drag dx dy) (release) \
-             (sleep ms) (state) (lat) (lon) (zoom) (fps) (layer-bits) (selected) (info) (screenshot \"f.png\"); \
-             plus AutoLISP: setq defun repeat while if + - * / sin cos ..."
-                .into(),
-        )
+        for line in HELP {
+            println!("{line}");
+        }
+        Expr::T
     });
     it
 }
@@ -243,56 +251,72 @@ fn worker(
     requests: Sender<Request>,
     abort: Arc<AtomicBool>,
     code: Receiver<String>,
-    out: Sender<String>,
+    done: Sender<()>,
 ) {
     let mut it = interpreter(snap.clone(), requests.clone(), abort.clone());
     while let Ok(source) = code.recv() {
         abort.store(false, Ordering::Relaxed);
         let run = catch_unwind(AssertUnwindSafe(|| it.run(&source)));
         for line in it.output.drain(..) {
-            for l in line.lines() {
-                let _ = out.send(l.to_string());
-            }
+            println!("{line}");
         }
         match run {
             Ok(results) => {
                 if let Some(last) = results.last() {
-                    let _ = out.send(format!("=> {last}"));
+                    println!("=> {last}");
                 }
             }
             Err(e) => {
-                let _ = out.send(if e.is::<Interrupted>() {
-                    "interrupted".into()
-                } else {
-                    "error in the interpreter (state reset)".to_string()
-                });
+                println!(
+                    "{}",
+                    if e.is::<Interrupted>() {
+                        "interrupted"
+                    } else {
+                        "error in the interpreter (state reset)"
+                    }
+                );
                 it = interpreter(snap.clone(), requests.clone(), abort.clone());
             }
         }
+        let _ = done.send(());
     }
+}
+
+pub struct Repl {
+    to_worker: Sender<String>,
+    requests: Receiver<Request>,
 }
 
 impl Repl {
     pub fn new(snap: Arc<Mutex<Snapshot>>) -> Repl {
         let (to_worker, code) = channel();
-        let (out, from_worker) = channel();
         let (req, requests) = channel();
+        let (done, finished) = channel();
         let abort = Arc::new(AtomicBool::new(false));
-        {
-            let abort = abort.clone();
-            std::thread::spawn(move || worker(snap, req, abort, code, out));
-        }
+        std::thread::spawn(move || worker(snap, req, abort, code, done));
+        // the prompt: reads lines from the terminal, one form at a time, and waits for each result
+        let lines = to_worker.clone();
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            println!("Lisp prompt (AutoLISP): (help) lists the board functions");
+            loop {
+                print!("lisp> ");
+                let _ = std::io::stdout().flush();
+                let mut line = String::new();
+                match stdin.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if line.trim().is_empty() => continue,
+                    Ok(_) => {
+                        if lines.send(line).is_err() || finished.recv().is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         Repl {
-            open: false,
-            input: String::new(),
-            lines: vec!["Lisp console (AutoLISP): (help) lists the board functions".into()],
-            history: Vec::new(),
-            at: None,
             to_worker,
-            from_worker,
             requests,
-            abort,
-            typed: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -301,105 +325,9 @@ impl Repl {
         let _ = self.to_worker.send(source);
     }
 
-    pub fn interrupt(&self) {
-        self.abort.store(true, Ordering::Relaxed);
-    }
-
-    /// Takes in what was typed and what the interpreter printed; returns a window request, if any.
+    /// A request for the window (a screenshot), if the script made one.
     pub fn poll(&mut self) -> Option<Request> {
-        let typed: Vec<char> = std::mem::take(&mut *self.typed.lock().unwrap());
-        if self.open {
-            for c in typed {
-                if !c.is_control() {
-                    self.input.push(c);
-                }
-            }
-        }
-        while let Ok(line) = self.from_worker.try_recv() {
-            self.lines.push(line);
-        }
-        let excess = self.lines.len().saturating_sub(200);
-        self.lines.drain(..excess);
         self.requests.try_recv().ok()
-    }
-
-    pub fn backspace(&mut self) {
-        self.input.pop();
-    }
-
-    pub fn enter(&mut self) {
-        let line = std::mem::take(&mut self.input);
-        self.at = None;
-        if line.trim().is_empty() {
-            return;
-        }
-        self.lines.push(format!("> {line}"));
-        if self.history.last() != Some(&line) {
-            self.history.push(line.clone());
-        }
-        let _ = self.to_worker.send(line);
-    }
-
-    pub fn history(&mut self, up: bool) {
-        if self.history.is_empty() {
-            return;
-        }
-        let last = self.history.len() - 1;
-        self.at = match (self.at, up) {
-            (None, true) => Some(last),
-            (Some(i), true) => Some(i.saturating_sub(1)),
-            (Some(i), false) if i < last => Some(i + 1),
-            _ => None,
-        };
-        self.input = self.at.map_or(String::new(), |i| self.history[i].clone());
-    }
-
-    /// The console over the bottom of the screen.
-    pub fn draw(&self, fb: &mut Fb<'_>) {
-        if !self.open {
-            return;
-        }
-        let (w, h) = (fb.w as i32, fb.h as i32);
-        let top = h - (ROWS as i32 + 1) * 10 - 22;
-        fb.rect(0, top, w, h - top - 14, rgb565(4, 8, 16));
-        fb.rect(0, top, w, 1, rgb565(90, 150, 100));
-        let tail = self.lines.len().saturating_sub(ROWS);
-        for (i, line) in self.lines[tail..].iter().enumerate() {
-            let shown: String = line.chars().take(COLS).collect();
-            text(
-                fb,
-                4,
-                top + 4 + i as i32 * 10,
-                &shown,
-                1,
-                rgb565(150, 220, 150),
-            );
-        }
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis());
-        let blink = if (ms / 500).is_multiple_of(2) {
-            "_"
-        } else {
-            " "
-        };
-        let typed: String = self
-            .input
-            .chars()
-            .rev()
-            .take(COLS - 4)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        text(
-            fb,
-            4,
-            top + 4 + ROWS as i32 * 10,
-            &format!("> {typed}{blink}"),
-            1,
-            rgb565(255, 190, 70),
-        );
     }
 }
 

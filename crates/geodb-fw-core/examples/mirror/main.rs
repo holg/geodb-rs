@@ -10,7 +10,7 @@
 //! rate, rounded, with a small history so the trend shows.
 //!
 //! Keys: R starts/stops a recording (an mp4 through `ffmpeg`, 30 fps, next to where you run it),
-//! S saves a png, Tab (or F2) opens the Lisp console (see `repl.rs`: scripts drive the board), Esc closes it, then the window. Without packets (board off) the window shows the last view.
+//! S saves a png, Esc closes. The terminal it runs in is a Lisp prompt (see `repl.rs`: scripts drive the board). Without packets (board off) the window shows the last view.
 
 use geodb_fw_core::render::{Fb, GlobeLut, LutCell, View};
 use geodb_fw_core::{scene, ui, FwImage};
@@ -154,15 +154,6 @@ fn main() {
     )
     .expect("window");
     window.set_target_fps(60);
-    struct Typing(Arc<Mutex<Vec<char>>>);
-    impl minifb::InputCallback for Typing {
-        fn add_char(&mut self, c: u32) {
-            if let Some(c) = char::from_u32(c) {
-                self.0.lock().unwrap().push(c);
-            }
-        }
-    }
-    window.set_input_callback(Box::new(Typing(console.typed.clone())));
 
     let mut view = View::new(30.0, 10.0);
     let mut spin = ui::Spin::new();
@@ -197,7 +188,7 @@ fn main() {
         }
     };
 
-    while window.is_open() && (console.open || !window.is_key_down(Key::Escape)) {
+    while window.is_open() && !window.is_key_down(Key::Escape) {
         // the newest state packet wins
         while let Ok((n, from)) = sock.recv_from(&mut pkt) {
             if let Some((v, s, fps, shared)) = ui::decode_state(&pkt[..n]) {
@@ -330,7 +321,7 @@ fn main() {
         }
         // the frame rates, rounded (the trend matters, not the digit) and their history (on a cleared
         // corner: the quick frames do not repaint it)
-        fb.rect(0, 0, 130, 88, geodb_fw_core::render::rgb565(6, 10, 22));
+        fb.rect(0, 0, 130, 76, geodb_fw_core::render::rgb565(6, 10, 22));
         let live = heard.is_some_and(|at| at.elapsed() < Duration::from_secs(2));
         let hud = format!(
             "board {} fps\nwindow {} fps\n{} pkt/s",
@@ -348,14 +339,6 @@ fn main() {
                 geodb_fw_core::render::rgb565(255, 190, 70),
             );
         }
-        geodb_fw_core::render::text(
-            &mut fb,
-            6,
-            76,
-            "Tab: Lisp",
-            1,
-            geodb_fw_core::render::rgb565(150, 220, 150),
-        );
         for (i, &v) in history.iter().enumerate() {
             let height = (v.min(32) as i32 * 24 + 15) / 32;
             fb.rect(
@@ -395,39 +378,13 @@ fn main() {
             );
             geodb_fw_core::render::text(&mut fb, 4, h as i32 - 10, &text, 1, colour);
         }
-        // the Lisp console
-        if window.is_key_pressed(Key::F2, KeyRepeat::No)
-            || window.is_key_pressed(Key::Tab, KeyRepeat::No)
-        {
-            console.open = !console.open;
-        }
+        // the Lisp prompt in the terminal (repl.rs): a screenshot a script asked for
         let shot_request = console.poll();
-        if console.open {
-            if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
-                console.open = false;
-            }
-            if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
-                console.enter();
-            }
-            if window.is_key_pressed(Key::Backspace, KeyRepeat::Yes) {
-                console.backspace();
-            }
-            if window.is_key_pressed(Key::Up, KeyRepeat::Yes) {
-                console.history(true);
-            }
-            if window.is_key_pressed(Key::Down, KeyRepeat::Yes) {
-                console.history(false);
-            }
-            if window.is_key_down(Key::LeftCtrl) && window.is_key_pressed(Key::C, KeyRepeat::No) {
-                console.interrupt();
-            }
-        }
-        console.draw(&mut Fb { px: &mut buf, w, h });
         let mut shot_name = None;
         if let Some(repl::Request::Screenshot(name)) = shot_request {
             shot_name = Some(name);
         }
-        if shot_name.is_some() || (!console.open && window.is_key_pressed(Key::S, KeyRepeat::No)) {
+        if shot_name.is_some() || window.is_key_pressed(Key::S, KeyRepeat::No) {
             shots += 1;
             let name = shot_name.unwrap_or_else(|| format!("board-{shots}.png"));
             let file = std::fs::File::create(&name).unwrap();
@@ -440,7 +397,7 @@ fn main() {
                 .unwrap();
             println!("saved {name}");
         }
-        if !console.open && window.is_key_pressed(Key::R, KeyRepeat::No) {
+        if window.is_key_pressed(Key::R, KeyRepeat::No) {
             match recording.take() {
                 Some((child, name)) => stop_recording(child, &name),
                 None => {
