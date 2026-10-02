@@ -97,6 +97,7 @@ pub const DOCS: &[Doc] = &[
     doc("nearest", GEODB, "(nearest lat lon [n]) (nearest \"place\" [n])", "The n nearest cities (default 5): a list of (name country km lat lon).", "(nearest \"Olfen\" 3)"),
     doc("here", GEODB, "(here [n])", "The n cities nearest to where the board looks (default 5), like its side panel.", "(foreach c (here 5) (princ (car c)) (princ \" \"))"),
     doc("cities", GEODB, "(cities country [state [n]])", "The cities of a country (name or ISO code), or of one of its states (a part of the name is enough), at most n (default 20): a list of (name state population lat lon). Largest first where the dataset knows the population (it mostly does not: then in dataset order). Made for foreach.", "(foreach c (cities \"DE\" \"Bavaria\" 5) (princ (car c)) (princ \" \"))"),
+    doc("count-cities", GEODB, "(count-cities country [state])", "How many cities a country has in the dataset, or one of its states (a part of the name is enough).", "(count-cities \"DE\" \"North Rhine\")"),
     doc("states", GEODB, "(states country)", "The names of the states or provinces of a country (name or ISO code).", "(states \"Germany\")"),
     doc("country", GEODB, "(country \"DE\")", "A country by its ISO code: (name capital region lat lon), or nil.", "(country \"JP\")"),
     doc("distance", GEODB, "(distance la1 lo1 la2 lo2) (distance place place)", "Great-circle distance in km between two points, or two places: names, find results, city results.", "(distance \"Ludinghausen\" \"Olfen\")"),
@@ -1170,6 +1171,31 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             }
             found.sort_by_key(|f| std::cmp::Reverse(f.0));
             Expr::List(found.into_iter().take(n).map(|f| f.1).collect())
+        });
+    }
+    {
+        let data = data.clone();
+        def(&mut it, "count-cities", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                say("count-cities wants a country: (count-cities \"DE\" [\"North Rhine\"])");
+                return Expr::Nil;
+            };
+            let Some(country) = country_of(db, q) else {
+                say(&format!("no country matches {q:?}"));
+                return Expr::Nil;
+            };
+            let state = text_of(a, 1).map(str::to_lowercase);
+            let total: usize = db
+                .states_for_country(country)
+                .iter()
+                .filter(|st| {
+                    state
+                        .as_ref()
+                        .is_none_or(|s| st.name().to_lowercase().contains(s.as_str()))
+                })
+                .map(|st| db.cities_for_state(st).len())
+                .sum();
+            Expr::Integer(total as i32)
         });
     }
     def(&mut it, "pwd", |_| {
