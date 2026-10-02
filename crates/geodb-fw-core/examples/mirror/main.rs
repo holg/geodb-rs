@@ -2,7 +2,7 @@
 //! (view and spin, UDP broadcast on port 7881), drawn by the very same `ui::draw` on the same image.
 //! No pixels cross the wire, so it runs at the window's full rate.
 //!
-//!   cargo run --release -p geodb-fw-core --features std --example mirror [geodb.fw] [--scale 2]
+//!   cargo run --release -p geodb-fw-core --features std,lisp --example mirror [geodb.fw] [--scale 2] [--script f.lsp]
 //!
 //! The window takes input like the LCD: a click is a tap (buttons, a point on the globe), dragging
 //! pans (and flicks), sent to the board as UDP commands. The top left shows the board's frame rate
@@ -10,14 +10,17 @@
 //! rate, rounded, with a small history so the trend shows.
 //!
 //! Keys: R starts/stops a recording (an mp4 through `ffmpeg`, 30 fps, next to where you run it),
-//! S saves a png, Esc closes. Without packets (board off) the window shows the last view.
+//! S saves a png, F2 opens the Lisp console (see `repl.rs`: scripts drive the board), Esc closes it, then the window. Without packets (board off) the window shows the last view.
 
 use geodb_fw_core::render::{Fb, GlobeLut, LutCell, View};
 use geodb_fw_core::{scene, ui, FwImage};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
+mod repl;
+
 use std::io::Write;
 use std::net::UdpSocket;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const STATE_PORT: u16 = 7881;
@@ -120,6 +123,24 @@ fn main() {
     let mut have_full = false;
     let mut seen_fulls = ui::fulls();
 
+    // the Lisp console: its interpreter reads the board's state from `snapshot` and drives it by UDP
+    let snapshot = Arc::new(Mutex::new(repl::Snapshot {
+        view: View::new(30.0, 10.0),
+        spin: ui::Spin::new(),
+        fps: 0,
+        options: ui::options(),
+        selected: None,
+        board: None,
+    }));
+    let mut console = repl::Repl::new(snapshot.clone());
+    if let Some(file) = args
+        .iter()
+        .position(|a| a == "--script")
+        .and_then(|i| args.get(i + 1))
+    {
+        console.run(format!("(load \"{}\")", file.replace('\\', "/")));
+    }
+
     let sock =
         UdpSocket::bind(("0.0.0.0", STATE_PORT)).expect("UDP port 7881 (another viewer running?)");
     sock.set_nonblocking(true).unwrap();
@@ -133,6 +154,15 @@ fn main() {
     )
     .expect("window");
     window.set_target_fps(60);
+    struct Typing(Arc<Mutex<Vec<char>>>);
+    impl minifb::InputCallback for Typing {
+        fn add_char(&mut self, c: u32) {
+            if let Some(c) = char::from_u32(c) {
+                self.0.lock().unwrap().push(c);
+            }
+        }
+    }
+    window.set_input_callback(Box::new(Typing(console.typed.clone())));
 
     let mut view = View::new(30.0, 10.0);
     let mut spin = ui::Spin::new();
@@ -167,7 +197,7 @@ fn main() {
         }
     };
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
+    while window.is_open() && (console.open || !window.is_key_down(Key::Escape)) {
         // the newest state packet wins
         while let Ok((n, from)) = sock.recv_from(&mut pkt) {
             if let Some((v, s, fps, shared)) = ui::decode_state(&pkt[..n]) {
@@ -176,6 +206,14 @@ fn main() {
                 stamp = Instant::now();
                 heard = Some(stamp);
                 board = Some(from.ip());
+                *snapshot.lock().unwrap() = repl::Snapshot {
+                    view: v,
+                    spin: s,
+                    fps,
+                    options: shared.options,
+                    selected: shared.selected,
+                    board,
+                };
                 packets += 1;
             }
         }
@@ -349,9 +387,39 @@ fn main() {
             );
             geodb_fw_core::render::text(&mut fb, 4, h as i32 - 10, &text, 1, colour);
         }
-        if window.is_key_pressed(Key::S, KeyRepeat::No) {
+        // the Lisp console
+        if window.is_key_pressed(Key::F2, KeyRepeat::No) {
+            console.open = !console.open;
+        }
+        let shot_request = console.poll();
+        if console.open {
+            if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
+                console.open = false;
+            }
+            if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
+                console.enter();
+            }
+            if window.is_key_pressed(Key::Backspace, KeyRepeat::Yes) {
+                console.backspace();
+            }
+            if window.is_key_pressed(Key::Up, KeyRepeat::Yes) {
+                console.history(true);
+            }
+            if window.is_key_pressed(Key::Down, KeyRepeat::Yes) {
+                console.history(false);
+            }
+            if window.is_key_down(Key::LeftCtrl) && window.is_key_pressed(Key::C, KeyRepeat::No) {
+                console.interrupt();
+            }
+        }
+        console.draw(&mut Fb { px: &mut buf, w, h });
+        let mut shot_name = None;
+        if let Some(repl::Request::Screenshot(name)) = shot_request {
+            shot_name = Some(name);
+        }
+        if shot_name.is_some() || (!console.open && window.is_key_pressed(Key::S, KeyRepeat::No)) {
             shots += 1;
-            let name = format!("board-{shots}.png");
+            let name = shot_name.unwrap_or_else(|| format!("board-{shots}.png"));
             let file = std::fs::File::create(&name).unwrap();
             let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
             enc.set_color(png::ColorType::Rgb);
@@ -362,7 +430,7 @@ fn main() {
                 .unwrap();
             println!("saved {name}");
         }
-        if window.is_key_pressed(Key::R, KeyRepeat::No) {
+        if !console.open && window.is_key_pressed(Key::R, KeyRepeat::No) {
             match recording.take() {
                 Some((child, name)) => stop_recording(child, &name),
                 None => {

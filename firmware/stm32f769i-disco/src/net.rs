@@ -104,6 +104,19 @@ pub fn inject(cmd: geodb_fw_core::link::Command) {
 pub static INJ_DX: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
 pub static INJ_DY: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
 pub static INJ_TAP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Scripted state (`!view`, `!spin`, `!layers`): the new values, taken by the main loop. The view is three
+/// f32 bit patterns and a flag, the spin a direction-signed speed and 0 none / 1 on / 2 off.
+pub static INJ_VIEW: [core::sync::atomic::AtomicU32; 3] = [
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+    core::sync::atomic::AtomicU32::new(0),
+];
+pub static INJ_VIEW_SET: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+pub static INJ_SPIN_DPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub static INJ_SPIN: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// Bit 31 set: the layer options byte in the low bits.
+pub static INJ_LAYERS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 pub static INJ_RELEASE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// The frame rate main.rs measures, for `!info`.
@@ -140,6 +153,7 @@ impl core::fmt::Write for Out {
 ///   its header and restarts
 /// * `!ota begin LEN CRC32HEX` -> erases the other slot; data chunks (`0x01`, offset u32 LE, bytes)
 ///   -> `!ota ack NEXT`; `!ota end` -> checks the CRC, marks the slot pending, restarts
+/// * `!view LAT LON ZOOM`, `!spin on|off [DPS]`, `!layers N` -> scripting from the mirror's Lisp console
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
 #[embassy_executor::task]
 pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! {
@@ -270,6 +284,26 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                 INJ_DY.fetch_add(dy.clamp(-480, 480), Ordering::Relaxed);
             }
             Some("!release") => INJ_RELEASE.store(true, Ordering::Relaxed),
+            Some("!view") => {
+                let mut f = || words.next().and_then(|v| v.parse::<f32>().ok());
+                if let (Some(lat), Some(lon), Some(zoom)) = (f(), f(), f()) {
+                    INJ_VIEW[0].store(lat.to_bits(), Ordering::Relaxed);
+                    INJ_VIEW[1].store(lon.to_bits(), Ordering::Relaxed);
+                    INJ_VIEW[2].store(zoom.to_bits(), Ordering::Relaxed);
+                    INJ_VIEW_SET.store(true, Ordering::Relaxed);
+                }
+            }
+            Some("!spin") => {
+                let on = words.next() == Some("on");
+                if let Some(dps) = words.next().and_then(|v| v.parse::<f32>().ok()) {
+                    INJ_SPIN_DPS.store(dps.to_bits(), Ordering::Relaxed);
+                }
+                INJ_SPIN.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            }
+            Some("!layers") => {
+                let n: u32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                INJ_LAYERS.store(1 << 31 | (n & 0x7f), Ordering::Relaxed);
+            }
             Some("!ota") => match words.next() {
                 Some("begin") => {
                     let len: u32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);

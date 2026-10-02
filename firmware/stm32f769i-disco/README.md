@@ -227,3 +227,13 @@ one is the board's say: the state packet carries a "moving" flag (`ui::moving()`
 guesses it. Do not add a second copy of earth preparation or frame choice to a host tool: put it in
 `scene.rs`/`ui.rs`. The `build` id in `!info` (hash of fw-core's sources) makes the mirror say when it
 was built from other code.
+
+## Scripting the board from the mirror (Lisp)
+
+The mirror has a Lisp console (AutoLISP, the `acadlisp` crate): `cargo run --release -p geodb-fw-core
+--features lisp --example mirror [--script file.lsp]`, F2 opens it. A script runs on its own thread
+(`(sleep ms)` does not freeze the window; Ctrl-C interrupts) and drives the board with UDP commands:
+`!view LAT LON ZOOM`, `!spin on|off [DPS]`, `!layers BITS`, plus the touch commands. Functions:
+`(view lat lon zoom) (spin T|nil [dps]) (layers bits) (tap x y) (drag dx dy) (release) (sleep ms)
+(state) (lat) (lon) (zoom) (fps) (selected) (info) (screenshot "f.png")`, e.g. a turn around the globe:
+`(setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))`.

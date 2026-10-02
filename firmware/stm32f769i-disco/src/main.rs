@@ -573,6 +573,41 @@ async fn main(spawner: Spawner) {
                 full = 2;
             }
         }
+        // scripted state from the mirror's Lisp console (`!view`, `!spin`, `!layers`)
+        if net::INJ_VIEW_SET.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            let f = |i: usize| {
+                f32::from_bits(net::INJ_VIEW[i].load(core::sync::atomic::Ordering::Relaxed))
+            };
+            if f(0).is_finite() && f(1).is_finite() && f(2).is_finite() {
+                view = View {
+                    lat: f(0).clamp(-85.0, 85.0),
+                    lon: f(1),
+                    zoom: f(2).clamp(1.0, 4000.0),
+                };
+                vel = (0.0, 0.0);
+                redraw = true;
+                full = 2;
+            }
+        }
+        match net::INJ_SPIN.swap(0, core::sync::atomic::Ordering::Relaxed) {
+            0 => {}
+            on => {
+                let dps =
+                    f32::from_bits(net::INJ_SPIN_DPS.load(core::sync::atomic::Ordering::Relaxed));
+                if dps.is_finite() && dps != 0.0 {
+                    spin.dps = dps.clamp(-ui::Spin::MAX, ui::Spin::MAX);
+                }
+                spin.on = on == 1;
+                redraw = true;
+                full = 2;
+            }
+        }
+        let layers = net::INJ_LAYERS.swap(0, core::sync::atomic::Ordering::Relaxed);
+        if layers & (1 << 31) != 0 {
+            ui::set_options(layers as u8 & 0x7f);
+            redraw = true;
+            full = 2;
+        }
         // double taps and flights to a city; a tap on a city waits a moment for its second tap
         if interact.tick(&mut view, &mut spin, dt, Instant::now().as_millis() as u32) {
             redraw = true;

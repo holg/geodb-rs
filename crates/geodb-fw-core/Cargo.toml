@@ -11,8 +11,11 @@ publish = false
 default = []
 # The image builder (needs alloc); the reader and the renderer never do.
 std = []
+# The Lisp console of the mirror window (AutoLISP, the acadlisp crate); the mirror needs it.
+lisp = ["std", "dep:acadlisp"]
 
 [dependencies]
+acadlisp = { git = "https://github.com/holg/acadlisp", branch = "main", default-features = false, optional = true }
 font8x8 = { version = "0.3", default-features = false }
 
 [dev-dependencies]
@@ -28,4 +31,5 @@ required-features = ["std"]
 
 [[example]]
 name = "mirror"
-required-features = ["std"]
+path = "examples/mirror/main.rs"
+required-features = ["std", "lisp"]

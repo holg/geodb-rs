@@ -19,6 +19,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
+name = "acadlisp"
+version = "0.2.0"
+source = "git+https://github.com/holg/acadlisp?branch=main#aa555bbe87f950ceceb8cb587c0735bc69aa2f23"
+dependencies = [
+ "flate2",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1246,6 +1256,7 @@ dependencies = [
 name = "geodb-fw-core"
 version = "0.1.6"
 dependencies = [
+ "acadlisp",
  "deunicode",
  "flate2",
  "font8x8",
