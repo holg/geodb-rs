@@ -10,7 +10,7 @@
 //! rate, rounded, with a small history so the trend shows.
 //!
 //! Keys: R starts/stops a recording (an mp4 through `ffmpeg`, 30 fps, next to where you run it),
-//! S saves a png, F2 opens the Lisp console (see `repl.rs`: scripts drive the board), Esc closes it, then the window. Without packets (board off) the window shows the last view.
+//! S saves a png, Tab (or F2) opens the Lisp console (see `repl.rs`: scripts drive the board), Esc closes it, then the window. Without packets (board off) the window shows the last view.
 
 use geodb_fw_core::render::{Fb, GlobeLut, LutCell, View};
 use geodb_fw_core::{scene, ui, FwImage};
@@ -330,7 +330,7 @@ fn main() {
         }
         // the frame rates, rounded (the trend matters, not the digit) and their history (on a cleared
         // corner: the quick frames do not repaint it)
-        fb.rect(0, 0, 130, 76, geodb_fw_core::render::rgb565(6, 10, 22));
+        fb.rect(0, 0, 130, 88, geodb_fw_core::render::rgb565(6, 10, 22));
         let live = heard.is_some_and(|at| at.elapsed() < Duration::from_secs(2));
         let hud = format!(
             "board {} fps\nwindow {} fps\n{} pkt/s",
@@ -348,6 +348,14 @@ fn main() {
                 geodb_fw_core::render::rgb565(255, 190, 70),
             );
         }
+        geodb_fw_core::render::text(
+            &mut fb,
+            6,
+            76,
+            "Tab: Lisp",
+            1,
+            geodb_fw_core::render::rgb565(150, 220, 150),
+        );
         for (i, &v) in history.iter().enumerate() {
             let height = (v.min(32) as i32 * 24 + 15) / 32;
             fb.rect(
@@ -388,7 +396,9 @@ fn main() {
             geodb_fw_core::render::text(&mut fb, 4, h as i32 - 10, &text, 1, colour);
         }
         // the Lisp console
-        if window.is_key_pressed(Key::F2, KeyRepeat::No) {
+        if window.is_key_pressed(Key::F2, KeyRepeat::No)
+            || window.is_key_pressed(Key::Tab, KeyRepeat::No)
+        {
             console.open = !console.open;
         }
         let shot_request = console.poll();

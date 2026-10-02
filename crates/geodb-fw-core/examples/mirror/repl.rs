@@ -1,4 +1,4 @@
-//! A Lisp console in the mirror window (AutoLISP, from the `acadlisp` crate): F2 opens it, Enter evaluates, Up and
+//! A Lisp console in the mirror window (AutoLISP, from the `acadlisp` crate): Tab (or F2; on a Mac F2 needs fn) opens it, Enter evaluates, Up and
 //! Down walk the history, Ctrl-C interrupts a script that sleeps, Esc closes it.
 //!
 //! The interpreter runs on its own thread, so a script with `(sleep ...)` never freezes the window. It drives the
