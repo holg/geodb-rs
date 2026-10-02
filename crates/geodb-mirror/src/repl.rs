@@ -102,6 +102,7 @@ pub const DOCS: &[Doc] = &[
     doc("country", GEODB, "(country \"DE\")", "A country by its ISO code: (name capital region lat lon), or nil.", "(country \"JP\")"),
     doc("distance", GEODB, "(distance la1 lo1 la2 lo2) (distance place place)", "Great-circle distance in km between two points, or two places: names, find results, city results.", "(distance \"Ludinghausen\" \"Olfen\")"),
     doc("load", "LISP", "(load \"f.lsp\")", "Runs a script file (in the app: the demo folder is the working directory). The screen shows each board command it runs.", "(load \"TOUR.LSP\")"),
+    doc("note", BOARD, "(note \"text\")", "A caption over the running code line on the screen (yellow, about 30 characters fit): says what the script is doing. (note \"\") clears it. It stays until the script ends.", "(note \"Layer 2: relief shading\")"),
     doc("pwd", "LISP", "(pwd)", "Where we are: the working directory, and the folders (load \"X.LSP\") looks in.", "(pwd)"),
     doc("ls", "LISP", "(ls)", "The scripts (*.LSP) (load) finds, with their first comment line.", "(ls)"),
     doc("help-window", "LISP", "(help-window)", "Opens the help in a window of its own (also Ctrl-H): the functions, where we are and the scripts to load; a click on a green line copies it to the clipboard, ready to paste here with Ctrl-V.", "(help-window)"),
@@ -198,6 +199,26 @@ fn readable(code: &str) -> String {
         .collect()
 }
 
+/// The layers a `(layers bits)` switches on, in words.
+fn layer_names(bits: u8) -> String {
+    let names: Vec<&str> = [
+        (4, "coast"),
+        (1, "relief"),
+        (2, "isohypses"),
+        (8, "dots"),
+        (16, "ring"),
+    ]
+    .iter()
+    .filter(|(b, _)| bits & b != 0)
+    .map(|(_, n)| *n)
+    .collect();
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(" + ")
+    }
+}
+
 /// `(name arg ...)` as written, for the code strip.
 fn call_text(name: &str, args: &[Expr]) -> String {
     let mut text = format!("({name}");
@@ -216,7 +237,12 @@ where
 {
     let board = board.clone();
     def(it, name, move |a| {
-        board.send(&format!("!code {}", call_text(name, a)));
+        let mut shown = call_text(name, a);
+        if name == "layers" {
+            // what the bits mean, so the screen says what is going on
+            shown.push_str(&format!("  = {}", layer_names(n_of(a, 0) as u8)));
+        }
+        board.send(&format!("!code {shown}"));
         f(a)
     });
 }
@@ -459,6 +485,7 @@ pub struct UdpBoard {
     requests: Mutex<Sender<Request>>,
     /// The code line last shown: sent again now and then, the board lets a line expire (a script that went away).
     code: Mutex<String>,
+    note: Mutex<String>,
 }
 
 impl UdpBoard {
@@ -471,6 +498,7 @@ impl UdpBoard {
             abort,
             requests: Mutex::new(requests),
             code: Mutex::new(String::new()),
+            note: Mutex::new(String::new()),
         }
     }
 }
@@ -483,6 +511,9 @@ impl Board for UdpBoard {
         };
         if text.starts_with("!code") {
             *self.code.lock().unwrap() = text.to_string();
+        }
+        if text.starts_with("!note") {
+            *self.note.lock().unwrap() = text.to_string();
         }
         let _ = self.sock.send_to(text.as_bytes(), (ip, COMMAND_PORT));
         true
@@ -513,6 +544,10 @@ impl Board for UdpBoard {
                 let code = self.code.lock().unwrap().clone();
                 if code.len() > "!code".len() {
                     self.send(&code);
+                }
+                let note = self.note.lock().unwrap().clone();
+                if note.len() > "!note".len() {
+                    self.send(&note);
                 }
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -791,8 +826,13 @@ pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<E
             continue;
         }
         let shown = form.to_string();
-        let text: Vec<&str> = shown.split_whitespace().collect();
-        board.send(&format!("!code {}", readable(&text.join(" "))));
+        // (hold 2000) and (sleep 2000) wait: the line that ran before stays on the screen
+        let waits = matches!(form, Expr::List(items) if matches!(items.first(),
+            Some(Expr::Symbol(h)) if h.eq_ignore_ascii_case("hold") || h.eq_ignore_ascii_case("sleep")));
+        if !waits {
+            let text: Vec<&str> = shown.split_whitespace().collect();
+            board.send(&format!("!code {}", readable(&text.join(" "))));
+        }
         results.push(it.eval(form));
     }
     board.send("!code");
@@ -1198,6 +1238,18 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             Expr::Integer(total as i32)
         });
     }
+    {
+        let board = board.clone();
+        def(&mut it, "note", move |a| {
+            // a caption over the code line: (note "Layer 2: relief"); (note) or (note "") clears it
+            let text = match a.first() {
+                Some(Expr::String(t)) => t.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            };
+            flag(board.send(&format!("!note {text}")))
+        });
+    }
     def(&mut it, "pwd", |_| {
         let cwd =
             std::env::current_dir().map_or_else(|e| e.to_string(), |d| d.display().to_string());
@@ -1267,6 +1319,9 @@ fn worker(
                 it = interpreter(board.clone());
                 board.send("!code"); // the screen shows no line of a script that is not running
             }
+        }
+        if source.trim_start().to_lowercase().starts_with("(load") {
+            board.send("!note"); // a script ended: its caption goes with it
         }
         set_now("");
         pending.fetch_sub(1, Ordering::Relaxed);

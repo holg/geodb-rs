@@ -1090,6 +1090,60 @@ pub fn set_code(text: &str) {
     CODE_SEQ.fetch_add(1, Relaxed);
 }
 
+static NOTE: [core::sync::atomic::AtomicU8; NOTE_MAX] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; NOTE_MAX];
+static NOTE_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The longest caption (what a script says about what it does, ASCII).
+pub const NOTE_MAX: usize = 60;
+
+/// A caption above the running code line ("Layer 2: relief shading"); empty hides it. Not ASCII becomes `?`.
+pub fn set_note(text: &str) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let mut n = 0;
+    for c in text.chars().take(NOTE_MAX) {
+        NOTE[n].store(
+            if c.is_ascii() && !c.is_ascii_control() {
+                c as u8
+            } else {
+                b'?'
+            },
+            Relaxed,
+        );
+        n += 1;
+    }
+    NOTE_LEN.store(n, Relaxed);
+    CODE_SEQ.fetch_add(1, Relaxed);
+}
+
+/// The caption into `out`; returns its length.
+pub fn note_line(out: &mut [u8; NOTE_MAX]) -> usize {
+    use core::sync::atomic::Ordering::Relaxed;
+    let n = NOTE_LEN.load(Relaxed).min(NOTE_MAX);
+    for (o, c) in out.iter_mut().zip(NOTE.iter()).take(n) {
+        *o = c.load(Relaxed);
+    }
+    n
+}
+
+/// A caption packet for the mirror: `N` and the text. Returns its length.
+pub fn encode_note(out: &mut [u8; NOTE_MAX + 1]) -> usize {
+    let mut line = [0u8; NOTE_MAX];
+    let n = note_line(&mut line);
+    out[0] = b'N';
+    out[1..=n].copy_from_slice(&line[..n]);
+    n + 1
+}
+
+/// Puts a caption packet into force; false for anything else.
+pub fn decode_note(p: &[u8]) -> bool {
+    if p.first() != Some(&b'N') || p.len() > NOTE_MAX + 1 {
+        return false;
+    }
+    set_note(core::str::from_utf8(&p[1..]).unwrap_or(""));
+    true
+}
+
 /// Counts the changes of the code line.
 pub fn code_seq() -> u32 {
     CODE_SEQ.load(core::sync::atomic::Ordering::Relaxed)
@@ -1145,16 +1199,21 @@ pub fn code_rows() -> usize {
     code_line(&mut line).div_ceil(per_row).min(2)
 }
 
-/// The running code line over the foot of the screen: big enough to read in a video, two rows at most. It
-/// draws nothing when there is no line (the board redraws the whole screen when the strip shrinks).
+/// The rows of the whole strip: the caption (one row) and the code line (up to two).
+pub fn strip_rows() -> usize {
+    let mut note = [0u8; NOTE_MAX];
+    code_rows() + usize::from(note_line(&mut note) > 0)
+}
+
+/// The caption and the running code line over the foot of the screen: big enough to read in a video. The
+/// caption (yellow) says what the script does, the code line (green) is what runs, two rows at most. It
+/// draws nothing when there is neither (the board redraws the whole screen when the strip shrinks).
 pub fn draw_code(fb: &mut Fb<'_>) {
     let (x, bottom, w) = code_strip();
-    let rows = code_rows();
+    let rows = strip_rows();
     if rows == 0 {
         return;
     }
-    let mut line = [0u8; CODE_MAX];
-    let n = code_line(&mut line);
     let per_row = (((w - 8) / 16).max(1)) as usize;
     let h = rows as i32 * CODE_ROW + 4;
     let y = bottom - h;
@@ -1162,30 +1221,51 @@ pub fn draw_code(fb: &mut Fb<'_>) {
     for k in 0..w {
         fb.set(x + k, y, CODE_COLOR);
     }
-    for r in 0..rows {
-        let from = r * per_row;
-        let mut to = (from + per_row).min(n);
+    let mut row = 0;
+    // a row of text, cut with `..` when it does not fit
+    let mut put = |fb: &mut Fb<'_>, bytes: &[u8], color: u16, cut: bool| {
         let mut text = [0u8; 64];
-        let mut len = to - from;
-        text[..len].copy_from_slice(&line[from..to]);
-        if r + 1 == rows && n > rows * per_row {
-            // too long for two rows: the end is cut
-            to = from + per_row;
-            len = to - from;
-            text[..len].copy_from_slice(&line[from..to]);
+        let mut len = bytes.len().min(per_row).min(64);
+        text[..len].copy_from_slice(&bytes[..len]);
+        if cut && bytes.len() > per_row && len > 2 {
             text[len - 2..len].copy_from_slice(b"..");
         }
+        len = len.min(text.len());
         render::text(
             fb,
             x + 4,
-            y + 3 + r as i32 * CODE_ROW,
+            y + 3 + row * CODE_ROW,
             core::str::from_utf8(&text[..len]).unwrap_or(""),
             2,
+            color,
+        );
+        row += 1;
+    };
+    let mut note = [0u8; NOTE_MAX];
+    let nn = note_line(&mut note);
+    if nn > 0 {
+        put(fb, &note[..nn], NOTE_COLOR, true);
+    }
+    let mut line = [0u8; CODE_MAX];
+    let n = code_line(&mut line);
+    for r in 0..code_rows() {
+        let from = r * per_row;
+        let last = r + 1 == code_rows();
+        let to = if last {
+            n.min(from + per_row)
+        } else {
+            from + per_row
+        };
+        put(
+            fb,
+            &line[from..to],
             CODE_COLOR,
+            last && n > code_rows() * per_row,
         );
     }
 }
 
+const NOTE_COLOR: u16 = rgb565(255, 205, 90);
 const CODE_COLOR: u16 = rgb565(130, 220, 140);
 
 static FULLS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
@@ -1745,6 +1825,25 @@ mod tests {
         let n = code_line(&mut line);
         assert_eq!(&line[..n], b"(hop \"K?ln\" 5 5000)");
         assert!(!decode_code(b"V...."));
+        set_code("");
+    }
+
+    #[test]
+    fn the_caption_is_kept_and_sent_as_a_packet_and_counts_in_the_strip() {
+        let _g = crate::GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
+        set_code("");
+        set_note("Layer 2: relief");
+        let mut p = [0u8; NOTE_MAX + 1];
+        let n = encode_note(&mut p);
+        assert_eq!(&p[..n], b"NLayer 2: relief");
+        assert_eq!(strip_rows(), 1);
+        set_code("(layers 5)");
+        assert_eq!(strip_rows(), 2);
+        set_note("");
+        assert!(decode_note(&p[..n]));
+        assert_eq!(strip_rows(), 2);
+        assert!(!decode_note(b"V..."));
+        set_note("");
         set_code("");
     }
 

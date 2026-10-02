@@ -1,6 +1,7 @@
 ; The LAYERS button, pressed on the touch screen (taps, as a finger): lights the layers one by one
 ; and, once all are lit, switches them off one by one.
 (load "LIB.LSP")
+(note "The LAYERS button, tapped")
 (layers 0)
 (view 40 10 1)
 (spin T 12)

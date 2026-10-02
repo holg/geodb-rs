@@ -155,6 +155,7 @@ impl core::fmt::Write for Out {
 ///   its header and restarts
 /// * `!ota begin LEN CRC32HEX` -> erases the other slot; data chunks (`0x01`, offset u32 LE, bytes)
 ///   -> `!ota ack NEXT`; `!ota end` -> checks the CRC, marks the slot pending, restarts
+/// * `!note TEXT` -> a caption above it
 /// * `!code TEXT` -> the running line of a script, shown at the bottom (and broadcast to the mirror)
 /// * `!view LAT LON ZOOM`, `!spin on|off [DPS]`, `!layers N` -> scripting from the mirror's Lisp console
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
@@ -307,6 +308,12 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                 // the line of script code that is running (the strip at the bottom of the screen)
                 let rest = text.trim_start().strip_prefix("!code").unwrap_or("").trim();
                 geodb_fw_core::ui::set_code(rest);
+                INJ_CODE.store(true, Ordering::Relaxed);
+            }
+            Some("!note") => {
+                // a caption over the code line (what the script is doing)
+                let rest = text.trim_start().strip_prefix("!note").unwrap_or("").trim();
+                geodb_fw_core::ui::set_note(rest);
                 INJ_CODE.store(true, Ordering::Relaxed);
             }
             Some("!layers") => {

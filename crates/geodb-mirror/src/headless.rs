@@ -121,6 +121,9 @@ impl Sim {
                 ui::pan(&mut self.view, p.next().unwrap_or(0), p.next().unwrap_or(0));
             }
             Some("!release") => {}
+            Some("!note") => {
+                ui::set_note(text.trim_start().strip_prefix("!note").unwrap_or("").trim())
+            }
             Some("!code") => {
                 ui::set_code(text.trim_start().strip_prefix("!code").unwrap_or("").trim())
             }

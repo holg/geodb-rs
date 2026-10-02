@@ -243,7 +243,8 @@ impl Mirror {
                     board: self.board,
                 };
             } else {
-                ui::decode_code(&pkt[..n]); // the running line of a script
+                // the running line of a script, and its caption
+                let _ = ui::decode_code(&pkt[..n]) || ui::decode_note(&pkt[..n]);
             }
         }
         if self.board.is_some()

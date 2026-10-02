@@ -608,7 +608,7 @@ async fn main(spawner: Spawner) {
         if net::INJ_CODE.swap(false, core::sync::atomic::Ordering::Relaxed) {
             redraw = true; // (a quick frame redraws the strip; at rest this is a full frame)
                            // a strip that shrinks or goes leaves its old pixels: a full frame clears them
-            let rows = ui::code_rows();
+            let rows = ui::strip_rows();
             if rows < code_rows {
                 full = 2;
             }
@@ -618,6 +618,7 @@ async fn main(spawner: Spawner) {
         // a script that went away (the mirror closed, the network broke) leaves its line: it expires
         if code_rows > 0 && code_at.elapsed() >= Duration::from_secs(10) {
             ui::set_code("");
+            ui::set_note("");
             code_rows = 0;
             redraw = true;
             full = 2;
@@ -713,6 +714,13 @@ async fn main(spawner: Spawner) {
                     let _ = with_timeout(
                         Duration::from_millis(5),
                         socket.send_to(&line[..n], net::STATE_BROADCAST),
+                    )
+                    .await;
+                    let mut note = [0u8; ui::NOTE_MAX + 1];
+                    let n = ui::encode_note(&mut note);
+                    let _ = with_timeout(
+                        Duration::from_millis(5),
+                        socket.send_to(&note[..n], net::STATE_BROADCAST),
                     )
                     .await;
                 }
