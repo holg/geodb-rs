@@ -12,8 +12,8 @@
 //! Keys: R starts/stops a recording (an mp4 through `ffmpeg`, 30 fps, next to where you run it),
 //! S saves a png, Esc closes. Without packets (board off) the window shows the last view.
 
-use geodb_fw_core::render::{Fb, View};
-use geodb_fw_core::{ui, FwImage};
+use geodb_fw_core::render::{Fb, GlobeLut, LutCell, View};
+use geodb_fw_core::{scene, ui, FwImage};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use std::io::Write;
 use std::net::UdpSocket;
@@ -89,87 +89,34 @@ fn main() {
     let bytes =
         std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e} (make_image writes it)"));
     let img = FwImage::parse(&bytes).expect("image");
-    // the earth, rasterized from the image's coast as the board does it
-    let mut earth_px = vec![0u8; ui::EARTH_W * ui::EARTH_H * 2];
-    geodb_fw_core::coast::earth(
+    // the pictures, made by the very code the board runs (scene::Pictures); only the memory differs
+    let v = |n: usize| vec![0u8; n];
+    let (mut plain, mut shaded) = (
+        v(ui::EARTH_W * ui::EARTH_H * 2),
+        v(ui::EARTH_W * ui::EARTH_H * 2),
+    );
+    let (mut plain_mip, mut shaded_mip) = (
+        v(ui::EARTH_W * ui::EARTH_H / 2),
+        v(ui::EARTH_W * ui::EARTH_H / 2),
+    );
+    let (mut dem, mut work, mut scratch) = (v(1 << 20), v(geodb_fw_core::coast::WORK), v(8 << 20));
+    let mut pictures = scene::Pictures::build(
         &img,
-        ui::EARTH_W,
-        ui::EARTH_H,
-        &mut earth_px,
-        &mut vec![0u8; geodb_fw_core::coast::WORK],
-        &mut vec![0u8; 8 << 20],
-    )
-    .expect("rasterize the coast");
-    // the relief as the board applies it: shaded earth, the elevation picture for the contour lines (the
-    // plain earth is kept for the layer switch)
-    let plain_px = earth_px.clone();
-    let mut dem_px = Vec::new();
-    if let Some((packed, dw, dh)) = img.elev() {
-        dem_px = vec![0u8; dw * dh];
-        assert!(geodb_fw_core::relief::unpack(packed, dw, dh, &mut dem_px));
-        let dem = geodb_fw_core::relief::Dem {
-            w: dw,
-            h: dh,
-            px: &dem_px,
-        };
-        let mut shade = vec![0u8; dw * dh];
-        geodb_fw_core::relief::shade_field(&dem, ui::SHADE_EXAGGERATION, &mut shade);
-        geodb_fw_core::relief::apply_in_place(
-            &mut earth_px,
-            ui::EARTH_W,
-            ui::EARTH_H,
-            &shade,
-            dw,
-            dh,
-            ui::SHADE_STRENGTH,
-        );
-        ui::CONTOURS.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    // the half-size earth and its table, for the globe while it moves
-    let mut coarse_px = vec![0u8; ui::EARTH_W * ui::EARTH_H / 2];
-    geodb_fw_core::coast::halve(&earth_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_px);
-    let mut coarse_plain_px = vec![0u8; ui::EARTH_W * ui::EARTH_H / 2];
-    geodb_fw_core::coast::halve(&plain_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_plain_px);
-    // the strokes of a moving globe are baked into the coarse earth, as on the board (again when the layers
-    // change: in the loop)
-    fn dem_of(dem_px: &[u8]) -> Option<geodb_fw_core::relief::Dem<'_>> {
-        (!dem_px.is_empty()).then_some(geodb_fw_core::relief::Dem {
-            w: 1024,
-            h: 512,
-            px: dem_px,
-        })
-    }
-    {
-        let dem = dem_of(&dem_px);
-        let (w, h) = (ui::EARTH_W / 2, ui::EARTH_H / 2);
-        ui::bake_moving_layers(&mut coarse_px, w, h, &img, dem.as_ref());
-        ui::bake_moving_layers(&mut coarse_plain_px, w, h, &img, dem.as_ref());
-    }
-    let mut baked = ui::bake_signature();
-    let mut move_lut = geodb_fw_core::render::GlobeLut::new(Box::leak(
-        vec![geodb_fw_core::render::LutCell::EMPTY; ui::MOVE_LUT_CELLS].into_boxed_slice(),
-    ));
-    let earth = geodb_fw_core::render::Earth {
-        tex: geodb_fw_core::render::Texture {
-            w: ui::EARTH_W,
-            h: ui::EARTH_H,
-            px: &earth_px,
+        scene::Buffers {
+            plain: &mut plain,
+            shaded: &mut shaded,
+            plain_mip: &mut plain_mip,
+            shaded_mip: &mut shaded_mip,
+            dem: &mut dem,
+            work: &mut work,
+            scratch: &mut scratch,
         },
-        plain: Some(geodb_fw_core::render::Texture {
-            w: ui::EARTH_W,
-            h: ui::EARTH_H,
-            px: &plain_px,
-        }),
-        dem: (!dem_px.is_empty()).then_some(geodb_fw_core::relief::Dem {
-            w: 1024,
-            h: 512,
-            px: &dem_px,
-        }),
-    };
-    // As on the board: while the globe moves (it spins, or its view changed a moment ago) only the globe
-    // and the nearest cities are redrawn, from the coarse earth, without the coastline and contour
-    // strokes; at rest one full screen.
-    let (mut last_view, mut last_change) = (View::new(0.0, 0.0), Instant::now());
+        &mut || {},
+    )
+    .expect("the earth");
+    let leak = |n: usize| GlobeLut::new(Box::leak(vec![LutCell::EMPTY; n].into_boxed_slice()));
+    let mut luts = (leak(ui::LUT_CELLS), leak(ui::MOVE_LUT_CELLS));
+    // a quick frame is only drawn once a full one is there (the quick path does not repaint the whole screen)
     let mut have_full = false;
 
     let sock =
@@ -316,48 +263,19 @@ fn main() {
         if spin.on {
             ui::advance(&mut now_view, spin, stamp.elapsed().as_secs_f32().min(0.2));
         }
-        if view != last_view {
-            (last_view, last_change) = (view, Instant::now());
-        }
-        if ui::bake_signature() != baked {
-            geodb_fw_core::coast::halve(&earth_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_px);
-            geodb_fw_core::coast::halve(&plain_px, ui::EARTH_W, ui::EARTH_H, &mut coarse_plain_px);
-            let dem = dem_of(&dem_px);
-            let (w, h) = (ui::EARTH_W / 2, ui::EARTH_H / 2);
-            ui::bake_moving_layers(&mut coarse_px, w, h, &img, dem.as_ref());
-            ui::bake_moving_layers(&mut coarse_plain_px, w, h, &img, dem.as_ref());
-            baked = ui::bake_signature();
-        }
-        let moving = spin.on || last_change.elapsed() < Duration::from_millis(250);
-        let quick = moving && have_full;
+        // the same frame the board draws: quick while the board says its screen moves (the packet's flag)
+        pictures.rebake(&img, &mut || {});
         let mut fb = Fb { px: &mut buf, w, h };
-        // (the scope view has no quick frame: draw_moving says so and a full one is drawn, as on the board)
-        let drawn_quick = quick
-            && ui::draw_moving(
-                &mut fb,
-                &img,
-                now_view,
-                spin,
-                &mut move_lut,
-                &[],
-                &geodb_fw_core::render::Earth {
-                    tex: geodb_fw_core::render::Texture {
-                        w: ui::EARTH_W / 2,
-                        h: ui::EARTH_H / 2,
-                        px: &coarse_px,
-                    },
-                    plain: Some(geodb_fw_core::render::Texture {
-                        w: ui::EARTH_W / 2,
-                        h: ui::EARTH_H / 2,
-                        px: &coarse_plain_px,
-                    }),
-                    dem: dem_of(&dem_px),
-                },
-            );
-        if !drawn_quick {
-            ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);
-            have_full = true;
-        }
+        let quick = pictures.draw_frame(
+            &mut fb,
+            &img,
+            now_view,
+            spin,
+            &[],
+            ui::moving() && have_full,
+            &mut luts,
+        );
+        have_full |= !quick;
         // mouse over a city: its name next to the pointer (this window only; the board has no pointer)
         if let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) {
             ui::draw_tooltip(

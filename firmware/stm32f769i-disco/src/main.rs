@@ -26,7 +26,7 @@ use embassy_stm32::rng::{self, Rng};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, peripherals, Config};
 use embassy_time::{with_timeout, Duration, Instant, Timer};
-use geodb_fw_core::render::{GlobeLut, LutCell, Texture, View};
+use geodb_fw_core::render::{GlobeLut, LutCell, View};
 use geodb_fw_core::{geo, ui, FwImage, Hit};
 use panic_probe as _;
 use {defmt_rtt as _, embassy_stm32 as _};
@@ -54,36 +54,6 @@ const DEM_MAX: usize = 0x0008_0000;
 const WORK_AT: usize = EARTH_AT + 0x0050_0000;
 const SCRATCH_AT: usize = EARTH_AT + 0x0058_0000;
 const SCRATCH_LEN: usize = 0x0020_0000;
-
-/// The earth picture: full size for the screen at rest and at spin speed, half size while dragging.
-struct Earth<'a> {
-    full: Texture<'a>,
-    coarse: Texture<'a>,
-    /// The same two without the relief shading (the layers menu switches it off).
-    plain: Texture<'a>,
-    plain_coarse: Texture<'a>,
-    /// The elevation picture for the contour lines (when the image has one).
-    dem: Option<geodb_fw_core::relief::Dem<'a>>,
-}
-
-/// The earth pictures as the draw functions take them (made afresh each frame from the buffers, which
-/// the baking rewrites when the layers change).
-fn earth_of<'a>(
-    full: &'a [u8],
-    coarse: &'a [u8],
-    plain: &'a [u8],
-    plain_coarse: &'a [u8],
-    dem: Option<geodb_fw_core::relief::Dem<'a>>,
-) -> Earth<'a> {
-    let tex = |w: usize, h: usize, px: &'a [u8]| Texture { w, h, px };
-    Earth {
-        full: tex(ui::EARTH_W, ui::EARTH_H, full),
-        coarse: tex(ui::EARTH_W / 2, ui::EARTH_H / 2, coarse),
-        plain: tex(ui::EARTH_W, ui::EARTH_H, plain),
-        plain_coarse: tex(ui::EARTH_W / 2, ui::EARTH_H / 2, plain_coarse),
-        dem,
-    }
-}
 
 /// A tiny valid image (no coast, one city "No image"): what runs when the flash holds no usable city
 /// image (a new image format, an update that was cut off): the network and the updates keep working
@@ -322,119 +292,45 @@ async fn main(spawner: Spawner) {
         ),
     );
 
-    // ---- the earth: the coastline rings of the image rasterized into a 2048 x 1024 RGB565 picture
-    // (4 MB) in SDRAM, with a scratch area for the crossings behind it ----
+    // ---- the pictures the globe is drawn from: made by the shared `scene::Pictures` (the same code as in the
+    // mirror window), here in slices of the SDRAM windows (see `display::sdram_cached`) ----
     watchdog.pet();
-    let earth_px: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(
-            (display::SDRAM_BASE + EARTH_AT) as *mut u8,
-            ui::EARTH_W * ui::EARTH_H * 2,
-        )
+    let sdram = |at: usize, len: usize| -> &'static mut [u8] {
+        // SAFETY: each window is used by exactly one slice (the constants above keep them apart)
+        unsafe { core::slice::from_raw_parts_mut((display::SDRAM_BASE + at) as *mut u8, len) }
     };
-    let work: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(
-            (display::SDRAM_BASE + WORK_AT) as *mut u8,
-            geodb_fw_core::coast::WORK,
-        )
-    };
-    let crossings: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut((display::SDRAM_BASE + SCRATCH_AT) as *mut u8, SCRATCH_LEN)
-    };
+    let (earth_len, mip_len) = (ui::EARTH_W * ui::EARTH_H * 2, ui::EARTH_W * ui::EARTH_H / 2);
     let t = Instant::now();
-    // (the hybrid: the image's Blue Marble colours under its vector coast; procedural colours when the
-    // image has no colour picture, as the placeholder)
-    let plain_px: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(
-            (display::SDRAM_BASE + PLAIN_AT) as *mut u8,
-            ui::EARTH_W * ui::EARTH_H * 2,
-        )
-    };
-    match geodb_fw_core::coast::earth(&img, ui::EARTH_W, ui::EARTH_H, plain_px, work, crossings) {
-        Ok(()) => info!(
-            "earth rasterized in {} ms ({})",
-            t.elapsed().as_millis(),
-            if img.marble().is_empty() {
-                "procedural"
-            } else {
-                "hybrid"
+    let mut pictures = match geodb_fw_core::scene::Pictures::build(
+        &img,
+        geodb_fw_core::scene::Buffers {
+            plain: sdram(PLAIN_AT, earth_len),
+            shaded: sdram(EARTH_AT, earth_len),
+            plain_mip: sdram(PLAIN_MIP_AT, mip_len),
+            shaded_mip: sdram(MIP_AT, mip_len),
+            dem: sdram(DEM_AT, DEM_MAX),
+            work: sdram(WORK_AT, geodb_fw_core::coast::WORK),
+            scratch: sdram(SCRATCH_AT, SCRATCH_LEN),
+        },
+        &mut || watchdog.pet(),
+    ) {
+        Ok(p) => p,
+        Err(_) => {
+            error!("the pictures of the earth cannot be made");
+            loop {
+                cortex_m::asm::wfi();
             }
-        ),
-        Err(_) => error!("the coastline does not rasterize"),
-    }
-    // the shaded earth starts as a copy of the plain one
-    earth_px.copy_from_slice(plain_px);
-    // the elevation picture: unpacked, turned into a shade field (in the scratch, free by now) that is
-    // mixed into the earth's colours; the picture itself stays for the contour lines
-    let mut dem_ref = None;
-    if let Some((packed, dw, dh)) = img.elev().filter(|&(_, w, h)| w * h <= DEM_MAX) {
-        let t = Instant::now();
-        let dem_px: &'static mut [u8] = unsafe {
-            core::slice::from_raw_parts_mut((display::SDRAM_BASE + DEM_AT) as *mut u8, dw * dh)
-        };
-        if geodb_fw_core::relief::unpack(packed, dw, dh, dem_px) {
-            watchdog.pet();
-            let dem = geodb_fw_core::relief::Dem {
-                w: dw,
-                h: dh,
-                px: &*dem_px,
-            };
-            let shade = &mut crossings[..dw * dh];
-            geodb_fw_core::relief::shade_field(&dem, ui::SHADE_EXAGGERATION, shade);
-            watchdog.pet();
-            geodb_fw_core::relief::apply_in_place(
-                earth_px,
-                ui::EARTH_W,
-                ui::EARTH_H,
-                shade,
-                dw,
-                dh,
-                ui::SHADE_STRENGTH,
-            );
-            ui::CONTOURS.store(true, core::sync::atomic::Ordering::Relaxed);
-            dem_ref = Some(dem);
-            info!(
-                "relief {}x{} unpacked and shaded in {} ms",
-                dw,
-                dh,
-                t.elapsed().as_millis()
-            );
-        } else {
-            error!("the elevation picture does not unpack");
         }
-    }
-    // the coarse earth (half size) for the globe while it moves
-    let mip_px: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(
-            (display::SDRAM_BASE + MIP_AT) as *mut u8,
-            ui::EARTH_W * ui::EARTH_H / 2,
-        )
     };
-    geodb_fw_core::coast::halve(earth_px, ui::EARTH_W, ui::EARTH_H, mip_px);
-    let plain_mip_px: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(
-            (display::SDRAM_BASE + PLAIN_MIP_AT) as *mut u8,
-            ui::EARTH_W * ui::EARTH_H / 2,
-        )
-    };
-    geodb_fw_core::coast::halve(plain_px, ui::EARTH_W, ui::EARTH_H, plain_mip_px);
-    watchdog.pet();
-    // The strokes of a moving globe are baked into the coarse earth (the vectors cost 35 to 70 ms a frame):
-    // again whenever the layers change (the loop below).
-    ui::bake_moving_layers(
-        mip_px,
-        ui::EARTH_W / 2,
-        ui::EARTH_H / 2,
-        &img,
-        dem_ref.as_ref(),
+    info!(
+        "earth and relief ready in {} ms ({})",
+        t.elapsed().as_millis(),
+        if img.marble().is_empty() {
+            "procedural"
+        } else {
+            "hybrid"
+        }
     );
-    ui::bake_moving_layers(
-        plain_mip_px,
-        ui::EARTH_W / 2,
-        ui::EARTH_H / 2,
-        &img,
-        dem_ref.as_ref(),
-    );
-    let mut baked = ui::bake_signature();
 
     // ---- the first screen ----
     let mut view = View::new(30.0, 10.0);
@@ -453,7 +349,7 @@ async fn main(spawner: Spawner) {
         0,
         status.as_str(),
         &extras,
-        &earth_of(&*earth_px, &*mip_px, &*plain_px, &*plain_mip_px, dem_ref),
+        &pictures,
     )
     .await;
     green.set_high();
@@ -693,15 +589,7 @@ async fn main(spawner: Spawner) {
             || vel.0.abs() + vel.1.abs() > STOP_PX_S
             || inj_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(80));
         // The layers changed: bake them into the coarse earth again (a few hundred ms, at rest only).
-        if !motion && grab.is_none() && ui::bake_signature() != baked {
-            watchdog.pet();
-            geodb_fw_core::coast::halve(earth_px, ui::EARTH_W, ui::EARTH_H, mip_px);
-            geodb_fw_core::coast::halve(plain_px, ui::EARTH_W, ui::EARTH_H, plain_mip_px);
-            let (w, h) = (ui::EARTH_W / 2, ui::EARTH_H / 2);
-            ui::bake_moving_layers(mip_px, w, h, &img, dem_ref.as_ref());
-            ui::bake_moving_layers(plain_mip_px, w, h, &img, dem_ref.as_ref());
-            baked = ui::bake_signature();
-            watchdog.pet();
+        if !motion && grab.is_none() && pictures.rebake(&img, &mut || watchdog.pet()) {
             full = 2;
         }
         if !motion && dirty {
@@ -745,6 +633,8 @@ async fn main(spawner: Spawner) {
                 ui::draw_status(&mut disp.fb[fb].fb(), line.as_str());
             }
         }
+        // what the mirror needs to draw the same kind of frame (quick or full) as this screen
+        ui::set_moving(motion || interact.flying());
         link::publish(&ui::encode_state(view, spin, fps));
         // the viewer on the host mirrors the screen from this: the view, a few bytes
         if net_state == 2
@@ -785,7 +675,7 @@ async fn main(spawner: Spawner) {
                 fps,
                 status.as_str(),
                 &extras,
-                &earth_of(&*earth_px, &*mip_px, &*plain_px, &*plain_mip_px, dem_ref),
+                &pictures,
             )
             .await;
             if quick {
@@ -843,42 +733,16 @@ async fn draw_and_show(
     fps: u32,
     status: &str,
     extras: &[ui::Extra],
-    earth: &Earth<'_>,
+    pictures: &geodb_fw_core::scene::Pictures<'_>,
 ) -> u32 {
     red.set_high();
     let back = 1 - *front;
     let cycles = DWT::cycle_count();
-    if quick {
-        let mut fb = disp.fb[back].fb();
-        ui::draw_moving(
-            &mut fb,
-            img,
-            view,
-            spin,
-            &mut lut.1,
-            extras,
-            &geodb_fw_core::render::Earth {
-                tex: earth.coarse,
-                plain: Some(earth.plain_coarse),
-                dem: earth.dem,
-            },
-        );
+    let mut fb = disp.fb[back].fb();
+    let was_quick = pictures.draw_frame(&mut fb, img, view, spin, extras, quick, lut);
+    if was_quick {
         ui::draw_fps(&mut fb, fps);
         ui::draw_status(&mut fb, status);
-    } else {
-        ui::draw(
-            &mut disp.fb[back].fb(),
-            img,
-            view,
-            spin,
-            Some(&mut lut.0),
-            extras,
-            &geodb_fw_core::render::Earth {
-                tex: earth.full,
-                plain: Some(earth.plain),
-                dem: earth.dem,
-            },
-        );
     }
     let ms = DWT::cycle_count().wrapping_sub(cycles) / 216_000;
     let ok = disp

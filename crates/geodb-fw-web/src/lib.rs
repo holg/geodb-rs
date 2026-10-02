@@ -95,8 +95,6 @@ struct Remote {
     age: f32,
     fps: u32,
     fresh: bool,
-    /// Seconds since the board's view last changed (it is "moving" until it has been still a while).
-    still: f32,
     /// A full screen was drawn, so quick frames may follow; the last frame was quick.
     have_full: bool,
     quick: bool,
@@ -431,18 +429,14 @@ pub extern "C" fn apply_state() -> i32 {
         match ui::decode_state(&b.packet) {
             Some((view, spin, fps, shared)) => {
                 ui::set_shared(shared); // the layers and the selected city are the board's
-                let (still, have_full, quick) = match b.remote {
-                    Some(old) if old.view == view => (old.still, old.have_full, old.quick),
-                    Some(old) => (0.0, old.have_full, old.quick),
-                    None => (1.0, false, false),
-                };
+                let (have_full, quick) =
+                    b.remote.map_or((false, false), |o| (o.have_full, o.quick));
                 b.remote = Some(Remote {
                     view,
                     spin,
                     age: 0.0,
                     fps,
                     fresh: true,
-                    still,
                     have_full,
                     quick,
                 });
@@ -717,18 +711,15 @@ impl Board {
             return 0;
         };
         r.age += dt;
-        r.still += dt;
-        // As on the board: while the globe moves (it spins, or its view changed a moment ago) only the
-        // globe and the nearest cities are redrawn, from the coarse earth, without the coastline and
-        // contour strokes; once it rests, one full screen.
-        let moving = r.spin.on || r.still < 0.25;
+        // As on the board: while its screen moves only the globe and the nearest cities are redrawn, from
+        // the coarse earth, without the strokes; once it rests, one full screen. The board says which
+        // (the packet's flag), so no guessing from the view here.
+        let moving = ui::moving();
         if !(r.fresh || r.spin.on || (r.quick && !moving)) {
             return 0;
         }
         r.fresh = false;
-        let quick = moving && r.have_full;
-        r.quick = quick;
-        r.have_full |= !quick;
+        let want_quick = moving && r.have_full;
         let r = *r;
         let mut view = r.view;
         ui::advance(&mut view, r.spin, r.age.min(0.2));
@@ -740,8 +731,9 @@ impl Board {
             w: ui::layout().width,
             h: ui::layout().height,
         };
-        if quick {
-            ui::draw_moving(
+        // (the scope view has no quick frame: draw_moving says so and a full one is drawn, as on the board)
+        let quick = want_quick
+            && ui::draw_moving(
                 &mut fb,
                 &self.img,
                 view,
@@ -754,7 +746,11 @@ impl Board {
                     dem,
                 },
             );
-        } else {
+        if let Some(rm) = self.remote.as_mut() {
+            rm.quick = quick;
+            rm.have_full |= !quick;
+        }
+        if !quick {
             ui::draw(
                 &mut fb,
                 &self.img,

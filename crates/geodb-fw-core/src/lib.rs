@@ -27,6 +27,7 @@ pub mod link;
 pub mod query;
 pub mod relief;
 pub mod render;
+pub mod scene;
 pub mod ui;
 
 pub use image::{FwImage, ImageError};

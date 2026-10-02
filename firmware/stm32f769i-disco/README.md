@@ -218,3 +218,12 @@ cities.
   the full frame at rest as before. Measured on the board while spinning: 32 fps at zoom 1 to 8 (16 ms at zoom 8),
   17 fps in the scope view (zoom 16: a full frame with the strokes, 53 ms; switch coastlines and isohypses off for
   32 fps there).
+
+## One code for the board and the mirror
+
+The earth the screen shows is made and drawn by `geodb_fw_core::scene` (`Pictures::build`, `rebake`,
+`draw_frame`); the board hands it slices of SDRAM, the `mirror` example vectors. Whether a frame is a quick
+one is the board's say: the state packet carries a "moving" flag (`ui::moving()`), so the mirror no longer
+guesses it. Do not add a second copy of earth preparation or frame choice to a host tool: put it in
+`scene.rs`/`ui.rs`. The `build` id in `!info` (hash of fw-core's sources) makes the mirror say when it
+was built from other code.
