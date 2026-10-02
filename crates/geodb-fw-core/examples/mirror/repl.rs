@@ -55,9 +55,9 @@ const HELP: &[&str] = &[
     "  (sleep ms)               wait (a script that sleeps never freezes the window)",
     "",
     "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)",
-    "  (find \"text\" [n])       cities matching: ((name state country lat lon) ...)",
-    "  (city \"name\")           the best match: (lat lon name country)",
-    "  (goto \"name\" [zoom])    fly the board to a city (zoom 6), returns its name",
+    "  (find \"text\" [n])       cities, states, countries matching: ((kind name state country lat lon) ...)",
+    "  (city \"name\")           the best match (a city, else a state or country): (lat lon name country)",
+    "  (goto \"name\" [zoom])    show a place on the board (zoom 6), returns its name",
     "  (nearest lat lon [n])    the n nearest cities: ((name country km lat lon) ...)",
     "  (here [n])               the n cities nearest to where the board looks",
     "  (country \"DE\")          (name capital region lat lon)",
@@ -134,8 +134,10 @@ fn text_of(a: &[Expr], i: usize) -> Option<&str> {
     }
 }
 
-/// The cities a text finds, best first: (name, state, country, lat, lon).
-fn find_cities(db: &Db, query: &str, limit: usize) -> Vec<(String, String, String, f64, f64)> {
+/// A place a text finds: cities, states and countries, best first: (kind, name, state, country, lat, lon).
+type Place = (&'static str, String, String, String, f64, f64);
+
+fn find_places(db: &Db, query: &str, limit: usize) -> Vec<Place> {
     db.smart_search(query)
         .into_iter()
         .filter_map(|hit| match hit.item {
@@ -144,13 +146,29 @@ fn find_cities(db: &Db, query: &str, limit: usize) -> Vec<(String, String, Strin
                 state,
                 country,
             } => Some((
+                "city",
                 city.name().to_string(),
                 state.name().to_string(),
                 country.name().to_string(),
                 city.lat()?,
                 city.lng()?,
             )),
-            _ => None,
+            SmartItem::State { state, country } => Some((
+                "state",
+                state.name().to_string(),
+                String::new(),
+                country.name().to_string(),
+                state.lat()?,
+                state.lng()?,
+            )),
+            SmartItem::Country(country) => Some((
+                "country",
+                country.name().to_string(),
+                String::new(),
+                String::new(),
+                country.lat()?,
+                country.lng()?,
+            )),
         })
         .take(limit)
         .collect()
@@ -174,32 +192,97 @@ fn nearest_cities(db: &Db, lat: f64, lon: f64, n: usize) -> Expr {
     )
 }
 
-fn interpreter(
-    snap: Arc<Mutex<Snapshot>>,
-    requests: Sender<Request>,
+/// The board a script drives: the real one over UDP, or a simulated one (the headless video writer).
+pub trait Board: Send + Sync {
+    /// A board command (`!view ...`, `!tap ...`); false when it could not be sent.
+    fn send(&self, text: &str) -> bool;
+    /// What the board shows now.
+    fn state(&self) -> Snapshot;
+    /// The board's `!info` line.
+    fn info(&self) -> Option<String>;
+    /// Lets `ms` pass (real time on the board, virtual and frame by frame in a video).
+    fn sleep(&self, ms: u64);
+    fn screenshot(&self, name: &str);
+}
+
+/// The real board, by UDP; its state comes from the state packets in `snap`.
+pub struct UdpBoard {
+    pub snap: Arc<Mutex<Snapshot>>,
+    sock: UdpSocket,
     abort: Arc<AtomicBool>,
-) -> Interpreter {
-    let sock = Arc::new(UdpSocket::bind(("0.0.0.0", 0)).expect("script socket"));
-    let _ = sock.set_read_timeout(Some(Duration::from_millis(600)));
-    let board = {
-        let snap = snap.clone();
-        move || snap.lock().unwrap().board
-    };
-    let send = {
-        let sock = sock.clone();
-        let board = board.clone();
-        move |text: String| -> Expr {
-            match board() {
-                Some(ip) => {
-                    let _ = sock.send_to(text.as_bytes(), (ip, COMMAND_PORT));
-                    Expr::T
-                }
-                None => Expr::Nil, // no packet heard yet: the board's address is not known
-            }
+    requests: Mutex<Sender<Request>>,
+}
+
+impl UdpBoard {
+    fn new(snap: Arc<Mutex<Snapshot>>, requests: Sender<Request>, abort: Arc<AtomicBool>) -> Self {
+        let sock = UdpSocket::bind(("0.0.0.0", 0)).expect("script socket");
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(600)));
+        UdpBoard {
+            snap,
+            sock,
+            abort,
+            requests: Mutex::new(requests),
         }
+    }
+}
+
+impl Board for UdpBoard {
+    fn send(&self, text: &str) -> bool {
+        // no packet heard yet: the board's address is not known
+        let Some(ip) = self.snap.lock().unwrap().board else {
+            return false;
+        };
+        let _ = self.sock.send_to(text.as_bytes(), (ip, COMMAND_PORT));
+        true
+    }
+
+    fn state(&self) -> Snapshot {
+        *self.snap.lock().unwrap()
+    }
+
+    fn info(&self) -> Option<String> {
+        let ip = self.snap.lock().unwrap().board?;
+        let _ = self.sock.send_to(b"!info", (ip, COMMAND_PORT));
+        let mut buf = [0u8; 300];
+        let (len, _) = self.sock.recv_from(&mut buf).ok()?;
+        Some(String::from_utf8_lossy(&buf[..len]).into_owned())
+    }
+
+    fn sleep(&self, ms: u64) {
+        let end = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < end {
+            if self.abort.load(Ordering::Relaxed) {
+                resume_unwind(Box::new(Interrupted));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn screenshot(&self, name: &str) {
+        let _ = self
+            .requests
+            .lock()
+            .unwrap()
+            .send(Request::Screenshot(name.into()));
+    }
+}
+
+fn flag(on: bool) -> Expr {
+    if on {
+        Expr::T
+    } else {
+        Expr::Nil
+    }
+}
+
+/// The interpreter with the board and geodb functions.
+pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
+    let send = {
+        let board = board.clone();
+        move |text: String| flag(board.send(&text))
     };
     let mut it = Interpreter::new();
-    let n = |a: &[Expr], i: usize| a.get(i).and_then(num).unwrap_or(0.0);
+    let n = n_of;
     {
         let send = send.clone();
         def(&mut it, "tap", move |a| {
@@ -244,40 +327,27 @@ fn interpreter(
         });
     }
     {
-        let abort = abort.clone();
+        let board = board.clone();
         def(&mut it, "sleep", move |a| {
-            let end = Instant::now() + Duration::from_millis(n(a, 0).max(0.0) as u64);
-            while Instant::now() < end {
-                if abort.load(Ordering::Relaxed) {
-                    resume_unwind(Box::new(Interrupted));
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            board.sleep(n(a, 0).max(0.0) as u64);
             Expr::T
         });
     }
     {
-        let (snap, sock, board) = (snap.clone(), sock.clone(), board.clone());
+        let board = board.clone();
         def(&mut it, "info", move |_| {
-            let _ = snap;
-            let Some(ip) = board() else { return Expr::Nil };
-            let _ = sock.send_to(b"!info", (ip, COMMAND_PORT));
-            let mut buf = [0u8; 300];
-            match sock.recv_from(&mut buf) {
-                Ok((len, _)) => Expr::String(String::from_utf8_lossy(&buf[..len]).into_owned()),
-                Err(_) => Expr::Nil,
-            }
+            board.info().map_or(Expr::Nil, Expr::String)
         });
     }
     {
-        let snap = snap.clone();
+        let board = board.clone();
         def(&mut it, "state", move |_| {
-            let s = *snap.lock().unwrap();
+            let s = board.state();
             Expr::List(vec![
                 Expr::Real(f64::from(s.view.lat)),
                 Expr::Real(f64::from(s.view.lon)),
                 Expr::Real(f64::from(s.view.zoom)),
-                if s.spin.on { Expr::T } else { Expr::Nil },
+                flag(s.spin.on),
                 Expr::Integer(s.fps as i32),
                 Expr::Integer(i32::from(s.options)),
             ])
@@ -294,34 +364,28 @@ fn interpreter(
         ("fps", |s| f64::from(s.fps)),
         ("spin-dps", |s| f64::from(s.spin.dps)),
     ] {
-        let snap = snap.clone();
-        def(&mut it, name, move |_| {
-            Expr::Real(get(&snap.lock().unwrap()))
-        });
+        let board = board.clone();
+        def(&mut it, name, move |_| Expr::Real(get(&board.state())));
     }
     {
-        let snap = snap.clone();
+        let board = board.clone();
         def(&mut it, "selected", move |_| {
-            snap.lock()
-                .unwrap()
+            board
+                .state()
                 .selected
                 .map_or(Expr::Nil, |i| Expr::Integer(i as i32))
         });
     }
     {
-        let snap = snap.clone();
+        let board = board.clone();
         def(&mut it, "layer-bits", move |_| {
-            Expr::Integer(i32::from(snap.lock().unwrap().options))
+            Expr::Integer(i32::from(board.state().options))
         });
     }
     {
-        let requests = Mutex::new(requests);
+        let board = board.clone();
         def(&mut it, "screenshot", move |a| {
-            let name = match a.first() {
-                Some(Expr::String(s)) => s.clone(),
-                _ => "board-script.png".into(),
-            };
-            let _ = requests.lock().unwrap().send(Request::Screenshot(name));
+            board.screenshot(text_of(a, 0).unwrap_or("board-script.png"));
             Expr::T
         });
     }
@@ -335,10 +399,11 @@ fn interpreter(
             };
             let n = a.get(1).and_then(num).map_or(8, |v| v as usize);
             Expr::List(
-                find_cities(db, q, n)
+                find_places(db, q, n)
                     .into_iter()
-                    .map(|(name, state, country, lat, lon)| {
+                    .map(|(kind, name, state, country, lat, lon)| {
                         Expr::List(vec![
+                            Expr::String(kind.into()),
                             Expr::String(name),
                             Expr::String(state),
                             Expr::String(country),
@@ -356,8 +421,8 @@ fn interpreter(
             let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
                 return Expr::Nil;
             };
-            match find_cities(db, q, 1).pop() {
-                Some((name, _, country, lat, lon)) => Expr::List(vec![
+            match find_places(db, q, 1).pop() {
+                Some((_, name, _, country, lat, lon)) => Expr::List(vec![
                     real(lat),
                     real(lon),
                     Expr::String(name),
@@ -374,8 +439,8 @@ fn interpreter(
                 return Expr::Nil;
             };
             let zoom = a.get(1).and_then(num).unwrap_or(6.0).max(1.0);
-            match find_cities(db, q, 1).pop() {
-                Some((name, _, _, lat, lon)) => {
+            match find_places(db, q, 1).pop() {
+                Some((_, name, _, _, lat, lon)) => {
                     send(format!("!view {lat} {lon} {zoom}"));
                     Expr::String(name)
                 }
@@ -397,12 +462,12 @@ fn interpreter(
         });
     }
     {
-        let (data, snap) = (data.clone(), snap.clone());
+        let (data, board) = (data.clone(), board.clone());
         def(&mut it, "here", move |a| {
             let Some(db) = dataset(&data) else {
                 return Expr::Nil;
             };
-            let view = snap.lock().unwrap().view;
+            let view = board.state().view;
             let n = a.first().and_then(num).map_or(5, |v| v as usize);
             nearest_cities(db, f64::from(view.lat), f64::from(view.lon), n)
         });
@@ -449,7 +514,8 @@ fn worker(
     code: Receiver<String>,
     done: Sender<()>,
 ) {
-    let mut it = interpreter(snap.clone(), requests.clone(), abort.clone());
+    let board: Arc<dyn Board> = Arc::new(UdpBoard::new(snap, requests, abort.clone()));
+    let mut it = interpreter(board.clone());
     while let Ok(source) = code.recv() {
         abort.store(false, Ordering::Relaxed);
         let run = catch_unwind(AssertUnwindSafe(|| it.run(&source)));
@@ -471,7 +537,7 @@ fn worker(
                         "error in the interpreter (state reset)"
                     }
                 );
-                it = interpreter(snap.clone(), requests.clone(), abort.clone());
+                it = interpreter(board.clone());
             }
         }
         let _ = done.send(());
@@ -540,7 +606,11 @@ mod tests {
             board: None,
         }));
         let (req, _requests) = channel();
-        let mut it = interpreter(snap, req, Arc::new(AtomicBool::new(false)));
+        let mut it = interpreter(Arc::new(UdpBoard::new(
+            snap,
+            req,
+            Arc::new(AtomicBool::new(false)),
+        )));
         let r = it.run(
             "(setq n 0) (repeat 3 (setq n (+ n 1)) (sleep 1)) (list n (lat) (zoom) (layer-bits))",
         );

@@ -15,6 +15,7 @@
 use geodb_fw_core::render::{Fb, GlobeLut, LutCell, View};
 use geodb_fw_core::{scene, ui, FwImage};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
+mod headless;
 mod repl;
 
 use std::io::Write;
@@ -42,7 +43,32 @@ fn rgb888(buf: &[u16]) -> Vec<u8> {
         .collect()
 }
 
-fn start_recording(name: &str) -> Option<Child> {
+/// The earth pictures for `img`, made by the code the board runs (scene::Pictures); only the memory differs.
+fn build_pictures(img: &FwImage<'_>) -> scene::Pictures<'static> {
+    let v = |n: usize| vec![0u8; n].leak();
+    let half = ui::EARTH_W * ui::EARTH_H / 2;
+    scene::Pictures::build(
+        img,
+        scene::Buffers {
+            plain: v(half * 4),
+            shaded: v(half * 4),
+            plain_mip: v(half),
+            shaded_mip: v(half),
+            dem: v(1 << 20),
+            work: v(geodb_fw_core::coast::WORK),
+            scratch: v(8 << 20),
+        },
+        &mut || {},
+    )
+    .expect("the earth")
+}
+
+fn make_luts() -> (GlobeLut<'static>, GlobeLut<'static>) {
+    let leak = |n: usize| GlobeLut::new(Box::leak(vec![LutCell::EMPTY; n].into_boxed_slice()));
+    (leak(ui::LUT_CELLS), leak(ui::MOVE_LUT_CELLS))
+}
+
+fn start_recording(name: &str, fps: u32) -> Option<Child> {
     Command::new("ffmpeg")
         .args([
             "-y",
@@ -55,9 +81,8 @@ fn start_recording(name: &str) -> Option<Child> {
             "-s",
         ])
         .arg(format!("{}x{}", ui::WIDTH, ui::HEIGHT))
-        .args([
-            "-r", "30", "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", name,
-        ])
+        .args(["-r", &fps.to_string()])
+        .args(["-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", name])
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| eprintln!("ffmpeg does not start: {e}"))
@@ -89,36 +114,34 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(1);
-    let bytes =
-        std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e} (make_image writes it)"));
-    let img = FwImage::parse(&bytes).expect("image");
-    // the pictures, made by the very code the board runs (scene::Pictures); only the memory differs
-    let v = |n: usize| vec![0u8; n];
-    let (mut plain, mut shaded) = (
-        v(ui::EARTH_W * ui::EARTH_H * 2),
-        v(ui::EARTH_W * ui::EARTH_H * 2),
-    );
-    let (mut plain_mip, mut shaded_mip) = (
-        v(ui::EARTH_W * ui::EARTH_H / 2),
-        v(ui::EARTH_W * ui::EARTH_H / 2),
-    );
-    let (mut dem, mut work, mut scratch) = (v(1 << 20), v(geodb_fw_core::coast::WORK), v(8 << 20));
-    let mut pictures = scene::Pictures::build(
-        &img,
-        scene::Buffers {
-            plain: &mut plain,
-            shaded: &mut shaded,
-            plain_mip: &mut plain_mip,
-            shaded_mip: &mut shaded_mip,
-            dem: &mut dem,
-            work: &mut work,
-            scratch: &mut scratch,
-        },
-        &mut || {},
-    )
-    .expect("the earth");
-    let leak = |n: usize| GlobeLut::new(Box::leak(vec![LutCell::EMPTY; n].into_boxed_slice()));
-    let mut luts = (leak(ui::LUT_CELLS), leak(ui::MOVE_LUT_CELLS));
+    // (kept for the whole run: the pictures borrow it)
+    let bytes: &'static [u8] = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("{path}: {e} (make_image writes it)"))
+        .leak();
+    let img = FwImage::parse(bytes).expect("image");
+    let mut pictures = build_pictures(&img);
+    let mut luts = make_luts();
+    if let Some(script) = args
+        .iter()
+        .position(|a| a == "--headless")
+        .and_then(|i| args.get(i + 1))
+    {
+        // no window and no board: the script drives a simulated board, frame by frame, into an mp4
+        let value = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .and_then(|i| args.get(i + 1))
+        };
+        headless::run(
+            img,
+            pictures,
+            luts,
+            script,
+            value("--out").map_or("demo.mp4", String::as_str),
+            value("--fps").and_then(|v| v.parse().ok()).unwrap_or(30),
+        );
+        return;
+    }
     // a quick frame is only drawn once a full one is there (the quick path does not repaint the whole screen)
     let mut have_full = false;
     let mut seen_fulls = ui::fulls();
@@ -407,7 +430,7 @@ fn main() {
                             .duration_since(std::time::UNIX_EPOCH)
                             .map_or(0, |d| d.as_secs())
                     );
-                    if let Some(child) = start_recording(&name) {
+                    if let Some(child) = start_recording(&name, 30) {
                         println!("recording to {name} (R stops)");
                         recording = Some((child, name));
                         next_frame = Instant::now();

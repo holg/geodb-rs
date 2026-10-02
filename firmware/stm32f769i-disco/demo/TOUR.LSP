@@ -1,0 +1,10 @@
+; A short tour of cities (name list at the top: change it).
+(load "LIB.LSP")
+(layers 95)
+(view 20 0 1)
+(foreach place '("Berlin" "Rome" "Cairo" "Nairobi" "Mumbai" "Singapore")
+  (hop place 5 4500)
+  (hold 1500))
+(fly 20 0 1 3000)
+(spin T 20)
+(hold 3000)

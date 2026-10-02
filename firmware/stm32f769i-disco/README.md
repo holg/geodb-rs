@@ -237,3 +237,11 @@ The mirror has a Lisp prompt in the terminal it runs in (AutoLISP, the `acadlisp
 `(view lat lon zoom) (spin T|nil [dps]) (layers bits) (tap x y) (drag dx dy) (release) (sleep ms)
 (state) (lat) (lon) (zoom) (fps) (selected) (info) (screenshot "f.png")`, e.g. a turn around the globe:
 `(setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))`.
+
+### The demo video, headless
+
+`cargo run --release -p geodb-fw-core --features lisp --example mirror -- --headless firmware/stm32f769i-disco/demo/DEMO.LSP --out demo.mp4 [--fps 30]`
+needs neither window nor board: the script drives a simulated board (the same `ui::Interact` and `scene::Pictures` code,
+always full frames) and every frame of its time goes to `ffmpeg`. `(sleep ms)` renders `ms` of video instead of waiting (the
+80 s demo takes about 7 s). `demo/`: `DEMO.LSP` (layers, the Alps, a trip round the world, reverse spin), `TOUR.LSP`
+(cities), `LAYERS.LSP` (the LAYERS button tapped), `LIB.LSP` (`(fly la lo zoom ms)`, `(hop "name" zoom ms)`).
