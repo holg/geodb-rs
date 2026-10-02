@@ -928,7 +928,7 @@ mod help_tests {
     fn help_takes_a_bare_name() {
         let call =
             bare_help(&acadlisp::parser::Parser::from_input("(help find)").parse_all()[0]).unwrap();
-        assert_eq!(call.to_string(), "(help \"find\")");
+        assert_eq!(call.to_string(), "(HELP \"FIND\")");
         assert!(
             bare_help(&acadlisp::parser::Parser::from_input("(help)").parse_all()[0]).is_none()
         );
