@@ -60,10 +60,11 @@ const HELP: &[&str] = &[
     "  (city \"name\")           the best match (a city, else a state or country): (lat lon name country)",
     "  (goto \"name\" [zoom])    show a place on the board (zoom 6), returns its name",
     "  (hop \"name\" [zoom ms])  a trip: out to the whole globe, across, in (zoom 5, 4000 ms)",
-    "  (nearest lat lon [n])    the n nearest cities: ((name country km lat lon) ...)",
+    "  (nearest lat lon [n])    the n nearest cities: ((name country km lat lon) ...); (nearest \"place\" [n]) too",
     "  (here [n])               the n cities nearest to where the board looks",
     "  (country \"DE\")          (name capital region lat lon)",
-    "  (distance la1 lo1 la2 lo2)    great-circle km",
+    "  (distance la1 lo1 la2 lo2)    great-circle km; or two places: (distance \"Olfen\" \"Munich\")",
+    "  (a call is (f arg arg), not f(arg): (find \"olfen\"), not (find(\"olfen\")))",
     "",
     "LISP (AutoLISP): setq defun repeat while if cond foreach list car cdr nth + - * / sin cos ... (load \"f.lsp\")",
     "",
@@ -212,6 +213,25 @@ fn find_places(db: &Db, query: &str, limit: usize) -> Vec<Place> {
         })
         .take(limit)
         .collect()
+}
+
+/// A position from what a script passes: a place name ("Olfen"), a result of `find` (one place or the list of
+/// them), of `city` ((lat lon ...)) or a plain (lat lon).
+fn position_of(db: &Db, e: &Expr) -> Option<(f64, f64)> {
+    match e {
+        Expr::String(name) => find_places(db, name, 1)
+            .pop()
+            .map(|(_, _, _, _, la, lo)| (la, lo)),
+        Expr::List(items) => match items.as_slice() {
+            // a `find` entry: (kind name state country lat lon)
+            [Expr::String(_), _, _, _, la, lo] => Some((num(la)?, num(lo)?)),
+            [la, lo, ..] if num(la).is_some() => Some((num(la)?, num(lo)?)),
+            // the list `find` returns: its first entry
+            [first @ Expr::List(_), ..] => position_of(db, first),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn nearest_cities(db: &Db, lat: f64, lon: f64, n: usize) -> Expr {
@@ -492,12 +512,20 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     {
         let data = data.clone();
         def(&mut it, "find", move |a| {
-            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+            let Some(q) = text_of(a, 0) else {
+                say("find wants a text: (find \"olfen\") (a call is (f arg), not f(arg))");
+                return Expr::Nil;
+            };
+            let Some(db) = dataset(&data) else {
                 return Expr::Nil;
             };
             let n = a.get(1).and_then(num).map_or(8, |v| v as usize);
+            let found = find_places(db, q, n);
+            if found.is_empty() {
+                say(&format!("nothing found for {q:?}"));
+            }
             Expr::List(
-                find_places(db, q, n)
+                found
                     .into_iter()
                     .map(|(kind, name, state, country, lat, lon)| {
                         Expr::List(vec![
@@ -555,8 +583,25 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             let Some(db) = dataset(&data) else {
                 return Expr::Nil;
             };
-            let n = a.get(2).and_then(num).map_or(5, |v| v as usize);
-            nearest_cities(db, n_of(a, 0), n_of(a, 1), n)
+            // (nearest lat lon [n]) or (nearest "place" [n])
+            let (pos, n) = if a.first().and_then(num).is_some() {
+                (
+                    Some((n_of(a, 0), n_of(a, 1))),
+                    a.get(2).and_then(num).map_or(5, |v| v as usize),
+                )
+            } else {
+                (
+                    a.first().and_then(|e| position_of(db, e)),
+                    a.get(1).and_then(num).map_or(5, |v| v as usize),
+                )
+            };
+            match pos {
+                Some((la, lo)) => nearest_cities(db, la, lo, n),
+                None => {
+                    say("nearest wants (lat lon [n]) or (\"place\" [n])");
+                    Expr::Nil
+                }
+            }
         });
     }
     {
@@ -614,14 +659,27 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             Expr::String(name)
         });
     }
-    def(&mut it, "distance", |a| {
-        real(haversine_distance(
-            n_of(a, 0),
-            n_of(a, 1),
-            n_of(a, 2),
-            n_of(a, 3),
-        ))
-    });
+    {
+        let data = data.clone();
+        def(&mut it, "distance", move |a| {
+            // (distance la1 lo1 la2 lo2), or two places: (distance "Olfen" "Munich"), (distance (city "x") (city "y"))
+            let ends = if a.len() >= 4 && a.iter().take(4).all(|e| num(e).is_some()) {
+                Some(((n_of(a, 0), n_of(a, 1)), (n_of(a, 2), n_of(a, 3))))
+            } else if a.len() == 2 {
+                dataset(&data)
+                    .and_then(|db| Some((position_of(db, &a[0])?, position_of(db, &a[1])?)))
+            } else {
+                None
+            };
+            match ends {
+                Some(((la1, lo1), (la2, lo2))) => real(haversine_distance(la1, lo1, la2, lo2)),
+                None => {
+                    say("distance wants 4 numbers or two places: (distance \"Olfen\" \"Munich\")");
+                    Expr::Nil
+                }
+            }
+        });
+    }
     def(&mut it, "help", |_| {
         for line in HELP {
             say(line);
@@ -755,5 +813,13 @@ mod tests {
             "{shown:?}"
         );
         assert!(shown[3].starts_with('"'), "{shown:?}");
+        // places as arguments: names, results of find and city
+        let r = it.run("(distance \"Ludinghausen\" \"Olfen\") (distance (find \"Olfen\") (city \"Munich\")) (car (car (nearest \"Olfen\" 1)))");
+        let d: Vec<String> = r.iter().map(|e| e.to_string()).collect();
+        println!("{d:?}");
+        assert!(
+            d[0] != "nil" && d[1] != "nil" && d[2].starts_with('"'),
+            "{d:?}"
+        );
     }
 }
