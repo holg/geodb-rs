@@ -65,6 +65,9 @@ pub struct Mirror {
     cursor: usize,
     history: Vec<String>,
     history_at: Option<usize>,
+    /// What was typed when the walk through the history began (only commands starting with it are visited).
+    history_prefix: String,
+    history_saved: String,
     /// How many lines the console is scrolled back (0: following the output).
     scroll: usize,
     console_rows: usize,
@@ -112,6 +115,24 @@ fn save_history_line(line: &str) {
         {
             let _ = writeln!(f, "{line}");
         }
+    }
+}
+
+/// One step of a history search: the history entry before (`up`) or after `at` that starts with `prefix`.
+/// `Some(Some(i))`: show entry i; `Some(None)`: back to what was typed; `None`: no such entry, stay.
+fn history_search(
+    history: &[String],
+    at: Option<usize>,
+    prefix: &str,
+    up: bool,
+) -> Option<Option<usize>> {
+    let hit = |i: &usize| history[*i].starts_with(prefix);
+    if up {
+        let before = at.unwrap_or(history.len());
+        (0..before).rev().find(hit).map(Some)
+    } else {
+        let from = at?;
+        Some((from + 1..history.len()).find(hit))
     }
 }
 
@@ -183,6 +204,8 @@ impl Mirror {
             cursor: 0,
             history: load_history(),
             history_at: None,
+            history_prefix: String::new(),
+            history_saved: String::new(),
             scroll: 0,
             console_rows: 8,
             console_cells: None,
@@ -427,22 +450,25 @@ impl Mirror {
         self.repl.run(line);
     }
 
+    /// Up/Down through the history like zsh's history-beginning-search: what is typed before the cursor
+    /// is a prefix, and only the commands that start with it are visited; Down past the newest gives
+    /// back what was typed.
     fn history_step(&mut self, up: bool) {
-        if self.history.is_empty() {
-            return;
+        if self.history_at.is_none() {
+            self.history_prefix = self.input[..self.cursor].iter().collect();
+            self.history_saved = self.input.iter().collect();
         }
-        let last = self.history.len() - 1;
-        self.history_at = match (self.history_at, up) {
-            (None, true) => Some(last),
-            (Some(i), true) => Some(i.saturating_sub(1)),
-            (Some(i), false) if i < last => Some(i + 1),
-            _ => None,
-        };
-        self.input = self
-            .history_at
-            .map_or(String::new(), |i| self.history[i].clone())
-            .chars()
-            .collect();
+        match history_search(&self.history, self.history_at, &self.history_prefix, up) {
+            Some(Some(i)) => {
+                self.history_at = Some(i);
+                self.input = self.history[i].chars().collect();
+            }
+            Some(None) => {
+                self.history_at = None;
+                self.input = self.history_saved.chars().collect();
+            }
+            None => return, // nothing (more) that starts like that
+        }
         self.cursor = self.input.len();
     }
 
@@ -451,6 +477,9 @@ impl Mirror {
             return Flow::Continue;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            self.history_at = None; // an edit ends the walk through the history
+        }
         match key.code {
             KeyCode::Char('q') if ctrl => {
                 self.send("!code");
@@ -763,4 +792,38 @@ impl App for Mirror {
 /// The view the app registers with scopekit.
 pub fn frame() -> SharedFrame {
     Arc::new(Mutex::new(Frame::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::history_search;
+
+    #[test]
+    fn up_and_down_visit_only_the_commands_that_start_like_the_typed_text() {
+        let h: Vec<String> = [
+            "(sleep 1)",
+            "(hop \"a\")",
+            "(state)",
+            "(find \"x\")",
+            "(setq i 0)",
+        ]
+        .map(String::from)
+        .to_vec();
+        // "(s": newest first, then older ones
+        let first = history_search(&h, None, "(s", true);
+        assert_eq!(first, Some(Some(4)));
+        let second = history_search(&h, Some(4), "(s", true);
+        assert_eq!(second, Some(Some(2)));
+        assert_eq!(history_search(&h, Some(2), "(s", true), Some(Some(0)));
+        // nothing older: stay
+        assert_eq!(history_search(&h, Some(0), "(s", true), None);
+        // down again, and past the newest back to the typed text
+        assert_eq!(history_search(&h, Some(0), "(s", false), Some(Some(2)));
+        assert_eq!(history_search(&h, Some(4), "(s", false), Some(None));
+        // nothing typed: every command
+        assert_eq!(history_search(&h, None, "", true), Some(Some(4)));
+        assert_eq!(history_search(&h, Some(4), "", true), Some(Some(3)));
+        // no match at all
+        assert_eq!(history_search(&h, None, "(zzz", true), None);
+    }
 }
