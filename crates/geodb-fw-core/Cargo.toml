@@ -11,26 +11,16 @@ publish = false
 default = []
 # The image builder (needs alloc); the reader and the renderer never do.
 std = []
-# The Lisp console of the mirror window (AutoLISP, the acadlisp crate); the mirror needs it.
-lisp = ["std", "dep:acadlisp", "dep:rustyline"]
 
 [dependencies]
-acadlisp = { git = "https://github.com/holg/acadlisp", branch = "main", default-features = false, optional = true }
-rustyline = { version = "17", default-features = false, optional = true }
 font8x8 = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 deunicode = { workspace = true }
 flate2 = { workspace = true }
-geodb-core = { path = "../geodb-core", default-features = false, features = ["compact", "json", "builder"] }
-minifb = "0.28"
+geodb-core = { path = "../geodb-core", default-features = false, features = ["compact"] }
 png = "0.18"
 
 [[example]]
 name = "make_image"
 required-features = ["std"]
-
-[[example]]
-name = "mirror"
-path = "examples/mirror/main.rs"
-required-features = ["std", "lisp"]

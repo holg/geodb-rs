@@ -1,6 +1,6 @@
-//! A Lisp prompt in the terminal the mirror was started from (AutoLISP, the `acadlisp` crate): type a form, Enter
-//! evaluates it. `(help)` lists the board functions, one a line. Ctrl-D (end of input) closes the prompt only; the
-//! window keeps running.
+//! The Lisp of the mirror (AutoLISP, the `acadlisp` crate): the interpreter with the board's and geodb's
+//! functions. The window's console feeds it lines; `(help)` lists the functions, one a line. The screen of the
+//! board (and of the mirror) shows the form or board command that runs, in a strip at the bottom (`!code`).
 //!
 //! The interpreter runs on its own thread, so a script with `(sleep ...)` never freezes the window. It drives the
 //! board with the same UDP commands the mouse sends (`!tap`, `!drag`, `!view`, `!spin`, `!layers`) and reads the
@@ -52,12 +52,14 @@ const HELP: &[&str] = &[
     "  (state)                  (lat lon zoom spinning fps layers); single: (lat) (lon) (zoom) (fps)",
     "  (selected) (layer-bits) (spin-dps)    more readings; (info) is the board's !info line",
     "  (screenshot \"f.png\")    the window as a png",
+    "  (fly lat lon zoom ms)    a smooth move of the view (ease in and out, the short way round)",
     "  (sleep ms)               wait (a script that sleeps never freezes the window)",
     "",
     "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)",
     "  (find \"text\" [n])       cities, states, countries matching: ((kind name state country lat lon) ...)",
     "  (city \"name\")           the best match (a city, else a state or country): (lat lon name country)",
     "  (goto \"name\" [zoom])    show a place on the board (zoom 6), returns its name",
+    "  (hop \"name\" [zoom ms])  a trip: out to the whole globe, across, in (zoom 5, 4000 ms)",
     "  (nearest lat lon [n])    the n nearest cities: ((name country km lat lon) ...)",
     "  (here [n])               the n cities nearest to where the board looks",
     "  (country \"DE\")          (name capital region lat lon)",
@@ -91,6 +93,29 @@ fn truthy(e: &Expr) -> bool {
     !matches!(e, Expr::Nil)
 }
 
+/// `(name arg ...)` as written, for the code strip.
+fn call_text(name: &str, args: &[Expr]) -> String {
+    let mut text = format!("({name}");
+    for a in args {
+        text.push(' ');
+        text.push_str(&a.to_string());
+    }
+    text.push(')');
+    text
+}
+
+/// A board command: the screen shows the call while it runs.
+fn defc<F>(it: &mut Interpreter, board: &Arc<dyn Board>, name: &'static str, f: F)
+where
+    F: Fn(&[Expr]) -> Expr + Send + Sync + 'static,
+{
+    let board = board.clone();
+    def(it, name, move |a| {
+        board.send(&format!("!code {}", call_text(name, a)));
+        f(a)
+    });
+}
+
 fn def<F>(it: &mut Interpreter, name: &str, f: F)
 where
     F: Fn(&[Expr]) -> Expr + Send + Sync + 'static,
@@ -101,21 +126,36 @@ where
 type Db = GeoDb<DefaultBackend>;
 type Dataset = Arc<OnceLock<Option<Db>>>;
 
+/// `GEODB_DATA`, else the one in an app bundle's Resources, else the repository's.
+fn dataset_path() -> String {
+    const FILE: &str = "countries+states+cities.json.gz";
+    if let Ok(p) = std::env::var("GEODB_DATA") {
+        return p;
+    }
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|e| Some(e.parent()?.parent()?.join("Resources").join(FILE)));
+    match bundled {
+        Some(p) if p.exists() => p.to_string_lossy().into_owned(),
+        _ => concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../geodb-core/data/countries+states+cities.json.gz"
+        )
+        .into(),
+    }
+}
+
 /// The dataset, loaded on first use (a few seconds; the binary cache next to it makes later starts faster).
 fn dataset(cell: &Dataset) -> Option<&Db> {
     cell.get_or_init(|| {
-        let path = std::env::var("GEODB_DATA").unwrap_or_else(|_| {
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../geodb-core/data/countries+states+cities.json.gz"
-            )
-            .into()
-        });
-        println!("loading the dataset {path} ...");
+        let path = dataset_path();
+        say(&format!("loading the dataset {path} ..."));
         match Db::load_from_path(&path, None) {
             Ok(db) => Some(db),
             Err(e) => {
-                println!("the dataset does not load: {e} (GEODB_DATA names the file)");
+                say(&format!(
+                    "the dataset does not load: {e} (GEODB_DATA names the file)"
+                ));
                 None
             }
         }
@@ -275,6 +315,50 @@ fn flag(on: bool) -> Expr {
     }
 }
 
+/// A smooth move of the view to (la, lo, zoom) in `ms`: the zoom changes geometrically, the longitude takes
+/// the short way, an ease in and out.
+fn fly(board: &dyn Board, la: f64, lo: f64, zoom: f64, ms: f64) {
+    let s = board.state();
+    let (la0, lo0, z0) = (
+        f64::from(s.view.lat),
+        f64::from(s.view.lon),
+        f64::from(s.view.zoom),
+    );
+    let mut dlo = lo - lo0;
+    if dlo > 180.0 {
+        dlo -= 360.0;
+    }
+    if dlo < -180.0 {
+        dlo += 360.0;
+    }
+    let steps = ((ms / 40.0) as u32).max(1);
+    for i in 1..=steps {
+        let u = f64::from(i) / f64::from(steps);
+        let k = u * u * (3.0 - 2.0 * u);
+        board.send(&format!(
+            "!view {} {} {}",
+            la0 + k * (la - la0),
+            lo0 + k * dlo,
+            z0 * (zoom / z0).powf(k)
+        ));
+        board.sleep(40);
+    }
+}
+
+/// Runs the forms of `source` one by one, the screen showing the one that runs; returns the results.
+pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<Expr> {
+    let forms = acadlisp::parser::Parser::from_input(source).parse_all();
+    let mut results = Vec::new();
+    for form in &forms {
+        let shown = form.to_string();
+        let text: Vec<&str> = shown.split_whitespace().collect();
+        board.send(&format!("!code {}", text.join(" ")));
+        results.push(it.eval(form));
+    }
+    board.send("!code");
+    results
+}
+
 /// The interpreter with the board and geodb functions.
 pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     let send = {
@@ -285,23 +369,23 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     let n = n_of;
     {
         let send = send.clone();
-        def(&mut it, "tap", move |a| {
+        defc(&mut it, &board, "tap", move |a| {
             send(format!("!tap {} {}", n(a, 0) as i32, n(a, 1) as i32))
         });
     }
     {
         let send = send.clone();
-        def(&mut it, "drag", move |a| {
+        defc(&mut it, &board, "drag", move |a| {
             send(format!("!drag {} {}", n(a, 0) as i32, n(a, 1) as i32))
         });
     }
     {
         let send = send.clone();
-        def(&mut it, "release", move |_| send("!release".into()));
+        defc(&mut it, &board, "release", move |_| send("!release".into()));
     }
     {
         let send = send.clone();
-        def(&mut it, "view", move |a| {
+        defc(&mut it, &board, "view", move |a| {
             send(format!(
                 "!view {} {} {}",
                 n(a, 0),
@@ -312,7 +396,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     }
     {
         let send = send.clone();
-        def(&mut it, "spin", move |a| {
+        defc(&mut it, &board, "spin", move |a| {
             let on = a.first().is_some_and(truthy);
             match a.get(1).and_then(num) {
                 Some(dps) => send(format!("!spin {} {dps}", if on { "on" } else { "off" })),
@@ -322,7 +406,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     }
     {
         let send = send.clone();
-        def(&mut it, "layers", move |a| {
+        defc(&mut it, &board, "layers", move |a| {
             send(format!("!layers {}", n(a, 0) as i32))
         });
     }
@@ -389,6 +473,20 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             Expr::T
         });
     }
+    // smooth moves (the demo scripts use them): the board gets a view every 40 ms, `sleep` in between
+    {
+        let board = board.clone();
+        defc(&mut it, &board.clone(), "fly", move |a| {
+            fly(
+                &*board,
+                n_of(a, 0),
+                n_of(a, 1),
+                n_of(a, 2).max(1.0),
+                n_of(a, 3),
+            );
+            Expr::T
+        });
+    }
     // the geodb-core functions
     let data: Dataset = Arc::new(OnceLock::new());
     {
@@ -434,7 +532,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     }
     {
         let (data, send) = (data.clone(), send.clone());
-        def(&mut it, "goto", move |a| {
+        defc(&mut it, &board, "goto", move |a| {
             let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
                 return Expr::Nil;
             };
@@ -445,7 +543,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
                     Expr::String(name)
                 }
                 None => {
-                    println!("no city matches {q:?}");
+                    say(&format!("no city matches {q:?}"));
                     Expr::Nil
                 }
             }
@@ -490,6 +588,32 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             }
         });
     }
+    {
+        let (data, board) = (data.clone(), board.clone());
+        defc(&mut it, &board.clone(), "hop", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                return Expr::Nil;
+            };
+            let z = a.get(1).and_then(num).unwrap_or(5.0).max(1.0);
+            let ms = a.get(2).and_then(num).unwrap_or(4000.0);
+            let Some((_, name, _, _, la, lo)) = find_places(db, q, 1).pop() else {
+                say(&format!("no place matches {q:?}"));
+                return Expr::Nil;
+            };
+            // out to the whole globe, across, in
+            let s = board.state();
+            fly(
+                &*board,
+                f64::from(s.view.lat),
+                f64::from(s.view.lon),
+                1.3,
+                ms * 0.25,
+            );
+            fly(&*board, la, lo, 1.3, ms * 0.35);
+            fly(&*board, la, lo, z, ms * 0.4);
+            Expr::String(name)
+        });
+    }
     def(&mut it, "distance", |a| {
         real(haversine_distance(
             n_of(a, 0),
@@ -500,7 +624,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
     });
     def(&mut it, "help", |_| {
         for line in HELP {
-            println!("{line}");
+            say(line);
         }
         Expr::T
     });
@@ -512,82 +636,85 @@ fn worker(
     requests: Sender<Request>,
     abort: Arc<AtomicBool>,
     code: Receiver<String>,
-    done: Sender<()>,
 ) {
     let board: Arc<dyn Board> = Arc::new(UdpBoard::new(snap, requests, abort.clone()));
     let mut it = interpreter(board.clone());
     while let Ok(source) = code.recv() {
         abort.store(false, Ordering::Relaxed);
-        let run = catch_unwind(AssertUnwindSafe(|| it.run(&source)));
+        let run = catch_unwind(AssertUnwindSafe(|| run_forms(&mut it, &*board, &source)));
         for line in it.output.drain(..) {
-            println!("{line}");
+            say(&line);
         }
         match run {
             Ok(results) => {
                 if let Some(last) = results.last() {
-                    println!("=> {last}");
+                    say(&format!("=> {last}"));
                 }
             }
             Err(e) => {
-                println!(
-                    "{}",
-                    if e.is::<Interrupted>() {
-                        "interrupted"
-                    } else {
-                        "error in the interpreter (state reset)"
-                    }
-                );
+                say(if e.is::<Interrupted>() {
+                    "interrupted"
+                } else {
+                    "error in the interpreter (state reset)"
+                });
                 it = interpreter(board.clone());
             }
         }
-        let _ = done.send(());
     }
 }
 
 pub struct Repl {
     to_worker: Sender<String>,
     requests: Receiver<Request>,
+    abort: Arc<AtomicBool>,
 }
 
 impl Repl {
     pub fn new(snap: Arc<Mutex<Snapshot>>) -> Repl {
         let (to_worker, code) = channel();
         let (req, requests) = channel();
-        let (done, finished) = channel();
         let abort = Arc::new(AtomicBool::new(false));
-        std::thread::spawn(move || worker(snap, req, abort, code, done));
-        // the prompt: reads lines from the terminal, one form at a time, and waits for each result
-        let lines = to_worker.clone();
-        std::thread::spawn(move || {
-            // line editing with history (cursor keys) from rustyline
-            let Ok(mut editor) = rustyline::DefaultEditor::new() else {
-                return;
-            };
-            println!("Lisp prompt (AutoLISP): (help) lists the board functions");
-            while let Ok(line) = editor.readline("lisp> ") {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let _ = editor.add_history_entry(line.as_str());
-                if lines.send(line).is_err() || finished.recv().is_err() {
-                    break;
-                }
-            }
-        });
+        {
+            let abort = abort.clone();
+            std::thread::spawn(move || worker(snap, req, abort, code));
+        }
         Repl {
             to_worker,
             requests,
+            abort,
         }
     }
 
-    /// Runs `source` as if typed (a script file at start-up).
-    pub fn run(&mut self, source: String) {
+    /// Evaluates `source` (one line typed, or a whole script) on the interpreter's thread; its output comes
+    /// through [`say`].
+    pub fn run(&self, source: String) {
         let _ = self.to_worker.send(source);
     }
 
+    /// Stops a script that is in a `(sleep ...)`.
+    pub fn interrupt(&self) {
+        self.abort.store(true, Ordering::Relaxed);
+    }
+
     /// A request for the window (a screenshot), if the script made one.
-    pub fn poll(&mut self) -> Option<Request> {
+    pub fn poll(&self) -> Option<Request> {
         self.requests.try_recv().ok()
+    }
+}
+
+type Sink = Box<dyn Fn(&str) + Send + Sync>;
+static SINK: Mutex<Option<Sink>> = Mutex::new(None);
+
+/// Where the console's output goes (the window's console panel); without one it goes to the terminal.
+pub fn set_sink(sink: impl Fn(&str) + Send + Sync + 'static) {
+    *SINK.lock().unwrap() = Some(Box::new(sink));
+}
+
+/// One line of console output.
+pub fn say(text: &str) {
+    match SINK.lock().unwrap().as_ref() {
+        Some(sink) => text.lines().for_each(sink),
+        None => println!("{text}"),
     }
 }
 

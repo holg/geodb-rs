@@ -403,6 +403,7 @@ async fn main(spawner: Spawner) {
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
     let mut last_state = Instant::now();
+    let (mut code_sent, mut last_code) = (ui::code_seq(), Instant::now());
     let mut last_tick = Instant::now();
     let mut inj_seen: Option<Instant> = None; // when a drag from the mirror last moved the globe
                                               // Both buffers need one full draw (panel, dots) before quick globe-only frames may reuse them.
@@ -602,6 +603,9 @@ async fn main(spawner: Spawner) {
                 full = 2;
             }
         }
+        if net::INJ_CODE.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            redraw = true; // (a quick frame redraws the strip; at rest this is a full frame)
+        }
         let layers = net::INJ_LAYERS.swap(0, core::sync::atomic::Ordering::Relaxed);
         if layers & (1 << 31) != 0 {
             ui::set_options(layers as u8 & 0x7f);
@@ -684,6 +688,18 @@ async fn main(spawner: Spawner) {
                     socket.send_to(&packet, net::STATE_BROADCAST),
                 )
                 .await;
+                // the running script line, when it changed (and now and then, a packet may be lost)
+                if ui::code_seq() != code_sent || last_code.elapsed() >= Duration::from_secs(2) {
+                    code_sent = ui::code_seq();
+                    last_code = Instant::now();
+                    let mut line = [0u8; ui::CODE_MAX + 1];
+                    let n = ui::encode_code(&mut line);
+                    let _ = with_timeout(
+                        Duration::from_millis(5),
+                        socket.send_to(&line[..n], net::STATE_BROADCAST),
+                    )
+                    .await;
+                }
             }
         }
         if ota::UPDATING_IMAGE.load(core::sync::atomic::Ordering::Relaxed) {

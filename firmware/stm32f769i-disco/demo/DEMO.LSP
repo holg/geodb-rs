@@ -1,5 +1,5 @@
 ; The demo video: the globe from the whole earth to a mountain, layer by layer, and a trip round it.
-;   cargo run --release -p geodb-fw-core --features lisp --example mirror -- --headless firmware/stm32f769i-disco/demo/DEMO.LSP --out demo.mp4
+;   cargo run --release -p geodb-mirror -- --headless firmware/stm32f769i-disco/demo/DEMO.LSP --out demo.mp4
 (load "LIB.LSP")
 
 ; 1. the bare earth, turning (natural direction)
@@ -28,7 +28,7 @@
 (hold 3500)
 
 ; 4. a trip round the world
-(foreach place '("Tokyo" "Sydney" "Cape Town" "Rio de Janeiro" "New York")
+(foreach place '("Tokyo" "Sydney" "Cape Town" "Rio de Janeiro" "New York" "trahe")
   (hop place 5 5000)
   (hold 1800))
 

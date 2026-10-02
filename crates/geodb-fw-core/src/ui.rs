@@ -405,6 +405,7 @@ pub fn draw_moving(
     fb.rect(c.0, c.1, c.2, c.3, BG);
     let shown = view.span() * EARTH_RADIUS_KM * 0.75 <= DOTS_MAX_KM;
     side_panel(fb, img, view, spin, extras, &nearest[..n], shown, None);
+    draw_code(fb);
     let t3 = ticks();
     PROFILE[0].store(t1.wrapping_sub(t0), core::sync::atomic::Ordering::Relaxed);
     PROFILE[1].store(
@@ -958,6 +959,7 @@ pub fn draw(
     if let Some((fx, fy)) = layout().footer {
         render::text(fb, fx, fy, detail, 1, DIM);
     }
+    draw_code(fb);
     n
 }
 
@@ -1060,6 +1062,108 @@ pub fn moving() -> bool {
 pub fn set_moving(on: bool) {
     MOVING.store(on, core::sync::atomic::Ordering::Relaxed);
 }
+
+/// The longest line of code the screen shows (ASCII).
+pub const CODE_MAX: usize = 120;
+static CODE: [core::sync::atomic::AtomicU8; CODE_MAX] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; CODE_MAX];
+static CODE_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static CODE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The line of script code that is running now, for the strip at the bottom of the screen (an empty text
+/// hides it). Not ASCII becomes `?`.
+pub fn set_code(text: &str) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let mut n = 0;
+    for c in text.chars().take(CODE_MAX) {
+        CODE[n].store(
+            if c.is_ascii() && !c.is_ascii_control() {
+                c as u8
+            } else {
+                b'?'
+            },
+            Relaxed,
+        );
+        n += 1;
+    }
+    CODE_LEN.store(n, Relaxed);
+    CODE_SEQ.fetch_add(1, Relaxed);
+}
+
+/// Counts the changes of the code line.
+pub fn code_seq() -> u32 {
+    CODE_SEQ.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// The code line into `out`; returns its length.
+pub fn code_line(out: &mut [u8; CODE_MAX]) -> usize {
+    use core::sync::atomic::Ordering::Relaxed;
+    let n = CODE_LEN.load(Relaxed).min(CODE_MAX);
+    for (o, c) in out.iter_mut().zip(CODE.iter()).take(n) {
+        *o = c.load(Relaxed);
+    }
+    n
+}
+
+/// A code packet for the mirror: `L` and the text. Returns its length.
+pub fn encode_code(out: &mut [u8; CODE_MAX + 1]) -> usize {
+    let mut line = [0u8; CODE_MAX];
+    let n = code_line(&mut line);
+    out[0] = b'L';
+    out[1..=n].copy_from_slice(&line[..n]);
+    n + 1
+}
+
+/// Puts a code packet into force; false for anything else.
+pub fn decode_code(p: &[u8]) -> bool {
+    if p.first() != Some(&b'L') || p.len() > CODE_MAX + 1 {
+        return false;
+    }
+    set_code(core::str::from_utf8(&p[1..]).unwrap_or(""));
+    true
+}
+
+/// Where the code strip goes: left of the side panel on the landscape screen, above the network line on
+/// the others.
+fn code_strip() -> (i32, i32, i32) {
+    let l = layout();
+    if l.status.0 >= 300 {
+        (0, l.height as i32 - 12, l.status.0 - 6)
+    } else {
+        (0, l.status.1 - 12, l.width as i32)
+    }
+}
+
+/// The strip with the running code line at the bottom of the screen (cleared when there is none).
+pub fn draw_code(fb: &mut Fb<'_>) {
+    let (x, y, w) = code_strip();
+    fb.rect(x, y, w, 11, BG);
+    let mut line = [0u8; CODE_MAX];
+    let n = code_line(&mut line);
+    if n == 0 {
+        return;
+    }
+    let room = (((w - 12) / 8).max(0) as usize).min(CODE_MAX);
+    let mut text = [0u8; CODE_MAX + 4];
+    text[..2].copy_from_slice(b"> ");
+    let shown = n.min(room);
+    text[2..2 + shown].copy_from_slice(&line[..shown]);
+    let mut len = 2 + shown;
+    if n > room && room > 2 {
+        text[len - 2..len].copy_from_slice(b"..");
+    }
+    len = len.min(text.len());
+    render::text(
+        fb,
+        x + 2,
+        y + 1,
+        core::str::from_utf8(&text[..len]).unwrap_or(""),
+        1,
+        CODE_COLOR,
+    );
+}
+
+const CODE_COLOR: u16 = rgb565(130, 220, 140);
 
 static FULLS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
@@ -1601,6 +1705,24 @@ mod tests {
         });
         assert_eq!(decode_state(&p[..10]), None);
         assert_eq!(decode_state(b"#hello hello hello"), None);
+    }
+
+    #[test]
+    fn the_code_line_is_kept_cut_to_ascii_and_sent_as_a_packet() {
+        let _g = crate::GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = code_seq();
+        set_code("(hop \"Köln\" 5 5000)");
+        assert_eq!(code_seq(), seq + 1);
+        let mut p = [0u8; CODE_MAX + 1];
+        let n = encode_code(&mut p);
+        assert_eq!(&p[..n], b"L(hop \"K?ln\" 5 5000)");
+        set_code("");
+        assert!(decode_code(&p[..n]));
+        let mut line = [0u8; CODE_MAX];
+        let n = code_line(&mut line);
+        assert_eq!(&line[..n], b"(hop \"K?ln\" 5 5000)");
+        assert!(!decode_code(b"V...."));
+        set_code("");
     }
 
     #[test]

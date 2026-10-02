@@ -1,0 +1,20 @@
+[package]
+name = "geodb-mirror"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Mirror of the STM32F769I-DISCO board in a window (scopekit): the board's screen, a Lisp console that scripts it, and a headless mp4 writer for demo videos"
+publish = false
+
+[[bin]]
+name = "geodb-mirror"
+path = "src/main.rs"
+
+[dependencies]
+acadlisp = { git = "https://github.com/holg/acadlisp", branch = "main", default-features = false }
+geodb-core = { path = "../geodb-core", default-features = false, features = ["compact", "json", "builder"] }
+geodb-fw-core = { path = "../geodb-fw-core", features = ["std"] }
+png = "0.18"
+# Published on crates.io, like geodb-globe's (the same wgpu 30).
+scopekit = "0.1"

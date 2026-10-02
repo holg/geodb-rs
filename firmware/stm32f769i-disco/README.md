@@ -228,20 +228,26 @@ guesses it. Do not add a second copy of earth preparation or frame choice to a h
 `scene.rs`/`ui.rs`. The `build` id in `!info` (hash of fw-core's sources) makes the mirror say when it
 was built from other code.
 
-## Scripting the board from the mirror (Lisp)
+## The mirror app, its Lisp console and the demo video (`crates/geodb-mirror`)
 
-The mirror has a Lisp prompt in the terminal it runs in (AutoLISP, the `acadlisp` crate): `cargo run --release -p geodb-fw-core
---features lisp --example mirror [--script file.lsp]`. Type `(help)` there. A script runs on its own thread
-(`(sleep ms)` does not freeze the window) and drives the board with UDP commands:
-`!view LAT LON ZOOM`, `!spin on|off [DPS]`, `!layers BITS`, plus the touch commands. Functions:
-`(view lat lon zoom) (spin T|nil [dps]) (layers bits) (tap x y) (drag dx dy) (release) (sleep ms)
-(state) (lat) (lon) (zoom) (fps) (selected) (info) (screenshot "f.png")`, e.g. a turn around the globe:
-`(setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))`.
+`cargo run --release -p geodb-mirror [geodb.fw] [--script f.lsp]` opens a window (scopekit; `--terminal` runs it in a
+terminal that shows images): the board's screen, drawn by the very code the board runs from its state packets, and under it a
+Lisp console (AutoLISP, the `acadlisp` crate) that scripts the board. Mouse: click = tap, drag = pan, wheel = zoom, hover =
+city tooltip. Keys: Enter runs the line, Up/Down history, Ctrl-C stops a script, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits.
+As a macOS app: `crates/geodb-mirror/scripts/bundle-mac.sh` builds `target/bundle/GeoDB Mirror.app` (image, dataset and demo
+scripts inside; ad-hoc signed).
+
+A script runs on its own thread (`(sleep ms)` does not freeze the window) and drives the board with UDP commands:
+`!view LAT LON ZOOM`, `!spin on|off [DPS]`, `!layers BITS`, `!code TEXT`, plus the touch commands. `(help)` lists the functions
+(the board, `(fly ...)`, `(hop "name" ...)`, and geodb-core's `(find ...) (city ...) (goto ...) (nearest ...) (country ...)`).
+**The screen of the board and of the mirror shows the line of code that runs** in a strip at the bottom (the form being
+evaluated, or the board command with its arguments): the mirror sends it as `!code`, the board draws it and broadcasts it (UDP
+7881, a packet starting with `L`), so both screens show the same.
 
 ### The demo video, headless
 
-`cargo run --release -p geodb-fw-core --features lisp --example mirror -- --headless firmware/stm32f769i-disco/demo/DEMO.LSP --out demo.mp4 [--fps 30]`
+`cargo run --release -p geodb-mirror -- --headless firmware/stm32f769i-disco/demo/DEMO.LSP --out demo.mp4 [--fps 30]`
 needs neither window nor board: the script drives a simulated board (the same `ui::Interact` and `scene::Pictures` code,
-always full frames) and every frame of its time goes to `ffmpeg`. `(sleep ms)` renders `ms` of video instead of waiting (the
-80 s demo takes about 7 s). `demo/`: `DEMO.LSP` (layers, the Alps, a trip round the world, reverse spin), `TOUR.LSP`
-(cities), `LAYERS.LSP` (the LAYERS button tapped), `LIB.LSP` (`(fly la lo zoom ms)`, `(hop "name" zoom ms)`).
+always full frames) and every frame of its time goes to `ffmpeg`. `(sleep ms)` and the moves render their time as video instead
+of waiting (the 80 s demo takes about 7 s). `demo/`: `DEMO.LSP` (layers, the Alps, a trip round the world, reverse spin),
+`TOUR.LSP` (cities), `LAYERS.LSP` (the LAYERS button tapped), `LIB.LSP`.

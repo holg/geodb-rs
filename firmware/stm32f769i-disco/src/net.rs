@@ -72,7 +72,7 @@ pub fn open_socket(stack: Stack<'static>) -> Option<UdpSocket<'static>> {
     Some(socket)
 }
 
-/// UDP port of the state packets for the viewer (`cargo run --example mirror`).
+/// UDP port of the state packets for the viewer (`cargo run -p geodb-mirror`).
 pub const STATE_PORT: u16 = 7881;
 pub const STATE_BROADCAST: (Ipv4Addr, u16) = (Ipv4Addr::BROADCAST, STATE_PORT);
 
@@ -117,6 +117,8 @@ pub static INJ_SPIN_DPS: core::sync::atomic::AtomicU32 = core::sync::atomic::Ato
 pub static INJ_SPIN: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 /// Bit 31 set: the layer options byte in the low bits.
 pub static INJ_LAYERS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// A `!code` line came in: the screen draws it.
+pub static INJ_CODE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub static INJ_RELEASE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// The frame rate main.rs measures, for `!info`.
@@ -153,6 +155,7 @@ impl core::fmt::Write for Out {
 ///   its header and restarts
 /// * `!ota begin LEN CRC32HEX` -> erases the other slot; data chunks (`0x01`, offset u32 LE, bytes)
 ///   -> `!ota ack NEXT`; `!ota end` -> checks the CRC, marks the slot pending, restarts
+/// * `!code TEXT` -> the running line of a script, shown at the bottom (and broadcast to the mirror)
 /// * `!view LAT LON ZOOM`, `!spin on|off [DPS]`, `!layers N` -> scripting from the mirror's Lisp console
 /// * `!reset` -> restarts the board (after `!reset`), no ST-LINK needed
 #[embassy_executor::task]
@@ -299,6 +302,12 @@ pub async fn command_task(stack: Stack<'static>, mut ota: crate::ota::Ota) -> ! 
                     INJ_SPIN_DPS.store(dps.to_bits(), Ordering::Relaxed);
                 }
                 INJ_SPIN.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+            }
+            Some("!code") => {
+                // the line of script code that is running (the strip at the bottom of the screen)
+                let rest = text.trim_start().strip_prefix("!code").unwrap_or("").trim();
+                geodb_fw_core::ui::set_code(rest);
+                INJ_CODE.store(true, Ordering::Relaxed);
             }
             Some("!layers") => {
                 let n: u32 = words.next().and_then(|v| v.parse().ok()).unwrap_or(0);

@@ -17,6 +17,7 @@ members = [
     "crates/geodb-fw-core",
     "crates/geodb-fw-web",
     "crates/geodb-globe",
+    "crates/geodb-mirror",
     "crates/geodb-py",
     "crates/geodb-wasm",
 ]

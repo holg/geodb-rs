@@ -3,7 +3,7 @@
 //! wait, it renders `ms` worth of frames. The simulated board runs the very code of the real one (the same
 //! `ui::Interact` for taps and flights, the same `scene::Pictures` for the earth), but always draws full frames.
 //!
-//!   cargo run --release -p geodb-fw-core --features lisp --example mirror -- --headless demo.lsp \
+//!   cargo run --release -p geodb-mirror -- --headless demo.lsp \
 //!       [--out demo.mp4] [--fps 30]
 
 use crate::repl::{self, Board, Snapshot};
@@ -41,7 +41,7 @@ impl Sim {
         }
         self.draw();
         if let Some(stdin) = self.video.as_mut().and_then(|c| c.stdin.as_mut()) {
-            let _ = stdin.write_all(&crate::rgb888(&self.buf));
+            let _ = stdin.write_all(&crate::util::rgb888(&self.buf));
         }
         self.frames += 1;
     }
@@ -121,6 +121,9 @@ impl Sim {
                 ui::pan(&mut self.view, p.next().unwrap_or(0), p.next().unwrap_or(0));
             }
             Some("!release") => {}
+            Some("!code") => {
+                ui::set_code(text.trim_start().strip_prefix("!code").unwrap_or("").trim())
+            }
             _ => return false,
         }
         true
@@ -177,7 +180,7 @@ impl Board for SimBoard {
                 enc.set_depth(png::BitDepth::Eight);
                 let ok = enc
                     .write_header()
-                    .and_then(|mut w| w.write_image_data(&crate::rgb888(&s.buf)));
+                    .and_then(|mut w| w.write_image_data(&crate::util::rgb888(&s.buf)));
                 match ok {
                     Ok(()) => println!("saved {name}"),
                     Err(e) => println!("{name}: {e}"),
@@ -206,7 +209,7 @@ pub fn run(
     }
     let source =
         std::fs::read_to_string(&script).unwrap_or_else(|e| panic!("{}: {e}", script.display()));
-    let video = crate::start_recording(out, fps);
+    let video = crate::util::start_recording(out, fps);
     if video.is_none() {
         eprintln!("no ffmpeg: nothing is written (the script still runs)");
     }
@@ -226,7 +229,7 @@ pub fn run(
     })));
     let mut it = repl::interpreter(sim.clone());
     let started = std::time::Instant::now();
-    let results = it.run(&source);
+    let results = repl::run_forms(&mut it, &*sim, &source);
     for line in it.output.drain(..) {
         println!("{line}");
     }
@@ -241,6 +244,6 @@ pub fn run(
         started.elapsed().as_secs_f32()
     );
     if let Some(child) = s.video.take() {
-        crate::stop_recording(child, out);
+        crate::util::stop_recording(child, out);
     }
 }
