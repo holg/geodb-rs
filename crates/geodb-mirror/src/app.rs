@@ -77,6 +77,44 @@ pub struct Mirror {
     notice: String,
 }
 
+/// The history file, one command a line like zsh's: `$GEODB_MIRROR_HISTORY`, else `~/.geodb_mirror_history`.
+fn history_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("GEODB_MIRROR_HISTORY")
+        .map(Into::into)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".geodb_mirror_history"))
+        })
+}
+
+/// The last 2000 commands of earlier sessions (without repeats in a row): Up finds them at once.
+fn load_history() -> Vec<String> {
+    let Some(text) = history_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for l in text.lines().filter(|l| !l.trim().is_empty()) {
+        if lines.last().map(String::as_str) != Some(l) {
+            lines.push(l.to_string());
+        }
+    }
+    let excess = lines.len().saturating_sub(2000);
+    lines.drain(..excess);
+    lines
+}
+
+fn save_history_line(line: &str) {
+    use std::io::Write;
+    if let Some(path) = history_path() {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 impl Mirror {
     pub fn new(
         img: FwImage<'static>,
@@ -142,7 +180,7 @@ impl Mirror {
             incoming: Arc::new(Mutex::new(Vec::new())),
             input: Vec::new(),
             cursor: 0,
-            history: Vec::new(),
+            history: load_history(),
             history_at: None,
             scroll: 0,
             console_rows: 8,
@@ -377,6 +415,7 @@ impl Mirror {
         self.lines.push(format!("> {line}"));
         if self.history.last() != Some(&line) {
             self.history.push(line.clone());
+            save_history_line(&line);
         }
         self.repl.run(line);
     }

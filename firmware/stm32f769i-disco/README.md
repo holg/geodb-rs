@@ -233,7 +233,7 @@ was built from other code.
 `cargo run --release -p geodb-mirror [geodb.fw] [--script f.lsp]` opens a window (scopekit; `--terminal` runs it in a
 terminal that shows images): the board's screen, drawn by the very code the board runs from its state packets, and under it a
 Lisp console (AutoLISP, the `acadlisp` crate) that scripts the board. Mouse: click = tap, drag = pan, wheel = zoom, hover =
-city tooltip. The help opens in a window of its own (click `[Help]` in the status line, F1, Ctrl-H or `(help-window)`; `--help-window` from the command line): where we are, the scripts to load, every function with examples that a click copies. Keys: Enter runs the line, Up/Down history, Ctrl-C stops a script, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits.
+city tooltip. The help opens in a window of its own (click `[Help]` in the status line, F1, Ctrl-H or `(help-window)`; `--help-window` from the command line): where we are, the scripts to load, every function with examples that a click copies. Keys: Enter runs the line, Up/Down history (kept in `~/.geodb_mirror_history`, one command a line, or `$GEODB_MIRROR_HISTORY`), Ctrl-C stops a script, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits.
 As a macOS app: `crates/geodb-mirror/scripts/bundle-mac.sh` builds `target/bundle/GeoDB Mirror.app` (image, dataset and demo
 scripts inside; ad-hoc signed).
 
