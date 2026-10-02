@@ -43,38 +43,106 @@ pub enum Request {
     Screenshot(String),
 }
 
-const HELP: &[&str] = &[
-    "THE BOARD",
-    "  (view lat lon zoom)      set the view (zoom 1 = the whole globe, 4000 = street)",
-    "  (spin T|nil [dps])       spin on / off, optional speed (negative: the other way)",
-    "  (layers bits)            1 relief, 2 isohypses, 4 coast, 8 dots, 16 ring (+64 direction)",
-    "  (tap x y)                a touch at screen x y (800 x 480); (drag dx dy) (release)",
-    "  (state)                  (lat lon zoom spinning fps layers); single: (lat) (lon) (zoom) (fps)",
-    "  (selected) (layer-bits) (spin-dps)    more readings; (info) is the board's !info line",
-    "  (screenshot \"f.png\")    the window as a png",
-    "  (fly lat lon zoom ms)    a smooth move of the view (ease in and out, the short way round)",
-    "  (sleep ms)               wait (a script that sleeps never freezes the window)",
-    "",
-    "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)",
-    "  (find \"text\" [n])       cities, states, countries matching: ((kind name state country lat lon) ...)",
-    "  (city \"name\")           the best match (a city, else a state or country): (lat lon name country)",
-    "  (goto \"name\" [zoom])    show a place on the board (zoom 6), returns its name",
-    "  (hop \"name\" [zoom ms])  a trip: out to the whole globe, across, in (zoom 5, 4000 ms)",
-    "  (nearest lat lon [n])    the n nearest cities: ((name country km lat lon) ...); (nearest \"place\" [n]) too",
-    "  (here [n])               the n cities nearest to where the board looks",
-    "  (country \"DE\")          (name capital region lat lon)",
-    "  (distance la1 lo1 la2 lo2)    great-circle km; or two places: (distance \"Olfen\" \"Munich\")",
-    "  (a call is (f arg arg), not f(arg): (find \"olfen\"), not (find(\"olfen\")))",
-    "",
-    "LISP (AutoLISP): setq defun repeat while if cond foreach list car cdr nth + - * / sin cos ... (load \"f.lsp\")",
-    "",
-    "examples",
-    "  (goto \"Tokyo\" 5)",
-    "  (foreach c (here 5) (princ (car c)) (princ \" \"))",
-    "  (setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))",
-    "  (defun tour (names) (foreach n names (goto n 6) (sleep 3000)))  (tour '(\"Berlin\" \"Rome\" \"Oslo\"))",
-    "",
+/// One documented function: name, group, usage, what it does, an example.
+struct Doc {
+    name: &'static str,
+    group: &'static str,
+    usage: &'static str,
+    text: &'static str,
+    example: &'static str,
+}
+
+const fn doc(
+    name: &'static str,
+    group: &'static str,
+    usage: &'static str,
+    text: &'static str,
+    example: &'static str,
+) -> Doc {
+    Doc {
+        name,
+        group,
+        usage,
+        text,
+        example,
+    }
+}
+
+const BOARD: &str = "THE BOARD";
+const GEODB: &str = "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)";
+
+const DOCS: &[Doc] = &[
+    doc("view", BOARD, "(view lat lon zoom)", "Sets the view. Zoom 1 shows the whole globe, 12 and more the scope view, 4000 is street level.", "(view 48.1 11.6 8)"),
+    doc("spin", BOARD, "(spin T|nil [dps])", "Spin on (T) or off (nil), optionally at dps degrees per second; a negative speed turns the other way.", "(spin T -25)"),
+    doc("layers", BOARD, "(layers bits)", "Sets the layers: 1 relief, 2 isohypses, 4 coastline, 8 city dots, 16 query ring (add 64 for the LAYERS button's direction).", "(layers 5)   ; coast and relief"),
+    doc("tap", BOARD, "(tap x y)", "A touch at x y of the 800 x 480 screen, like a finger (buttons, a city, a point on the globe).", "(tap 640 454)   ; the LAYERS button"),
+    doc("drag", BOARD, "(drag dx dy)", "Pans the globe by pixels, like a finger dragging; (release) lets go.", "(drag 40 0) (release)"),
+    doc("release", BOARD, "(release)", "Ends a drag (the globe may coast on).", "(release)"),
+    doc("fly", BOARD, "(fly lat lon zoom ms)", "A smooth move of the view in ms: ease in and out, the zoom changes geometrically, the longitude takes the short way.", "(fly 35.7 139.7 5 3000)"),
+    doc("sleep", BOARD, "(sleep ms)", "Waits ms (in a headless video: renders ms of video). The window never freezes meanwhile; Ctrl-C stops a script.", "(sleep 2000)"),
+    doc("state", BOARD, "(state)", "What the board shows now: (lat lon zoom spinning fps layers).", "(state)"),
+    doc("lat", BOARD, "(lat) (lon) (zoom) (fps) (spin-dps)", "Single readings of the board's state.", "(+ (lon) 10)"),
+    doc("lon", "", "(lon)", "The longitude the board looks at; see (help lat).", "(lon)"),
+    doc("zoom", "", "(zoom)", "The board's zoom; see (help lat).", "(zoom)"),
+    doc("fps", "", "(fps)", "The board's frame rate; see (help lat).", "(fps)"),
+    doc("spin-dps", "", "(spin-dps)", "The board's spin speed in degrees per second (negative: the other way).", "(spin-dps)"),
+    doc("layer-bits", "", "(layer-bits)", "The layer bits in force; see (help layers).", "(layer-bits)"),
+    doc("selected", BOARD, "(selected)", "The index of the city selected on the board (its card is open), or nil.", "(selected)"),
+    doc("info", BOARD, "(info)", "The board's !info line: firmware, slot, uptime, fps, build id, image size, layers.", "(info)"),
+    doc("screenshot", BOARD, "(screenshot \"f.png\")", "Saves the board's screen as a png.", "(screenshot \"alps.png\")"),
+    doc("find", GEODB, "(find \"text\" [n])", "Cities, states and countries matching a text, best first (at most n, default 8): a list of (kind name state country lat lon). Writes nothing found when there is no match. A call is (find \"x\"), not find(\"x\").", "(find \"Olfen\")"),
+    doc("city", GEODB, "(city \"name\")", "The best match for a name (a city, else a state or country): (lat lon name country), or nil.", "(city \"Munich\")"),
+    doc("goto", GEODB, "(goto \"name\" [zoom])", "Shows a place on the board at once (zoom 6 by default) and returns its name.", "(goto \"Bavaria\" 4)"),
+    doc("hop", GEODB, "(hop \"name\" [zoom ms])", "A trip to a place: out to the whole globe, across, in to zoom (default 5, in 4000 ms). Returns the name.", "(hop \"Tokyo\" 5 5000)"),
+    doc("nearest", GEODB, "(nearest lat lon [n]) (nearest \"place\" [n])", "The n nearest cities (default 5): a list of (name country km lat lon).", "(nearest \"Olfen\" 3)"),
+    doc("here", GEODB, "(here [n])", "The n cities nearest to where the board looks (default 5), like its side panel.", "(foreach c (here 5) (princ (car c)) (princ \" \"))"),
+    doc("country", GEODB, "(country \"DE\")", "A country by its ISO code: (name capital region lat lon), or nil.", "(country \"JP\")"),
+    doc("distance", GEODB, "(distance la1 lo1 la2 lo2) (distance place place)", "Great-circle distance in km between two points, or two places: names, find results, city results.", "(distance \"Ludinghausen\" \"Olfen\")"),
+    doc("load", "LISP", "(load \"f.lsp\")", "Runs a script file (in the app: the demo folder is the working directory). The screen shows each board command it runs.", "(load \"TOUR.LSP\")"),
+    doc("help", "LISP", "(help) (help name)", "(help) lists the functions; (help find) tells about one.", "(help hop)"),
 ];
+
+const LISP_NOTE: &[&str] = &[
+    "AutoLISP: setq defun repeat while if cond foreach list car cdr nth + - * / sin cos expt sqrt ...",
+    "A call is (f arg arg), not f(arg). Several forms on a line run one after the other; the screen shows the one that runs.",
+    "examples: (goto \"Tokyo\" 5)   (setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))",
+];
+
+/// `(help)`: every function in a line; `(help name)`: one in full.
+fn help(topic: Option<&str>) {
+    let Some(topic) = topic else {
+        let mut group = "";
+        for d in DOCS.iter().filter(|d| !d.group.is_empty()) {
+            if d.group != group {
+                group = d.group;
+                say("");
+                say(group);
+            }
+            let short = d.text.split(". ").next().unwrap_or("");
+            let short: String = if short.chars().count() > 70 {
+                short.chars().take(67).chain("...".chars()).collect()
+            } else {
+                short.to_string()
+            };
+            say(&format!("  {:<48} {short}", d.usage));
+        }
+        say("");
+        LISP_NOTE.iter().for_each(|l| say(l));
+        say("(help name) tells about one function.");
+        return;
+    };
+    let wanted = topic.trim_matches(|c| c == '(' || c == ')').to_lowercase();
+    match DOCS.iter().find(|d| d.name == wanted) {
+        Some(d) => {
+            say(d.usage);
+            say(&format!("  {}", d.text));
+            say(&format!("  example: {}", d.example));
+        }
+        None => say(&format!(
+            "no help for {topic:?}: (help) lists the functions"
+        )),
+    }
+}
 
 struct Interrupted;
 
@@ -365,11 +433,36 @@ fn fly(board: &dyn Board, la: f64, lo: f64, zoom: f64, ms: f64) {
     }
 }
 
+/// `(help find)` as `(help "find")`: the symbol is the topic, not a variable.
+fn bare_help(form: &Expr) -> Option<Expr> {
+    let Expr::List(items) = form else { return None };
+    let [Expr::Symbol(head), rest @ ..] = items.as_slice() else {
+        return None;
+    };
+    if !head.to_string().eq_ignore_ascii_case("help")
+        || !rest.iter().all(|e| matches!(e, Expr::Symbol(_)))
+    {
+        return None;
+    }
+    let mut call = vec![Expr::Symbol(head.clone())];
+    call.extend(rest.iter().map(|e| Expr::String(e.to_string())));
+    Some(Expr::List(call))
+}
+
 /// Runs the forms of `source` one by one, the screen showing the one that runs; returns the results.
 pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<Expr> {
     let forms = acadlisp::parser::Parser::from_input(source).parse_all();
     let mut results = Vec::new();
     for form in &forms {
+        // (help find): the name is not a variable to evaluate
+        let help_call;
+        let form = match bare_help(form) {
+            Some(call) => {
+                help_call = call;
+                &help_call
+            }
+            None => form,
+        };
         let shown = form.to_string();
         let text: Vec<&str> = shown.split_whitespace().collect();
         board.send(&format!("!code {}", text.join(" ")));
@@ -680,10 +773,13 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             }
         });
     }
-    def(&mut it, "help", |_| {
-        for line in HELP {
-            say(line);
-        }
+    def(&mut it, "help", |a| {
+        let topic = match a.first() {
+            Some(Expr::String(t)) => Some(t.clone()),
+            Some(other) => Some(other.to_string()),
+            None => None,
+        };
+        help(topic.as_deref());
         Expr::T
     });
     it
@@ -821,5 +917,25 @@ mod tests {
             d[0] != "nil" && d[1] != "nil" && d[2].starts_with('"'),
             "{d:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    #[test]
+    fn help_takes_a_bare_name() {
+        let call =
+            bare_help(&acadlisp::parser::Parser::from_input("(help find)").parse_all()[0]).unwrap();
+        assert_eq!(call.to_string(), "(help \"find\")");
+        assert!(
+            bare_help(&acadlisp::parser::Parser::from_input("(help)").parse_all()[0]).is_none()
+        );
+        // every function a doc names exists once, and the long text ends sentences properly
+        let mut names: Vec<_> = DOCS.iter().map(|d| d.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), DOCS.len());
     }
 }
