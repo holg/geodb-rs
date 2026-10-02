@@ -81,9 +81,6 @@ pub struct Layout {
     pub buttons: &'static [(i32, i32, i32, i32, &'static str, Action)],
     /// The font scale of the button labels.
     pub button_scale: i32,
-    /// The layers menu (it takes the place of the nearest-city list): x, first y, row pitch, width,
-    /// row height, font scale.
-    pub menu: (i32, i32, i32, i32, i32, i32),
     /// The city card over the globe: width, height, font scale of the name and of the other lines,
     /// y offset below the globe centre.
     pub card: (i32, i32, i32, i32, i32),
@@ -122,7 +119,6 @@ pub static LANDSCAPE: Layout = Layout {
     footer: None,
     buttons: &BUTTONS,
     button_scale: 2,
-    menu: (500, 130, 34, 292, 30, 2),
     card: (300, 104, 2, 1, 24),
 };
 
@@ -150,7 +146,6 @@ pub static PORTRAIT: Layout = Layout {
     footer: None,
     buttons: &PORTRAIT_BUTTONS,
     button_scale: 3,
-    menu: (24, 838, 52, 672, 46, 3),
     card: (560, 200, 3, 2, 40),
 };
 
@@ -178,7 +173,6 @@ pub static HD: Layout = Layout {
     footer: None,
     buttons: &HD_BUTTONS,
     button_scale: 2,
-    menu: (740, 196, 52, 516, 44, 3),
     card: (500, 176, 3, 2, 36),
 };
 
@@ -394,7 +388,6 @@ pub fn draw_moving(
     // The strokes of a moving globe are baked into the coarse earth (see [`bake_moving_layers`]); only
     // the browser simulation, which has the time, strokes the vectors itself.
     if VECTOR_STROKES_MOVING.load(core::sync::atomic::Ordering::Relaxed)
-        && layer_on(layer::MOVING)
         && view.zoom >= MOVING_STROKES_ZOOM
     {
         coast_lines(fb, img, view, COAST);
@@ -441,41 +434,6 @@ pub fn draw_fps(fb: &mut Fb<'_>, fps: u32) {
     fb.rect(right - 92, y - 4, 92, 24, BG);
     let wd = render::text_width(line.as_str(), 2);
     render::text(fb, right - wd, y, line.as_str(), 2, ACCENT);
-}
-
-/// The layers menu: one row per layer with a check box (it takes the place of the nearest-city list).
-fn menu_rows(fb: &mut Fb<'_>) {
-    let (mx, my, pitch, mw, mh, sc) = layout().menu;
-    for (i, name) in layer::NAMES.iter().enumerate() {
-        let y = my + i as i32 * pitch;
-        let on = layer_on(1 << i);
-        fb.rect(mx, y, mw, mh, BUTTON);
-        for k in 0..mw {
-            fb.set(mx + k, y, GRID);
-            fb.set(mx + k, y + mh - 1, GRID);
-        }
-        for k in 0..mh {
-            fb.set(mx, y + k, GRID);
-            fb.set(mx + mw - 1, y + k, GRID);
-        }
-        let b = 8 * sc;
-        let by = y + (mh - b) / 2;
-        fb.rect(mx + 8, by, b, b, if on { ACCENT } else { BG });
-        for k in 0..b {
-            fb.set(mx + 8 + k, by, DIM);
-            fb.set(mx + 8 + k, by + b - 1, DIM);
-            fb.set(mx + 8, by + k, DIM);
-            fb.set(mx + 8 + b - 1, by + k, DIM);
-        }
-        render::text(
-            fb,
-            mx + 8 + b + 12,
-            by,
-            name,
-            sc,
-            if on { TEXT } else { DIM },
-        );
-    }
 }
 
 /// The card of the selected city over the globe: name, country, position, the ground height (from the
@@ -669,10 +627,6 @@ fn side_panel(
         p.spin.2,
         if spin.on { ACCENT } else { DIM },
     );
-    if layer_on(layer::MENU) {
-        menu_rows(fb);
-        return;
-    }
     let (lx, ly, pitch, scale, name_len) = p.list;
     for (i, hit) in nearest.iter().enumerate() {
         let y = ly + i as i32 * pitch;
@@ -711,10 +665,6 @@ fn side_panel(
     }
 }
 
-/// Set false by a caller that draws a *moving* scope view as a full frame: the strokes (coastline,
-/// contours) are skipped then, as they are in quick frames, to keep the frame rate up.
-pub static STROKES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
-
 /// Whether [`draw`] strokes the vector coastline over the globe (on the board always; the browser
 /// simulation switches it to compare the renderers).
 pub static COAST_LINES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
@@ -735,8 +685,7 @@ const CONTOUR_SEA: u16 = rgb565(90, 140, 200);
 pub static VECTOR_STROKES_MOVING: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-/// Bakes the layers that are on (coastline, isohypses) into the coarse earth, when the "layers while moving"
-/// option is on: call it after every `halve` of the earth, and again when the options change. `px` is the
+/// Bakes the layers that are on (coastline, isohypses) into the coarse earth: call it after every `halve` of the earth, and again when the options change. `px` is the
 /// coarse earth (`w` x `h`).
 pub fn bake_moving_layers(
     px: &mut [u8],
@@ -745,9 +694,6 @@ pub fn bake_moving_layers(
     img: &FwImage<'_>,
     dem: Option<&crate::relief::Dem<'_>>,
 ) {
-    if !layer_on(layer::MOVING) {
-        return;
-    }
     if layer_on(layer::CONTOURS) {
         if let Some(dem) = dem {
             crate::relief::bake_contours(px, w, h, dem, &LEVELS_COARSE, CONTOUR_LAND, CONTOUR_SEA);
@@ -760,7 +706,7 @@ pub fn bake_moving_layers(
 
 /// The options that change the baked coarse earth: when they change it has to be made again.
 pub fn bake_signature() -> u8 {
-    options() & (layer::RELIEF | layer::CONTOURS | layer::COAST | layer::MOVING)
+    options() & (layer::RELIEF | layer::CONTOURS | layer::COAST)
 }
 
 /// Strokes on a moving (not scope) globe from this zoom on.
@@ -780,7 +726,6 @@ const LEVELS_FINE: [i16; 17] = [
 fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_>>) {
     let Some(dem) = dem else { return };
     if !CONTOURS.load(core::sync::atomic::Ordering::Relaxed)
-        || !STROKES.load(core::sync::atomic::Ordering::Relaxed)
         || !layer_on(layer::CONTOURS)
         || view.zoom < CONTOUR_ZOOM
     {
@@ -824,10 +769,7 @@ fn contour_lines(fb: &mut Fb<'_>, view: View, dem: Option<&crate::relief::Dem<'_
 /// The vector coastline (the image's rings, lakes included) as one pixel lines: crisp at any zoom,
 /// where the rasterized earth is soft. Only edges near the view are projected.
 fn coast_lines(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View, color: u16) {
-    if !COAST_LINES.load(core::sync::atomic::Ordering::Relaxed)
-        || !STROKES.load(core::sync::atomic::Ordering::Relaxed)
-        || !layer_on(layer::COAST)
-    {
+    if !COAST_LINES.load(core::sync::atomic::Ordering::Relaxed) || !layer_on(layer::COAST) {
         return;
     }
     let r = layout().gr as f32;
@@ -976,12 +918,17 @@ pub fn draw(
         Some(count),
     );
     for (x, y, w, h, label, action) in layout().buttons.iter().copied() {
+        // the LAYERS button says how many are lit when the button is wide enough
+        let mut counted = Line::new();
+        let _ = write!(counted, "{label} {}/{}", layers_lit(), layer::ORDER.len());
+        let sc = layout().button_scale;
         let label = match action {
             Action::SpinToggle if spin.on => "STOP",
+            Action::Layers if render::text_width(counted.as_str(), sc) + 8 <= w => counted.as_str(),
             _ => label,
         };
         let fill = if (action == Action::SpinToggle && spin.on)
-            || (action == Action::Layers && layer_on(layer::MENU))
+            || (action == Action::Layers && layers_lit() != layer::ORDER.len())
         {
             BUTTON_ON
         } else {
@@ -996,7 +943,6 @@ pub fn draw(
             fb.set(x, y + k, GRID);
             fb.set(x + w - 1, y + k, GRID);
         }
-        let sc = layout().button_scale;
         let tw = render::text_width(label, sc);
         render::text(fb, x + (w - tw) / 2, y + (h - 8 * sc) / 2, label, sc, TEXT);
     }
@@ -1027,31 +973,50 @@ pub const BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
     (500, 438, 292, 32, "LAYERS", Action::Layers),
 ];
 
-/// The layers that can be switched on and off (bit masks of [`options`]); the board keeps all on by
-/// default, the touch menu changes them, the state packet carries them to the mirror.
+/// The layers of the screen (bit masks of [`options`]); the board starts with all lit. The LAYERS button
+/// lights them one by one in the order of [`layer::ORDER`] until all are lit, then switches them off one by one
+/// back to none, and so on. The state packet carries the bits to the mirror.
 pub mod layer {
     pub const RELIEF: u8 = 1;
     pub const CONTOURS: u8 = 2;
     pub const COAST: u8 = 4;
     pub const DOTS: u8 = 8;
     pub const RING: u8 = 16;
-    /// Keep the coastline and contour strokes while the globe moves (zoomed in from 3: they cost little then).
-    pub const MOVING: u8 = 32;
-    /// Not a layer: the layers menu is open (it is part of the screen the mirror must show too).
-    pub const MENU: u8 = 128;
-    pub const ALL: u8 = RELIEF | CONTOURS | COAST | DOTS | RING | MOVING;
-    /// Names of the layers in the menu, by bit index.
-    pub const NAMES: [&str; 6] = [
-        "relief shading",
-        "isohypses",
-        "coastlines",
-        "city dots",
-        "query ring",
-        "layers while moving",
-    ];
+    pub const ALL: u8 = RELIEF | CONTOURS | COAST | DOTS | RING;
+    /// The order the LAYERS button lights them in.
+    pub const ORDER: [u8; 5] = [COAST, RELIEF, CONTOURS, DOTS, RING];
+    /// Not a layer: the button is going down (the next press switches one off).
+    pub const DOWN: u8 = 64;
 }
 
-static OPTIONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(layer::ALL);
+/// How many layers are lit.
+pub fn layers_lit() -> usize {
+    layer::ORDER.iter().filter(|&&b| layer_on(b)).count()
+}
+
+/// One press of the LAYERS button: one more layer lit until all are, then one fewer until none.
+fn step_layers() {
+    let down = layer_on(layer::DOWN);
+    let level = layers_lit();
+    let (level, down) = if down {
+        match level {
+            0 | 1 => (0, false),
+            n => (n - 1, true),
+        }
+    } else if level + 1 >= layer::ORDER.len() {
+        (layer::ORDER.len(), true)
+    } else {
+        (level + 1, false)
+    };
+    let mut o = if down { layer::DOWN } else { 0 };
+    for &bit in layer::ORDER.iter().take(level) {
+        o |= bit;
+    }
+    set_options(o);
+}
+
+static OPTIONS: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(layer::ALL | layer::DOWN);
 /// The city the card shows (index in the image), `u32::MAX` for none.
 static SELECTED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
 
@@ -1193,10 +1158,8 @@ pub enum Action {
     SpinSlower,
     /// Turns the other way round (the default is the Earth's own direction).
     SpinReverse,
-    /// Opens or closes the layers menu.
+    /// The next step of the layers: one more lit until all are, then one fewer until none.
     Layers,
-    /// Switches the layer with this index (see [`layer`]) on or off.
-    Toggle(u8),
     /// Look at this point (a tap on the globe).
     Center {
         lat: f32,
@@ -1206,15 +1169,6 @@ pub enum Action {
 
 /// The action of a tap at screen pixel (x, y).
 pub fn hit(view: View, x: i32, y: i32) -> Action {
-    if layer_on(layer::MENU) {
-        let (mx, my, pitch, mw, mh, _) = layout().menu;
-        for i in 0..layer::NAMES.len() as i32 {
-            let ry = my + i * pitch;
-            if x >= mx - 4 && x < mx + mw + 4 && y >= ry - 3 && y < ry + mh + 3 {
-                return Action::Toggle(i as u8);
-            }
-        }
-    }
     for &(bx, by, bw, bh, _, action) in layout().buttons.iter() {
         // A finger is bigger than the button: a little slack (the rows are close).
         if x >= bx - 4 && x < bx + bw + 4 && y >= by - 4 && y < by + bh + 4 {
@@ -1248,9 +1202,7 @@ pub fn apply(view: &mut View, spin: &mut Spin, action: Action) {
             spin.dps = spin.dps.signum() * (abs(spin.dps) / 1.5).clamp(Spin::MIN, Spin::MAX)
         }
         Action::SpinReverse => spin.dps = -spin.dps,
-        Action::Layers => set_options(options() ^ layer::MENU),
-        Action::Toggle(i) if i < 6 => set_options(options() ^ (1 << i)),
-        Action::Toggle(_) => {}
+        Action::Layers => step_layers(),
         Action::Center { lat, lon } => {
             view.lat = lat.clamp(-89.5, 89.5);
             view.lon = wrap_lon(lon);
@@ -1545,9 +1497,7 @@ mod tests {
         let bottom = l.buttons.iter().map(|b| b.1 + b.3).max().unwrap();
         assert!(list_end <= top, "{list_end} {top}");
         assert!(l.status.1 >= bottom, "{} {bottom}", l.status.1);
-        // the menu rows fit between the panel text and the buttons, the card inside the globe
-        let (_, my, mp, _, mh, _) = l.menu;
-        assert!(my + (layer::NAMES.len() as i32 - 1) * mp + mh <= top);
+        // the card inside the globe
         let (cw, ch, _, _, dy) = l.card;
         assert!(
             dy + ch <= l.gr && cw <= 2 * l.gr,

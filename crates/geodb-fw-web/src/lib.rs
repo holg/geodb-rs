@@ -686,11 +686,6 @@ impl Board {
             ui::draw_fps(&mut fb, self.fps);
             self.dirty = true;
         } else {
-            // (a moving scope view is a full frame too: without the strokes, as on the board)
-            ui::STROKES.store(
-                !(motion && self.view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
-                std::sync::atomic::Ordering::Relaxed,
-            );
             ui::draw(
                 &mut fb,
                 &self.img,
@@ -760,10 +755,6 @@ impl Board {
                 },
             );
         } else {
-            ui::STROKES.store(
-                !(moving && view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
-                std::sync::atomic::Ordering::Relaxed,
-            );
             ui::draw(
                 &mut fb,
                 &self.img,

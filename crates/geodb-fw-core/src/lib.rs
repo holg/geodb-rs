@@ -151,25 +151,34 @@ mod tests {
         assert!(view.zoom > 8.0 && !it.flying());
         assert!(ui::selected().is_none());
 
-        // a tap on a button acts at once, and the layers menu opens and toggles a layer
+        // a tap on a button acts at once: the LAYERS button lights the layers one by one until all are lit,
+        // then switches them off one by one (it starts with all lit, going down)
         let (mut view, mut spin) = (start, ui::Spin::new());
         let mut it = ui::Interact::new();
-        let (bx, by, bw, bh, label, _) = *l.buttons.iter().find(|b| b.4 == "LAYERS").unwrap();
-        assert!(
-            it.tap(&img, &mut view, &mut spin, bx + bw / 2, by + bh / 2, 9000),
-            "{label}"
+        ui::set_options(ui::layer::ALL | ui::layer::DOWN);
+        let (bx, by, bw, bh, _, _) = *l.buttons.iter().find(|b| b.4 == "LAYERS").unwrap();
+        let mut seen = alloc::vec::Vec::new();
+        for k in 0..12 {
+            assert!(it.tap(
+                &img,
+                &mut view,
+                &mut spin,
+                bx + bw / 2,
+                by + bh / 2,
+                9000 + 400 * k
+            ));
+            seen.push(ui::layers_lit());
+        }
+        assert_eq!(seen, [4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 4, 3], "{seen:?}");
+        // the first layer lit is the coastline, the second the relief
+        ui::set_options(0);
+        it.tap(&img, &mut view, &mut spin, bx + bw / 2, by + bh / 2, 20_000);
+        assert_eq!(ui::options() & ui::layer::ALL, ui::layer::COAST);
+        it.tap(&img, &mut view, &mut spin, bx + bw / 2, by + bh / 2, 20_400);
+        assert_eq!(
+            ui::options() & ui::layer::ALL,
+            ui::layer::COAST | ui::layer::RELIEF
         );
-        assert!(ui::layer_on(ui::layer::MENU));
-        let (mx, my, _, mw, mh, _) = l.menu;
-        assert!(
-            it.tap(&img, &mut view, &mut spin, mx + mw / 2, my + mh / 2, 9100),
-            "the first menu row"
-        );
-        assert!(!ui::layer_on(ui::layer::RELIEF), "relief switched off");
-        it.tap(&img, &mut view, &mut spin, mx + mw / 2, my + mh / 2, 9200);
-        assert!(ui::layer_on(ui::layer::RELIEF));
-        it.tap(&img, &mut view, &mut spin, bx + bw / 2, by + bh / 2, 9300);
-        assert!(!ui::layer_on(ui::layer::MENU));
         ui::set_options(ui::layer::ALL);
         ui::select(None);
     }

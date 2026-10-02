@@ -773,11 +773,6 @@ async fn main(spawner: Spawner) {
                 net::FPS.store(fps, core::sync::atomic::Ordering::Relaxed);
             }
             let quick = full == 0 && motion && view.zoom < ui::SCOPE_ZOOM;
-            // (a moving scope view is a full frame: without the strokes, which would cost 40 ms)
-            ui::STROKES.store(
-                !(motion && view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
-                core::sync::atomic::Ordering::Relaxed,
-            );
             let draw_ms = draw_and_show(
                 &mut disp,
                 &mut front,

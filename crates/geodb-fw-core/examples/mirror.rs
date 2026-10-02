@@ -355,11 +355,6 @@ fn main() {
                 },
             );
         if !drawn_quick {
-            // (a moving scope view is a full frame too: without the strokes, as on the board)
-            ui::STROKES.store(
-                !(moving && now_view.zoom >= ui::SCOPE_ZOOM) || ui::layer_on(ui::layer::MOVING),
-                std::sync::atomic::Ordering::Relaxed,
-            );
             ui::draw(&mut fb, &img, now_view, spin, None, &[], &earth);
             have_full = true;
         }
