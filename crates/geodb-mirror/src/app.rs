@@ -22,7 +22,6 @@ use std::time::{Duration, Instant};
 
 const STATE_PORT: u16 = 7881;
 const COMMAND_PORT: u16 = 7880;
-const CONSOLE_ROWS: u16 = 10;
 
 pub struct Mirror {
     img: FwImage<'static>,
@@ -66,6 +65,10 @@ pub struct Mirror {
     cursor: usize,
     history: Vec<String>,
     history_at: Option<usize>,
+    /// How many lines the console is scrolled back (0: following the output).
+    scroll: usize,
+    console_rows: usize,
+    console_cells: Option<Rect>,
     // recording and pictures
     recording: Option<(Child, String)>,
     next_frame: Instant,
@@ -140,6 +143,9 @@ impl Mirror {
             cursor: 0,
             history: Vec::new(),
             history_at: None,
+            scroll: 0,
+            console_rows: 8,
+            console_cells: None,
             recording: None,
             next_frame: Instant::now(),
             shots: 0,
@@ -330,6 +336,12 @@ impl Mirror {
             .then_some((x as i32, y as i32))
     }
 
+    /// Scrolls the console back by `n` lines (negative: forward).
+    fn scroll_by(&mut self, n: isize) {
+        let top = self.lines.len().saturating_sub(self.console_rows);
+        self.scroll = self.scroll.saturating_add_signed(n).min(top);
+    }
+
     fn submit(&mut self) {
         let line: String = self.input.drain(..).collect();
         self.cursor = 0;
@@ -337,6 +349,7 @@ impl Mirror {
         if line.trim().is_empty() {
             return;
         }
+        self.scroll = 0;
         self.lines.push(format!("> {line}"));
         if self.history.last() != Some(&line) {
             self.history.push(line.clone());
@@ -398,13 +411,18 @@ impl Mirror {
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
             KeyCode::Right => self.cursor = (self.cursor + 1).min(self.input.len()),
             KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.input.len(),
+            KeyCode::End => {
+                self.cursor = self.input.len();
+                self.scroll = 0;
+            }
             KeyCode::Up => self.history_step(true),
             KeyCode::Down => self.history_step(false),
             KeyCode::Esc => {
                 self.input.clear();
                 self.cursor = 0;
             }
+            KeyCode::PageUp => self.scroll_by(self.console_rows as isize - 1),
+            KeyCode::PageDown => self.scroll_by(1 - self.console_rows as isize),
             KeyCode::Enter => self.submit(),
             _ => {}
         }
@@ -478,20 +496,31 @@ impl App for Mirror {
     }
 
     fn draw(&mut self, f: &mut Ui, views: &mut ViewSlot) {
+        // the screen gets the height its width needs (at most all but a few rows); the console, which scrolls,
+        // gets the rest, so a taller window shows more of it
+        let area = f.area();
+        let (cw, ch) = views.cell_px();
+        let want =
+            (f32::from(area.width) * cw * screen::H as f32 / screen::W as f32 / ch).ceil() as u16;
+        let screen_rows = want.clamp(8, area.height.saturating_sub(6).max(8));
         let [screen, console, status] = Layout::vertical([
-            Constraint::Min(8),
-            Constraint::Length(CONSOLE_ROWS + 2),
+            Constraint::Length(screen_rows),
+            Constraint::Min(3),
             Constraint::Length(1),
         ])
-        .areas(f.area());
+        .areas(area);
         views.place("screen", screen);
         self.screen_cells = Some(screen);
         self.cell_px = views.cell_px();
         let green = Style::default().fg(Color::Green);
         let yellow = Style::default().fg(Color::Yellow);
-        let rows = usize::from(CONSOLE_ROWS) - 1;
-        let tail = self.lines.len().saturating_sub(rows);
-        let mut text: Vec<Line> = self.lines[tail..]
+        let rows = usize::from(console.height).saturating_sub(2).max(1);
+        self.console_rows = rows;
+        self.console_cells = Some(console);
+        self.scroll = self.scroll.min(self.lines.len().saturating_sub(rows));
+        let end = self.lines.len() - self.scroll;
+        let tail = end.saturating_sub(rows);
+        let mut text: Vec<Line> = self.lines[tail..end]
             .iter()
             .map(|l| {
                 if l.starts_with("> ") {
@@ -517,7 +546,13 @@ impl App for Mirror {
             Span::raw(after),
         ]));
         f.render_widget(
-            Paragraph::new(text).block(Block::default().borders(Borders::TOP).title(" Lisp ")),
+            Paragraph::new(text).block(Block::default().borders(Borders::TOP).title(
+                if self.scroll > 0 {
+                    format!(" Lisp: {} lines back (End: the newest) ", self.scroll)
+                } else {
+                    " Lisp (wheel, PgUp/PgDn scroll) ".to_string()
+                },
+            )),
             console,
         );
         f.render_widget(Paragraph::new(self.status_line()), status);
@@ -535,6 +570,8 @@ impl App for Mirror {
             }
             Event::Mouse(m) => {
                 match m.kind {
+                    MouseEventKind::ScrollUp => self.scroll_by(3),
+                    MouseEventKind::ScrollDown => self.scroll_by(-3),
                     MouseEventKind::Up(MouseButton::Left) => self.send("!release"),
                     MouseEventKind::Moved | MouseEventKind::Drag(_) | MouseEventKind::Down(_) => {
                         // the pointer over the board's screen: the city under it gets a tooltip
