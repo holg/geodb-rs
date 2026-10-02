@@ -609,20 +609,13 @@ pub fn scripts() -> Vec<(std::path::PathBuf, String)> {
     out
 }
 
-/// `(load "TOUR.LSP")` with the script's full path when it is in one of the script folders.
-fn resolve_load(form: &Expr) -> Option<Expr> {
+/// The script name of a `(load "X.LSP")` form.
+fn load_name(form: &Expr) -> Option<&str> {
     let Expr::List(items) = form else { return None };
-    let [Expr::Symbol(head), Expr::String(name)] = items.as_slice() else {
-        return None;
-    };
-    if !head.eq_ignore_ascii_case("load") {
-        return None;
+    match items.as_slice() {
+        [Expr::Symbol(head), Expr::String(name)] if head.eq_ignore_ascii_case("load") => Some(name),
+        _ => None,
     }
-    let path = find_script(name)?;
-    Some(Expr::List(vec![
-        Expr::Symbol(head.clone()),
-        Expr::String(path.to_string_lossy().replace('\\', "/")),
-    ]))
 }
 
 /// `(help find)` as `(help "find")`: the symbol is the topic, not a variable.
@@ -649,13 +642,34 @@ pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<E
     for form in &forms {
         // (help find): the name is not a variable to evaluate
         let help_call;
-        let form = match bare_help(form).or_else(|| resolve_load(form)) {
+        let form = match bare_help(form) {
             Some(call) => {
                 help_call = call;
                 &help_call
             }
             None => form,
         };
+        // (load "X.LSP"): run the file here, form by form, so the screen shows each line of the script and a
+        // (load "LIB.LSP") inside it is found the same way (the working directory, then the demo folders)
+        if let Some(name) = load_name(form) {
+            match find_script(name).map(|p| std::fs::read_to_string(&p)) {
+                Some(Ok(text)) => {
+                    run_forms(it, board, &text);
+                    results.push(Expr::T);
+                }
+                Some(Err(e)) => {
+                    say(&format!("cannot read {name}: {e}"));
+                    results.push(Expr::Nil);
+                }
+                None => {
+                    say(&format!(
+                        "cannot find {name}; (pwd) lists where (load) looks"
+                    ));
+                    results.push(Expr::Nil);
+                }
+            }
+            continue;
+        }
         let shown = form.to_string();
         let text: Vec<&str> = shown.split_whitespace().collect();
         board.send(&format!("!code {}", text.join(" ")));
