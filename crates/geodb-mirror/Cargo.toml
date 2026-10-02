@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 acadlisp = { git = "https://github.com/holg/acadlisp", branch = "main", default-features = false }
+# the clipboard, for pasting into the console (scopekit has the copy side; the same crate)
+arboard = "3.6"
 geodb-core = { path = "../geodb-core", default-features = false, features = ["compact", "json", "builder"] }
 geodb-fw-core = { path = "../geodb-fw-core", features = ["std"] }
 png = "0.18"

@@ -1256,6 +1256,7 @@ name = "geodb-mirror"
 version = "0.1.6"
 dependencies = [
  "acadlisp",
+ "arboard",
  "geodb-core",
  "geodb-fw-core",
  "png",

@@ -342,6 +342,28 @@ impl Mirror {
         self.scroll = self.scroll.saturating_add_signed(n).min(top);
     }
 
+    fn insert_text(&mut self, text: &str) {
+        for c in text.chars().map(|c| if c.is_control() { ' ' } else { c }) {
+            self.input.insert(self.cursor, c);
+            self.cursor += 1;
+        }
+    }
+
+    fn paste(&mut self) {
+        match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+            Ok(text) => self.insert_text(text.trim_end()),
+            Err(e) => self.notice = format!("paste: {e}"),
+        }
+    }
+
+    fn copy_console(&mut self) {
+        let text = self.lines.join("\n");
+        self.notice = match scopekit::clipboard::copy_text(&text) {
+            Ok(()) => format!("copied the console ({} lines)", self.lines.len()),
+            Err(e) => format!("copy: {e}"),
+        };
+    }
+
     fn submit(&mut self) {
         let line: String = self.input.drain(..).collect();
         self.cursor = 0;
@@ -391,6 +413,10 @@ impl Mirror {
             KeyCode::Char('s') if ctrl => self.screenshot(None),
             KeyCode::Char('r') if ctrl => self.toggle_recording(),
             KeyCode::Char('l') if ctrl => self.lines.clear(),
+            // paste (Cmd-V does not reach the app from scopekit's window, Ctrl-V does) and copy the whole console
+            // (Shift-drag selects text and Cmd-C copies it, in scopekit)
+            KeyCode::Char('v' | 'V') if ctrl => self.paste(),
+            KeyCode::Char('y') if ctrl => self.copy_console(),
             KeyCode::Char('a') if ctrl => self.cursor = 0,
             KeyCode::Char('e') if ctrl => self.cursor = self.input.len(),
             KeyCode::Char('u') if ctrl => {
@@ -478,7 +504,7 @@ impl Mirror {
             spans.push(Span::styled(format!("  {}", self.notice), dim));
         }
         spans.push(Span::styled(
-            "   Ctrl-C stops a script, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits",
+            "   Ctrl-V paste, Ctrl-Y copy all (Shift-drag selects, Cmd-C copies it), Ctrl-C stops, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits",
             dim,
         ));
         Line::from(spans)
@@ -562,10 +588,7 @@ impl App for Mirror {
         match event {
             Event::Key(k) => self.key(k),
             Event::Paste(text) => {
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    self.input.insert(self.cursor, c);
-                    self.cursor += 1;
-                }
+                self.insert_text(text.trim_end());
                 Flow::Continue
             }
             Event::Mouse(m) => {
