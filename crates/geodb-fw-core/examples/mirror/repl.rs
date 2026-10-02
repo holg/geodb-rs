@@ -14,13 +14,15 @@
 //! ```
 
 use acadlisp::{Expr, Interpreter};
+use geodb_core::prelude::*;
+use geodb_core::spatial::haversine_distance;
 use geodb_fw_core::render::View;
 use geodb_fw_core::ui;
 use std::net::{IpAddr, UdpSocket};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const COMMAND_PORT: u16 = 7880;
@@ -41,26 +43,33 @@ pub enum Request {
     Screenshot(String),
 }
 
-const HELP: [&str; 20] = [
-    "(view lat lon zoom)   the view (zoom 1 = the whole globe)",
-    "(spin T|nil [dps])    spin on/off, optional speed (negative: the other way)",
-    "(layers bits)         layer bits: 1 relief, 2 isohypses, 4 coast, 8 dots, 16 ring (+64 direction)",
-    "(tap x y)             a touch at screen x y (800 x 480)",
-    "(drag dx dy)          pan by pixels; (release) lets go",
-    "(sleep ms)            wait (Ctrl-C does not interrupt it in a terminal: use a short sleep)",
-    "(state)               (lat lon zoom spinning fps layers)",
-    "(lat) (lon) (zoom)    single readings; (fps) (spin-dps) (layer-bits) (selected)",
-    "(info)                the board's !info line",
-    "(screenshot \"f.png\") the window as a png",
-    "(load \"f.lsp\")       run a script file",
-    "plus AutoLISP: setq defun repeat while if cond + - * / sin cos list car cdr ...",
+const HELP: &[&str] = &[
+    "THE BOARD",
+    "  (view lat lon zoom)      set the view (zoom 1 = the whole globe, 4000 = street)",
+    "  (spin T|nil [dps])       spin on / off, optional speed (negative: the other way)",
+    "  (layers bits)            1 relief, 2 isohypses, 4 coast, 8 dots, 16 ring (+64 direction)",
+    "  (tap x y)                a touch at screen x y (800 x 480); (drag dx dy) (release)",
+    "  (state)                  (lat lon zoom spinning fps layers); single: (lat) (lon) (zoom) (fps)",
+    "  (selected) (layer-bits) (spin-dps)    more readings; (info) is the board's !info line",
+    "  (screenshot \"f.png\")    the window as a png",
+    "  (sleep ms)               wait (a script that sleeps never freezes the window)",
     "",
-    "examples:",
-    "  (view 48 11 4)",
-    "  (spin T 40)",
-    "  (layers 5)",
+    "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)",
+    "  (find \"text\" [n])       cities matching: ((name state country lat lon) ...)",
+    "  (city \"name\")           the best match: (lat lon name country)",
+    "  (goto \"name\" [zoom])    fly the board to a city (zoom 6), returns its name",
+    "  (nearest lat lon [n])    the n nearest cities: ((name country km lat lon) ...)",
+    "  (here [n])               the n cities nearest to where the board looks",
+    "  (country \"DE\")          (name capital region lat lon)",
+    "  (distance la1 lo1 la2 lo2)    great-circle km",
+    "",
+    "LISP (AutoLISP): setq defun repeat while if cond foreach list car cdr nth + - * / sin cos ... (load \"f.lsp\")",
+    "",
+    "examples",
+    "  (goto \"Tokyo\" 5)",
+    "  (foreach c (here 5) (princ (car c)) (princ \" \"))",
     "  (setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))",
-    "  (defun go (lat lon) (view lat lon 6)) (go 35.7 139.7)",
+    "  (defun tour (names) (foreach n names (goto n 6) (sleep 3000)))  (tour '(\"Berlin\" \"Rome\" \"Oslo\"))",
     "",
 ];
 
@@ -74,6 +83,10 @@ fn num(e: &Expr) -> Option<f64> {
     }
 }
 
+fn n_of(a: &[Expr], i: usize) -> f64 {
+    a.get(i).and_then(num).unwrap_or(0.0)
+}
+
 fn truthy(e: &Expr) -> bool {
     !matches!(e, Expr::Nil)
 }
@@ -83,6 +96,82 @@ where
     F: Fn(&[Expr]) -> Expr + Send + Sync + 'static,
 {
     it.register_fn(name, move |_, args| f(args));
+}
+
+type Db = GeoDb<DefaultBackend>;
+type Dataset = Arc<OnceLock<Option<Db>>>;
+
+/// The dataset, loaded on first use (a few seconds; the binary cache next to it makes later starts faster).
+fn dataset(cell: &Dataset) -> Option<&Db> {
+    cell.get_or_init(|| {
+        let path = std::env::var("GEODB_DATA").unwrap_or_else(|_| {
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../geodb-core/data/countries+states+cities.json.gz"
+            )
+            .into()
+        });
+        println!("loading the dataset {path} ...");
+        match Db::load_from_path(&path, None) {
+            Ok(db) => Some(db),
+            Err(e) => {
+                println!("the dataset does not load: {e} (GEODB_DATA names the file)");
+                None
+            }
+        }
+    })
+    .as_ref()
+}
+
+fn real(v: f64) -> Expr {
+    Expr::Real(v)
+}
+
+fn text_of(a: &[Expr], i: usize) -> Option<&str> {
+    match a.get(i) {
+        Some(Expr::String(s)) => Some(s),
+        _ => None,
+    }
+}
+
+/// The cities a text finds, best first: (name, state, country, lat, lon).
+fn find_cities(db: &Db, query: &str, limit: usize) -> Vec<(String, String, String, f64, f64)> {
+    db.smart_search(query)
+        .into_iter()
+        .filter_map(|hit| match hit.item {
+            SmartItem::City {
+                city,
+                state,
+                country,
+            } => Some((
+                city.name().to_string(),
+                state.name().to_string(),
+                country.name().to_string(),
+                city.lat()?,
+                city.lng()?,
+            )),
+            _ => None,
+        })
+        .take(limit)
+        .collect()
+}
+
+fn nearest_cities(db: &Db, lat: f64, lon: f64, n: usize) -> Expr {
+    Expr::List(
+        db.find_nearest(lat, lon, n)
+            .into_iter()
+            .map(|(city, _, country)| {
+                let (la, lo) = (city.lat().unwrap_or(0.0), city.lng().unwrap_or(0.0));
+                Expr::List(vec![
+                    Expr::String(city.name().to_string()),
+                    Expr::String(country.iso2().to_string()),
+                    real(haversine_distance(lat, lon, la, lo)),
+                    real(la),
+                    real(lo),
+                ])
+            })
+            .collect(),
+    )
 }
 
 fn interpreter(
@@ -236,6 +325,114 @@ fn interpreter(
             Expr::T
         });
     }
+    // the geodb-core functions
+    let data: Dataset = Arc::new(OnceLock::new());
+    {
+        let data = data.clone();
+        def(&mut it, "find", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                return Expr::Nil;
+            };
+            let n = a.get(1).and_then(num).map_or(8, |v| v as usize);
+            Expr::List(
+                find_cities(db, q, n)
+                    .into_iter()
+                    .map(|(name, state, country, lat, lon)| {
+                        Expr::List(vec![
+                            Expr::String(name),
+                            Expr::String(state),
+                            Expr::String(country),
+                            real(lat),
+                            real(lon),
+                        ])
+                    })
+                    .collect(),
+            )
+        });
+    }
+    {
+        let data = data.clone();
+        def(&mut it, "city", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                return Expr::Nil;
+            };
+            match find_cities(db, q, 1).pop() {
+                Some((name, _, country, lat, lon)) => Expr::List(vec![
+                    real(lat),
+                    real(lon),
+                    Expr::String(name),
+                    Expr::String(country),
+                ]),
+                None => Expr::Nil,
+            }
+        });
+    }
+    {
+        let (data, send) = (data.clone(), send.clone());
+        def(&mut it, "goto", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                return Expr::Nil;
+            };
+            let zoom = a.get(1).and_then(num).unwrap_or(6.0).max(1.0);
+            match find_cities(db, q, 1).pop() {
+                Some((name, _, _, lat, lon)) => {
+                    send(format!("!view {lat} {lon} {zoom}"));
+                    Expr::String(name)
+                }
+                None => {
+                    println!("no city matches {q:?}");
+                    Expr::Nil
+                }
+            }
+        });
+    }
+    {
+        let data = data.clone();
+        def(&mut it, "nearest", move |a| {
+            let Some(db) = dataset(&data) else {
+                return Expr::Nil;
+            };
+            let n = a.get(2).and_then(num).map_or(5, |v| v as usize);
+            nearest_cities(db, n_of(a, 0), n_of(a, 1), n)
+        });
+    }
+    {
+        let (data, snap) = (data.clone(), snap.clone());
+        def(&mut it, "here", move |a| {
+            let Some(db) = dataset(&data) else {
+                return Expr::Nil;
+            };
+            let view = snap.lock().unwrap().view;
+            let n = a.first().and_then(num).map_or(5, |v| v as usize);
+            nearest_cities(db, f64::from(view.lat), f64::from(view.lon), n)
+        });
+    }
+    {
+        let data = data.clone();
+        def(&mut it, "country", move |a| {
+            let (Some(code), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                return Expr::Nil;
+            };
+            match db.find_country_by_iso2(&code.to_uppercase()) {
+                Some(c) => Expr::List(vec![
+                    Expr::String(c.name().to_string()),
+                    Expr::String(c.capital().to_string()),
+                    Expr::String(c.region().to_string()),
+                    real(c.lat().unwrap_or(0.0)),
+                    real(c.lng().unwrap_or(0.0)),
+                ]),
+                None => Expr::Nil,
+            }
+        });
+    }
+    def(&mut it, "distance", |a| {
+        real(haversine_distance(
+            n_of(a, 0),
+            n_of(a, 1),
+            n_of(a, 2),
+            n_of(a, 3),
+        ))
+    });
     def(&mut it, "help", |_| {
         for line in HELP {
             println!("{line}");
@@ -350,5 +547,16 @@ mod tests {
         assert_eq!(format!("{}", r.last().unwrap()), "(3 48 1 5)");
         // no packet heard yet: the commands say nil instead of sending
         assert_eq!(format!("{}", it.run("(view 1 2 3)")[0]), "nil");
+        let r = it.run("(defun go (lat lon) (view lat lon 6)) (go 35.7 139.7)");
+        assert_eq!(format!("{}", r.last().unwrap()), "nil"); // no board
+                                                             // the geodb functions (the dataset is in the repository)
+        let r = it.run("(city \"Tokyo\") (country \"DE\") (distance 0 0 0 1) (car (car (nearest 48.1 11.6 1)))");
+        let shown: Vec<String> = r.iter().map(|e| e.to_string()).collect();
+        println!("{shown:?}");
+        assert!(
+            shown[0].contains("Tokyo") && shown[1].contains("Germany"),
+            "{shown:?}"
+        );
+        assert!(shown[3].starts_with('"'), "{shown:?}");
     }
 }
