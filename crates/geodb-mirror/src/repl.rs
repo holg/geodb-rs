@@ -20,7 +20,7 @@ use geodb_fw_core::render::View;
 use geodb_fw_core::ui;
 use std::net::{IpAddr, UdpSocket};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -1047,6 +1047,8 @@ fn worker(
     requests: Sender<Request>,
     abort: Arc<AtomicBool>,
     code: Receiver<String>,
+    pending: Arc<AtomicUsize>,
+    flush: Arc<AtomicBool>,
 ) {
     let board: Arc<dyn Board> = Arc::new(UdpBoard::new(snap, requests, abort.clone()));
     let mut it = interpreter(board.clone());
@@ -1069,6 +1071,14 @@ fn worker(
                     "error in the interpreter (state reset)"
                 });
                 it = interpreter(board.clone());
+                board.send("!code"); // the screen shows no line of a script that is not running
+            }
+        }
+        pending.fetch_sub(1, Ordering::Relaxed);
+        // Ctrl-C also drops what was typed meanwhile
+        if flush.swap(false, Ordering::Relaxed) {
+            while code.try_recv().is_ok() {
+                pending.fetch_sub(1, Ordering::Relaxed);
             }
         }
     }
@@ -1078,6 +1088,8 @@ pub struct Repl {
     to_worker: Sender<String>,
     requests: Receiver<Request>,
     abort: Arc<AtomicBool>,
+    pending: Arc<AtomicUsize>,
+    flush: Arc<AtomicBool>,
 }
 
 impl Repl {
@@ -1085,25 +1097,37 @@ impl Repl {
         let (to_worker, code) = channel();
         let (req, requests) = channel();
         let abort = Arc::new(AtomicBool::new(false));
+        let pending = Arc::new(AtomicUsize::new(0));
+        let flush = Arc::new(AtomicBool::new(false));
         {
-            let abort = abort.clone();
-            std::thread::spawn(move || worker(snap, req, abort, code));
+            let (abort, pending, flush) = (abort.clone(), pending.clone(), flush.clone());
+            std::thread::spawn(move || worker(snap, req, abort, code, pending, flush));
         }
         Repl {
             to_worker,
             requests,
             abort,
+            pending,
+            flush,
         }
     }
 
     /// Evaluates `source` (one line typed, or a whole script) on the interpreter's thread; its output comes
     /// through [`say`].
     pub fn run(&self, source: String) {
+        self.pending.fetch_add(1, Ordering::Relaxed);
         let _ = self.to_worker.send(source);
     }
 
-    /// Stops a script that is in a `(sleep ...)`.
+    /// How many commands are running or waiting (the first is the running one).
+    pub fn pending(&self) -> usize {
+        self.pending.load(Ordering::Relaxed)
+    }
+
+    /// Stops the script that is running (it stops at its next `(sleep ...)` or move) and drops the commands
+    /// typed meanwhile.
     pub fn interrupt(&self) {
+        self.flush.store(true, Ordering::Relaxed);
         self.abort.store(true, Ordering::Relaxed);
     }
 
@@ -1228,5 +1252,33 @@ mod plan_tests {
         let p = plan(&data, &args("(fly \"Wuhan\" 8 3000)")).unwrap();
         assert!(p.from.is_none() && p.zoom == Some(8.0) && p.ms == Some(3000.0));
         assert!(plan(&data, &args("(fly)")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod interrupt_tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_c_stops_a_running_script_and_drops_what_waits() {
+        let snap = Arc::new(Mutex::new(Snapshot {
+            view: geodb_fw_core::render::View::new(0.0, 0.0),
+            spin: geodb_fw_core::ui::Spin::new(),
+            fps: 0,
+            options: 0,
+            selected: None,
+            board: None,
+        }));
+        let repl = Repl::new(snap);
+        repl.run("(sleep 600000)".into());
+        repl.run("(princ 1)".into());
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(repl.pending(), 2);
+        repl.interrupt();
+        let end = Instant::now() + Duration::from_secs(3);
+        while repl.pending() > 0 && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(repl.pending(), 0);
     }
 }

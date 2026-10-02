@@ -412,7 +412,13 @@ impl Mirror {
             return;
         }
         self.scroll = 0;
-        self.lines.push(format!("> {line}"));
+        if self.repl.pending() > 0 {
+            self.lines.push(format!(
+                "> {line}   (waits: a script runs, Ctrl-C stops it)"
+            ));
+        } else {
+            self.lines.push(format!("> {line}"));
+        }
         if self.history.last() != Some(&line) {
             self.history.push(line.clone());
             save_history_line(&line);
@@ -448,6 +454,7 @@ impl Mirror {
             KeyCode::Char('q') if ctrl => return Flow::Quit,
             KeyCode::Char('c') if ctrl => {
                 self.repl.interrupt();
+                self.notice = "stopping the script...".into();
                 self.input.clear();
                 self.cursor = 0;
             }
@@ -627,7 +634,12 @@ impl App for Mirror {
         ]));
         f.render_widget(
             Paragraph::new(text).block(Block::default().borders(Borders::TOP).title(
-                if self.scroll > 0 {
+                if self.repl.pending() > 0 {
+                    format!(
+                        " Lisp: RUNNING ({} waiting)  Ctrl-C stops ",
+                        self.repl.pending() - 1
+                    )
+                } else if self.scroll > 0 {
                     format!(" Lisp: {} lines back (End: the newest) ", self.scroll)
                 } else {
                     " Lisp (wheel, PgUp/PgDn scroll) ".to_string()
