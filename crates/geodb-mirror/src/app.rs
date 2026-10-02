@@ -69,6 +69,7 @@ pub struct Mirror {
     scroll: usize,
     console_rows: usize,
     console_cells: Option<Rect>,
+    status_row: Option<u16>,
     // recording and pictures
     recording: Option<(Child, String)>,
     next_frame: Instant,
@@ -136,7 +137,7 @@ impl Mirror {
             drag_rest: (0.0, 0.0),
             repl,
             lines: vec![
-                "Lisp (AutoLISP): (help) lists the board and geodb functions, Up/Down walk the history".into(),
+                "Lisp (AutoLISP): (help) lists the functions, (help name) tells about one. The help window: click [Help] below, F1 or Ctrl-H, or (help-window).".into(),
             ],
             incoming: Arc::new(Mutex::new(Vec::new())),
             input: Vec::new(),
@@ -146,6 +147,7 @@ impl Mirror {
             scroll: 0,
             console_rows: 8,
             console_cells: None,
+            status_row: None,
             recording: None,
             next_frame: Instant::now(),
             shots: 0,
@@ -417,7 +419,14 @@ impl Mirror {
             // (Shift-drag selects text and Cmd-C copies it, in scopekit)
             KeyCode::Char('v' | 'V') if ctrl => self.paste(),
             KeyCode::Char('y') if ctrl => self.copy_console(),
-            KeyCode::Char('h') if ctrl => {
+            // (Ctrl-H arrives as Backspace with Ctrl in some keyboards' terminals)
+            KeyCode::Char('h' | 'H') if ctrl => {
+                repl::open_help_window();
+            }
+            KeyCode::Backspace if ctrl => {
+                repl::open_help_window();
+            }
+            KeyCode::F(1) => {
                 repl::open_help_window();
             }
             KeyCode::Char('a') if ctrl => self.cursor = 0,
@@ -460,7 +469,10 @@ impl Mirror {
 
     fn status_line(&self) -> Line<'static> {
         let dim = Style::default().fg(Color::Gray);
-        let mut spans = Vec::new();
+        let mut spans = vec![Span::styled(
+            "[Help] ",
+            Style::default().fg(Color::Black).bg(Color::Green),
+        )];
         let board = match (self.board, self.live()) {
             (Some(ip), true) => Span::styled(
                 format!("board {ip} {} fps", self.dev_fps),
@@ -584,6 +596,7 @@ impl App for Mirror {
             )),
             console,
         );
+        self.status_row = Some(status.y);
         f.render_widget(Paragraph::new(self.status_line()), status);
     }
 
@@ -598,6 +611,11 @@ impl App for Mirror {
                 match m.kind {
                     MouseEventKind::ScrollUp => self.scroll_by(3),
                     MouseEventKind::ScrollDown => self.scroll_by(-3),
+                    MouseEventKind::Down(MouseButton::Left)
+                        if self.status_row == Some(m.row) && m.column < 7 =>
+                    {
+                        repl::open_help_window();
+                    }
                     MouseEventKind::Up(MouseButton::Left) => self.send("!release"),
                     MouseEventKind::Moved | MouseEventKind::Drag(_) | MouseEventKind::Down(_) => {
                         // the pointer over the board's screen: the city under it gets a tooltip
