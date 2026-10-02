@@ -90,12 +90,14 @@ pub const DOCS: &[Doc] = &[
     doc("selected", BOARD, "(selected)", "The index of the city selected on the board (its card is open), or nil.", "(selected)"),
     doc("info", BOARD, "(info)", "The board's !info line: firmware, slot, uptime, fps, build id, image size, layers.", "(info)"),
     doc("screenshot", BOARD, "(screenshot \"f.png\")", "Saves the board's screen as a png.", "(screenshot \"alps.png\")"),
-    doc("find", GEODB, "(find \"text\" [n])", "Cities, states and countries matching a text, best first (at most n, default 8): a list of (kind name state country lat lon). Writes nothing found when there is no match. A call is (find \"x\"), not find(\"x\").", "(find \"Olfen\")"),
+    doc("find", GEODB, "(find \"text\" [n])", "Cities, states and countries matching a text, best first (at most n, default 8): a list of (kind name state country lat lon). Filter it with foreach: (foreach c (find \"Berlin\" 100) (if (equal (nth 3 c) \"Germany\") (princ (nth 1 c)))). A call is (find \"x\"), not find(\"x\").", "(find \"Olfen\")"),
     doc("city", GEODB, "(city \"name\")", "The best match for a name (a city, else a state or country): (lat lon name country), or nil.", "(city \"Munich\")"),
     doc("goto", GEODB, "(goto \"name\" [zoom])", "Shows a place on the board at once (zoom 6 by default) and returns its name.", "(goto \"Bavaria\" 4)"),
     doc("hop", GEODB, "(hop place [zoom ms]) (hop from to [zoom ms])", "A trip to a place from where the view is (or from the first of two): out to the whole globe, across, in to zoom (default 5, in 4000 ms). Returns the name.", "(hop \"Tokyo\" 5 5000)"),
     doc("nearest", GEODB, "(nearest lat lon [n]) (nearest \"place\" [n])", "The n nearest cities (default 5): a list of (name country km lat lon).", "(nearest \"Olfen\" 3)"),
     doc("here", GEODB, "(here [n])", "The n cities nearest to where the board looks (default 5), like its side panel.", "(foreach c (here 5) (princ (car c)) (princ \" \"))"),
+    doc("cities", GEODB, "(cities country [state [n]])", "The cities of a country (name or ISO code), or of one of its states (a part of the name is enough), at most n (default 20): a list of (name state population lat lon). Largest first where the dataset knows the population (it mostly does not: then in dataset order). Made for foreach.", "(foreach c (cities \"DE\" \"Bavaria\" 5) (princ (car c)) (princ \" \"))"),
+    doc("states", GEODB, "(states country)", "The names of the states or provinces of a country (name or ISO code).", "(states \"Germany\")"),
     doc("country", GEODB, "(country \"DE\")", "A country by its ISO code: (name capital region lat lon), or nil.", "(country \"JP\")"),
     doc("distance", GEODB, "(distance la1 lo1 la2 lo2) (distance place place)", "Great-circle distance in km between two points, or two places: names, find results, city results.", "(distance \"Ludinghausen\" \"Olfen\")"),
     doc("load", "LISP", "(load \"f.lsp\")", "Runs a script file (in the app: the demo folder is the working directory). The screen shows each board command it runs.", "(load \"TOUR.LSP\")"),
@@ -402,6 +404,19 @@ fn position_of(db: &Db, e: &Expr) -> Option<(f64, f64)> {
         },
         _ => None,
     }
+}
+
+/// A country by ISO code or by (a part of) its name.
+fn country_of<'a>(db: &'a Db, text: &str) -> Option<&'a Country<DefaultBackend>> {
+    db.find_country_by_iso2(&text.to_uppercase()).or_else(|| {
+        let wanted = text.to_lowercase();
+        let by_name = db.find_countries_by_substring(text);
+        by_name
+            .iter()
+            .find(|c| c.name().to_lowercase() == wanted)
+            .or_else(|| by_name.first())
+            .copied()
+    })
 }
 
 fn nearest_cities(db: &Db, lat: f64, lon: f64, n: usize) -> Expr {
@@ -1091,6 +1106,70 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
                     Expr::Nil
                 }
             }
+        });
+    }
+    {
+        let data = data.clone();
+        def(&mut it, "states", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                say("states wants a country: (states \"DE\") or (states \"Germany\")");
+                return Expr::Nil;
+            };
+            match country_of(db, q) {
+                Some(c) => Expr::List(
+                    db.states_for_country(c)
+                        .iter()
+                        .map(|s| Expr::String(s.name().to_string()))
+                        .collect(),
+                ),
+                None => {
+                    say(&format!("no country matches {q:?}"));
+                    Expr::Nil
+                }
+            }
+        });
+    }
+    {
+        let data = data.clone();
+        def(&mut it, "cities", move |a| {
+            let (Some(q), Some(db)) = (text_of(a, 0), dataset(&data)) else {
+                say("cities wants a country: (cities \"DE\" [\"Bavaria\" [n]])");
+                return Expr::Nil;
+            };
+            let Some(country) = country_of(db, q) else {
+                say(&format!("no country matches {q:?}"));
+                return Expr::Nil;
+            };
+            // (cities "DE" "Bavaria" 5), (cities "DE" 5) or (cities "DE")
+            let (state, n) = match (a.get(1), a.get(2)) {
+                (Some(Expr::String(st)), n) => (Some(st.to_lowercase()), n.and_then(num)),
+                (n, _) => (None, n.and_then(num)),
+            };
+            let n = n.map_or(20, |v| v as usize);
+            let mut found: Vec<(u64, Expr)> = Vec::new();
+            for st in db.states_for_country(country) {
+                if state
+                    .as_ref()
+                    .is_some_and(|s| !st.name().to_lowercase().contains(s.as_str()))
+                {
+                    continue;
+                }
+                for city in db.cities_for_state(st) {
+                    let pop = city.population().unwrap_or(0);
+                    found.push((
+                        pop,
+                        Expr::List(vec![
+                            Expr::String(city.name().to_string()),
+                            Expr::String(st.name().to_string()),
+                            Expr::Real(pop as f64),
+                            real(city.lat().unwrap_or(0.0)),
+                            real(city.lng().unwrap_or(0.0)),
+                        ]),
+                    ));
+                }
+            }
+            found.sort_by_key(|f| std::cmp::Reverse(f.0));
+            Expr::List(found.into_iter().take(n).map(|f| f.1).collect())
         });
     }
     def(&mut it, "pwd", |_| {
