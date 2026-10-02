@@ -44,12 +44,12 @@ pub enum Request {
 }
 
 /// One documented function: name, group, usage, what it does, an example.
-struct Doc {
-    name: &'static str,
-    group: &'static str,
-    usage: &'static str,
-    text: &'static str,
-    example: &'static str,
+pub struct Doc {
+    pub name: &'static str,
+    pub group: &'static str,
+    pub usage: &'static str,
+    pub text: &'static str,
+    pub example: &'static str,
 }
 
 const fn doc(
@@ -68,10 +68,10 @@ const fn doc(
     }
 }
 
-const BOARD: &str = "THE BOARD";
-const GEODB: &str = "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)";
+pub const BOARD: &str = "THE BOARD";
+pub const GEODB: &str = "THE GEODB (geodb-core; the dataset loads on first use, a few seconds)";
 
-const DOCS: &[Doc] = &[
+pub const DOCS: &[Doc] = &[
     doc("view", BOARD, "(view lat lon zoom)", "Sets the view. Zoom 1 shows the whole globe, 12 and more the scope view, 4000 is street level.", "(view 48.1 11.6 8)"),
     doc("spin", BOARD, "(spin T|nil [dps])", "Spin on (T) or off (nil), optionally at dps degrees per second; a negative speed turns the other way.", "(spin T -25)"),
     doc("layers", BOARD, "(layers bits)", "Sets the layers: 1 relief, 2 isohypses, 4 coastline, 8 city dots, 16 query ring (add 64 for the LAYERS button's direction).", "(layers 5)   ; coast and relief"),
@@ -99,14 +99,30 @@ const DOCS: &[Doc] = &[
     doc("country", GEODB, "(country \"DE\")", "A country by its ISO code: (name capital region lat lon), or nil.", "(country \"JP\")"),
     doc("distance", GEODB, "(distance la1 lo1 la2 lo2) (distance place place)", "Great-circle distance in km between two points, or two places: names, find results, city results.", "(distance \"Ludinghausen\" \"Olfen\")"),
     doc("load", "LISP", "(load \"f.lsp\")", "Runs a script file (in the app: the demo folder is the working directory). The screen shows each board command it runs.", "(load \"TOUR.LSP\")"),
+    doc("pwd", "LISP", "(pwd)", "Where we are: the working directory, and the folders (load \"X.LSP\") looks in.", "(pwd)"),
+    doc("ls", "LISP", "(ls)", "The scripts (*.LSP) (load) finds, with their first comment line.", "(ls)"),
+    doc("help-window", "LISP", "(help-window)", "Opens the help in a window of its own (also Ctrl-H): the functions, where we are and the scripts to load; a click on a green line copies it to the clipboard, ready to paste here with Ctrl-V.", "(help-window)"),
     doc("help", "LISP", "(help) (help name)", "(help) lists the functions; (help find) tells about one.", "(help hop)"),
 ];
 
-const LISP_NOTE: &[&str] = &[
+pub const LISP_NOTE: &[&str] = &[
     "AutoLISP: setq defun repeat while if cond foreach list car cdr nth + - * / sin cos expt sqrt ...",
     "A call is (f arg arg), not f(arg). Several forms on a line run one after the other; the screen shows the one that runs.",
     "examples: (goto \"Tokyo\" 5)   (setq i 0) (repeat 120 (setq i (1+ i)) (view 20 (* i 3) 1) (sleep 40))",
 ];
+
+/// The help in a window of its own: another instance of this program (its own scopekit window).
+pub fn open_help_window() -> bool {
+    match std::env::current_exe()
+        .and_then(|exe| std::process::Command::new(exe).arg("--help-window").spawn())
+    {
+        Ok(_) => true,
+        Err(e) => {
+            say(&format!("the help window does not open: {e}"));
+            false
+        }
+    }
+}
 
 /// `(help)`: every function in a line; `(help name)`: one in full.
 fn help(topic: Option<&str>) {
@@ -433,6 +449,92 @@ fn fly(board: &dyn Board, la: f64, lo: f64, zoom: f64, ms: f64) {
     }
 }
 
+/// Where `(load "X.LSP")` looks: the working directory, the demo folder of an app bundle, the repository's.
+pub fn script_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd);
+    }
+    if let Some(d) = std::env::current_exe()
+        .ok()
+        .and_then(|e| Some(e.parent()?.parent()?.join("Resources").join("demo")))
+    {
+        dirs.push(d);
+    }
+    dirs.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../firmware/stm32f769i-disco/demo"),
+    );
+    let mut seen = Vec::new();
+    dirs.into_iter()
+        .filter_map(|d| d.canonicalize().ok())
+        .filter(|d| {
+            d.is_dir()
+                && !{
+                    let dup = seen.contains(d);
+                    seen.push(d.clone());
+                    dup
+                }
+        })
+        .collect()
+}
+
+/// The script `name` (as typed) in the first folder that has it.
+pub fn find_script(name: &str) -> Option<std::path::PathBuf> {
+    let direct = std::path::Path::new(name);
+    if direct.is_absolute() {
+        return direct.exists().then(|| direct.to_path_buf());
+    }
+    script_dirs()
+        .into_iter()
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
+/// The scripts (`*.LSP`) in the script folders: path and the first comment line.
+pub fn scripts() -> Vec<(std::path::PathBuf, String)> {
+    let mut out = Vec::new();
+    for dir in script_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut found: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("lsp")))
+            .collect();
+        found.sort();
+        for p in found {
+            let note = std::fs::read_to_string(&p)
+                .ok()
+                .and_then(|t| {
+                    t.lines()
+                        .find(|l| l.trim_start().starts_with(';'))
+                        .map(|l| l.trim_start().trim_start_matches(';').trim().to_string())
+                })
+                .unwrap_or_default();
+            out.push((p, note));
+        }
+    }
+    out
+}
+
+/// `(load "TOUR.LSP")` with the script's full path when it is in one of the script folders.
+fn resolve_load(form: &Expr) -> Option<Expr> {
+    let Expr::List(items) = form else { return None };
+    let [Expr::Symbol(head), Expr::String(name)] = items.as_slice() else {
+        return None;
+    };
+    if !head.eq_ignore_ascii_case("load") {
+        return None;
+    }
+    let path = find_script(name)?;
+    Some(Expr::List(vec![
+        Expr::Symbol(head.clone()),
+        Expr::String(path.to_string_lossy().replace('\\', "/")),
+    ]))
+}
+
 /// `(help find)` as `(help "find")`: the symbol is the topic, not a variable.
 fn bare_help(form: &Expr) -> Option<Expr> {
     let Expr::List(items) = form else { return None };
@@ -457,7 +559,7 @@ pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<E
     for form in &forms {
         // (help find): the name is not a variable to evaluate
         let help_call;
-        let form = match bare_help(form) {
+        let form = match bare_help(form).or_else(|| resolve_load(form)) {
             Some(call) => {
                 help_call = call;
                 &help_call
@@ -774,6 +876,30 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
             }
         });
     }
+    def(&mut it, "pwd", |_| {
+        let cwd =
+            std::env::current_dir().map_or_else(|e| e.to_string(), |d| d.display().to_string());
+        say(&format!("working directory: {cwd}"));
+        say("(load \"X.LSP\") looks in:");
+        for d in script_dirs() {
+            say(&format!("  {}", d.display()));
+        }
+        Expr::String(cwd)
+    });
+    def(&mut it, "ls", |_| {
+        let found = scripts();
+        if found.is_empty() {
+            say("no *.LSP scripts in the script folders: (pwd) lists them");
+        }
+        for (path, note) in &found {
+            let name = path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            say(&format!("  (load \"{name}\")   {note}"));
+        }
+        Expr::Integer(found.len() as i32)
+    });
+    def(&mut it, "help-window", |_| flag(open_help_window()));
     def(&mut it, "help", |a| {
         let topic = match a.first() {
             Some(Expr::String(t)) => Some(t.clone()),

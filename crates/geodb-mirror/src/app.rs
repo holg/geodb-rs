@@ -417,6 +417,9 @@ impl Mirror {
             // (Shift-drag selects text and Cmd-C copies it, in scopekit)
             KeyCode::Char('v' | 'V') if ctrl => self.paste(),
             KeyCode::Char('y') if ctrl => self.copy_console(),
+            KeyCode::Char('h') if ctrl => {
+                repl::open_help_window();
+            }
             KeyCode::Char('a') if ctrl => self.cursor = 0,
             KeyCode::Char('e') if ctrl => self.cursor = self.input.len(),
             KeyCode::Char('u') if ctrl => {
@@ -504,7 +507,7 @@ impl Mirror {
             spans.push(Span::styled(format!("  {}", self.notice), dim));
         }
         spans.push(Span::styled(
-            "   Ctrl-V paste, Ctrl-Y copy all (Shift-drag selects, Cmd-C copies it), Ctrl-C stops, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits",
+            "   Ctrl-H help window, Ctrl-V paste, Ctrl-Y copy all (Shift-drag selects, Cmd-C copies it), Ctrl-C stops, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits",
             dim,
         ));
         Line::from(spans)

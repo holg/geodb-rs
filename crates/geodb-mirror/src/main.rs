@@ -8,6 +8,7 @@
 
 mod app;
 mod headless;
+mod helpwin;
 mod repl;
 mod screen;
 mod util;
@@ -35,6 +36,20 @@ fn image_path(args: &[String]) -> PathBuf {
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--help-window") {
+        // the help in a window of its own: no image, no board
+        let config = Config {
+            mode: Mode::Window,
+            title: "GeoDB mirror help".into(),
+            window_size: (1000.0, 800.0),
+            ..Config::default()
+        };
+        if let Err(e) = scopekit::run(&mut helpwin::Help::new(), Views::new(), &config) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let config = Config {
         mode: Mode::Window,
         title: "GeoDB board".into(),
