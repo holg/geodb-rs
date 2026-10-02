@@ -439,7 +439,8 @@ fn bare_help(form: &Expr) -> Option<Expr> {
     let [Expr::Symbol(head), rest @ ..] = items.as_slice() else {
         return None;
     };
-    if !head.to_string().eq_ignore_ascii_case("help")
+    if rest.is_empty()
+        || !head.to_string().eq_ignore_ascii_case("help")
         || !rest.iter().all(|e| matches!(e, Expr::Symbol(_)))
     {
         return None;
