@@ -137,6 +137,7 @@ impl Mirror {
             selected: None,
             board: None,
         }));
+        repl::preload();
         let repl = Repl::new(snapshot.clone());
         if let Some(file) = script {
             repl.run(format!("(load \"{}\")", file.replace('\\', "/")));
@@ -451,10 +452,13 @@ impl Mirror {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('q') if ctrl => return Flow::Quit,
+            KeyCode::Char('q') if ctrl => {
+                self.send("!code");
+                return Flow::Quit;
+            }
             KeyCode::Char('c') if ctrl => {
                 self.repl.interrupt();
-                self.notice = "stopping the script...".into();
+                self.notice = format!("stopping {} ...", repl::now());
                 self.input.clear();
                 self.cursor = 0;
             }
@@ -636,7 +640,8 @@ impl App for Mirror {
             Paragraph::new(text).block(Block::default().borders(Borders::TOP).title(
                 if self.repl.pending() > 0 {
                     format!(
-                        " Lisp: RUNNING ({} waiting)  Ctrl-C stops ",
+                        " Lisp: RUNNING {}  ({} waiting)  Ctrl-C stops ",
+                        repl::now(),
                         self.repl.pending() - 1
                     )
                 } else if self.scroll > 0 {
@@ -728,6 +733,10 @@ impl App for Mirror {
     fn tick(&mut self) -> bool {
         self.listen();
         let mut changed = false;
+        if self.notice.starts_with("stopping") && self.repl.pending() == 0 {
+            self.notice = "stopped".into();
+            changed = true;
+        }
         let said: Vec<String> = std::mem::take(&mut *self.incoming.lock().unwrap());
         if !said.is_empty() {
             self.lines.extend(said);

@@ -226,7 +226,40 @@ where
 }
 
 type Db = GeoDb<DefaultBackend>;
-type Dataset = Arc<OnceLock<Option<Db>>>;
+/// The dataset, loaded on a thread of its own (so Ctrl-C can still stop a script that waits for it).
+struct Data {
+    cell: OnceLock<Option<Db>>,
+    started: AtomicBool,
+}
+
+type Dataset = Arc<Data>;
+
+fn new_dataset() -> Dataset {
+    Arc::new(Data {
+        cell: OnceLock::new(),
+        started: AtomicBool::new(false),
+    })
+}
+
+/// Set by Ctrl-C: whatever waits (a sleep, the dataset loading) ends the script.
+static INTERRUPT: AtomicBool = AtomicBool::new(false);
+
+/// Tests share the process-wide interrupt flag: they take turns.
+#[cfg(test)]
+static TEST_TURN: Mutex<()> = Mutex::new(());
+
+/// What runs now: the script (or the first line typed), for the console's title.
+static NOW: Mutex<String> = Mutex::new(String::new());
+
+pub fn now() -> String {
+    NOW.lock().map(|n| n.clone()).unwrap_or_default()
+}
+
+fn set_now(text: &str) {
+    if let Ok(mut n) = NOW.lock() {
+        *n = text.chars().take(50).collect();
+    }
+}
 
 /// `GEODB_DATA`, else the one in an app bundle's Resources, else the repository's.
 fn dataset_path() -> String {
@@ -248,21 +281,57 @@ fn dataset_path() -> String {
 }
 
 /// The dataset, loaded on first use (a few seconds; the binary cache next to it makes later starts faster).
-fn dataset(cell: &Dataset) -> Option<&Db> {
-    cell.get_or_init(|| {
-        let path = dataset_path();
-        say(&format!("loading the dataset {path} ..."));
-        match Db::load_from_path(&path, None) {
-            Ok(db) => Some(db),
-            Err(e) => {
-                say(&format!(
-                    "the dataset does not load: {e} (GEODB_DATA names the file)"
-                ));
-                None
+/// Starts loading the dataset on its own thread, once.
+fn start_load(data: &Dataset) {
+    if data.started.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let data = data.clone();
+    std::thread::spawn(move || {
+        data.cell.get_or_init(|| {
+            let path = dataset_path();
+            say(&format!("loading the dataset {path} ..."));
+            match Db::load_from_path(&path, None) {
+                Ok(db) => {
+                    say("the dataset is loaded");
+                    Some(db)
+                }
+                Err(e) => {
+                    say(&format!(
+                        "the dataset does not load: {e} (GEODB_DATA names the file)"
+                    ));
+                    None
+                }
             }
+        });
+    });
+}
+
+/// The one dataset of the process (a rebuilt interpreter keeps it).
+fn global_data() -> Dataset {
+    static DATA: OnceLock<Dataset> = OnceLock::new();
+    DATA.get_or_init(new_dataset).clone()
+}
+
+/// Loads the dataset in the background now, so the first `(find ...)` is quick.
+pub fn preload() {
+    start_load(&global_data());
+}
+
+fn dataset(data: &Dataset) -> Option<&Db> {
+    if let Some(d) = data.cell.get() {
+        return d.as_ref();
+    }
+    start_load(data);
+    loop {
+        if let Some(d) = data.cell.get() {
+            return d.as_ref();
         }
-    })
-    .as_ref()
+        if INTERRUPT.load(Ordering::Relaxed) {
+            resume_unwind(Box::new(Interrupted));
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
 }
 
 fn real(v: f64) -> Expr {
@@ -372,6 +441,8 @@ pub struct UdpBoard {
     sock: UdpSocket,
     abort: Arc<AtomicBool>,
     requests: Mutex<Sender<Request>>,
+    /// The code line last shown: sent again now and then, the board lets a line expire (a script that went away).
+    code: Mutex<String>,
 }
 
 impl UdpBoard {
@@ -383,6 +454,7 @@ impl UdpBoard {
             sock,
             abort,
             requests: Mutex::new(requests),
+            code: Mutex::new(String::new()),
         }
     }
 }
@@ -393,6 +465,9 @@ impl Board for UdpBoard {
         let Some(ip) = self.snap.lock().unwrap().board else {
             return false;
         };
+        if text.starts_with("!code") {
+            *self.code.lock().unwrap() = text.to_string();
+        }
         let _ = self.sock.send_to(text.as_bytes(), (ip, COMMAND_PORT));
         true
     }
@@ -411,9 +486,18 @@ impl Board for UdpBoard {
 
     fn sleep(&self, ms: u64) {
         let end = Instant::now() + Duration::from_millis(ms);
+        let mut refreshed = Instant::now();
         while Instant::now() < end {
-            if self.abort.load(Ordering::Relaxed) {
+            if self.abort.load(Ordering::Relaxed) || INTERRUPT.load(Ordering::Relaxed) {
                 resume_unwind(Box::new(Interrupted));
+            }
+            // a long wait keeps its code line alive on the board
+            if refreshed.elapsed() >= Duration::from_secs(3) {
+                refreshed = Instant::now();
+                let code = self.code.lock().unwrap().clone();
+                if code.len() > "!code".len() {
+                    self.send(&code);
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -671,7 +755,10 @@ pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<E
         if let Some(name) = load_name(form) {
             match find_script(name).map(|p| std::fs::read_to_string(&p)) {
                 Some(Ok(text)) => {
+                    let before = now();
+                    set_now(&format!("(load \"{name}\")"));
                     run_forms(it, board, &text);
+                    set_now(&before);
                     results.push(Expr::T);
                 }
                 Some(Err(e)) => {
@@ -703,7 +790,7 @@ pub fn interpreter(board: Arc<dyn Board>) -> Interpreter {
         move |text: String| flag(board.send(&text))
     };
     let mut it = Interpreter::new();
-    let data: Dataset = Arc::new(OnceLock::new());
+    let data: Dataset = global_data();
     let n = n_of;
     {
         let send = send.clone();
@@ -1054,6 +1141,8 @@ fn worker(
     let mut it = interpreter(board.clone());
     while let Ok(source) = code.recv() {
         abort.store(false, Ordering::Relaxed);
+        INTERRUPT.store(false, Ordering::Relaxed);
+        set_now(source.trim());
         let run = catch_unwind(AssertUnwindSafe(|| run_forms(&mut it, &*board, &source)));
         for line in it.output.drain(..) {
             say(&line);
@@ -1074,6 +1163,7 @@ fn worker(
                 board.send("!code"); // the screen shows no line of a script that is not running
             }
         }
+        set_now("");
         pending.fetch_sub(1, Ordering::Relaxed);
         // Ctrl-C also drops what was typed meanwhile
         if flush.swap(false, Ordering::Relaxed) {
@@ -1129,6 +1219,7 @@ impl Repl {
     pub fn interrupt(&self) {
         self.flush.store(true, Ordering::Relaxed);
         self.abort.store(true, Ordering::Relaxed);
+        INTERRUPT.store(true, Ordering::Relaxed);
     }
 
     /// A request for the window (a screenshot), if the script made one.
@@ -1159,6 +1250,7 @@ mod tests {
 
     #[test]
     fn the_board_functions_answer_and_a_script_can_loop() {
+        let _turn = TEST_TURN.lock().unwrap_or_else(|e| e.into_inner());
         let snap = Arc::new(Mutex::new(Snapshot {
             view: View::new(48.0, 11.0),
             spin: ui::Spin::new(),
@@ -1237,7 +1329,8 @@ mod plan_tests {
 
     #[test]
     fn the_types_of_the_arguments_route_them() {
-        let data: Dataset = Arc::new(OnceLock::new());
+        let _turn = TEST_TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let data: Dataset = new_dataset();
         // a point and the numbers after it
         let p = plan(&data, &args("(fly 48.1 11.6 5 3000)")).unwrap();
         assert_eq!(
@@ -1261,6 +1354,7 @@ mod interrupt_tests {
 
     #[test]
     fn ctrl_c_stops_a_running_script_and_drops_what_waits() {
+        let _turn = TEST_TURN.lock().unwrap_or_else(|e| e.into_inner());
         let snap = Arc::new(Mutex::new(Snapshot {
             view: geodb_fw_core::render::View::new(0.0, 0.0),
             spin: geodb_fw_core::ui::Spin::new(),
@@ -1280,5 +1374,6 @@ mod interrupt_tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(repl.pending(), 0);
+        INTERRUPT.store(false, Ordering::Relaxed);
     }
 }

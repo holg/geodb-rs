@@ -404,6 +404,7 @@ async fn main(spawner: Spawner) {
     let mut last_frame = Instant::now();
     let mut last_state = Instant::now();
     let mut code_rows = 0usize;
+    let mut code_at = Instant::now();
     let (mut code_sent, mut last_code) = (ui::code_seq(), Instant::now());
     let mut last_tick = Instant::now();
     let mut inj_seen: Option<Instant> = None; // when a drag from the mirror last moved the globe
@@ -612,6 +613,14 @@ async fn main(spawner: Spawner) {
                 full = 2;
             }
             code_rows = rows;
+            code_at = Instant::now();
+        }
+        // a script that went away (the mirror closed, the network broke) leaves its line: it expires
+        if code_rows > 0 && code_at.elapsed() >= Duration::from_secs(10) {
+            ui::set_code("");
+            code_rows = 0;
+            redraw = true;
+            full = 2;
         }
         let layers = net::INJ_LAYERS.swap(0, core::sync::atomic::Ordering::Relaxed);
         if layers & (1 << 31) != 0 {
