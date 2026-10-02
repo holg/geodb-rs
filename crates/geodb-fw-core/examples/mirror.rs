@@ -118,6 +118,7 @@ fn main() {
     let mut luts = (leak(ui::LUT_CELLS), leak(ui::MOVE_LUT_CELLS));
     // a quick frame is only drawn once a full one is there (the quick path does not repaint the whole screen)
     let mut have_full = false;
+    let mut seen_fulls = ui::fulls();
 
     let sock =
         UdpSocket::bind(("0.0.0.0", STATE_PORT)).expect("UDP port 7881 (another viewer running?)");
@@ -272,10 +273,13 @@ fn main() {
             now_view,
             spin,
             &[],
-            ui::moving() && have_full,
+            ui::moving() && have_full && ui::fulls() == seen_fulls,
             &mut luts,
         );
         have_full |= !quick;
+        if !quick {
+            seen_fulls = ui::fulls();
+        }
         // mouse over a city: its name next to the pointer (this window only; the board has no pointer)
         if let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) {
             ui::draw_tooltip(

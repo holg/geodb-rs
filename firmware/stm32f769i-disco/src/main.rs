@@ -588,8 +588,9 @@ async fn main(spawner: Spawner) {
             || grab.is_some_and(|g| g.dragging)
             || vel.0.abs() + vel.1.abs() > STOP_PX_S
             || inj_seen.is_some_and(|t| t.elapsed() < Duration::from_millis(80));
-        // The layers changed: bake them into the coarse earth again (a few hundred ms, at rest only).
-        if !motion && grab.is_none() && pictures.rebake(&img, &mut || watchdog.pet()) {
+        // The layers changed: bake them into the coarse earth again (a few hundred ms, once per change, also
+        // while the globe spins: the mirror does the same and both must show the same layers).
+        if grab.is_none() && pictures.rebake(&img, &mut || watchdog.pet()) {
             full = 2;
         }
         if !motion && dirty {
@@ -682,6 +683,7 @@ async fn main(spawner: Spawner) {
                 dirty = true;
             } else {
                 full = full.saturating_sub(1);
+                ui::bump_fulls(); // tells the mirror to repaint the whole screen too
             }
             frames += 1;
             if frames == 30 {

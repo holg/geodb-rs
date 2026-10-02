@@ -1061,12 +1061,27 @@ pub fn set_moving(on: bool) {
     MOVING.store(on, core::sync::atomic::Ordering::Relaxed);
 }
 
+static FULLS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Counts the full frames (the board bumps it after each one while the screen moves: a tap, a layer change).
+/// The quick frames do not repaint the buttons and dots, so the mirror draws a full frame whenever the count it
+/// last saw changed.
+pub fn fulls() -> u8 {
+    FULLS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn bump_fulls() {
+    FULLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// What the board shares with the mirror besides the view and the spin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shared {
     pub options: u8,
     pub selected: Option<u32>,
     pub moving: bool,
+    /// [`fulls`]: the board's count of full frames.
+    pub fulls: u8,
 }
 
 /// The shared state in force now / puts a received one into force (the mirror and the browser).
@@ -1075,6 +1090,7 @@ pub fn shared() -> Shared {
         options: options(),
         selected: selected(),
         moving: moving(),
+        fulls: fulls(),
     }
 }
 
@@ -1082,10 +1098,11 @@ pub fn set_shared(s: Shared) {
     set_options(s.options);
     select(s.selected);
     set_moving(s.moving);
+    FULLS.store(s.fulls, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Bytes of a state packet (see [`encode_state`]).
-pub const STATE_LEN: usize = 24;
+pub const STATE_LEN: usize = 25;
 
 /// What the board tells the host viewer about a screen: `V`, latitude, longitude and zoom (f32 LE),
 /// spin on (u8), spin speed (f32 LE), the board's frame rate (u8), the layer options (u8) and the selected
@@ -1104,6 +1121,7 @@ pub fn encode_state(view: View, spin: Spin, fps: u32) -> [u8; STATE_LEN] {
     // bit 7 of the options byte: the board is moving (the layer bits and the direction use 0..6)
     p[19] = (shared.options & 0x7f) | if shared.moving { 0x80 } else { 0 };
     p[20..24].copy_from_slice(&shared.selected.unwrap_or(u32::MAX).to_le_bytes());
+    p[24] = shared.fulls;
     p
 }
 
@@ -1125,6 +1143,7 @@ pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32, Shared)> {
     let shared = Shared {
         options: p[19] & 0x7f,
         moving: p[19] & 0x80 != 0,
+        fulls: p[24],
         selected: match u32::from_le_bytes([p[20], p[21], p[22], p[23]]) {
             u32::MAX => None,
             i => Some(i),
@@ -1569,6 +1588,7 @@ mod tests {
             options: layer::ALL & !layer::CONTOURS,
             selected: Some(1234),
             moving: true,
+            fulls: 7,
         });
         let p = encode_state(view, spin, 32);
         let shared = shared();
@@ -1577,6 +1597,7 @@ mod tests {
             options: layer::ALL,
             selected: None,
             moving: false,
+            fulls: 0,
         });
         assert_eq!(decode_state(&p[..10]), None);
         assert_eq!(decode_state(b"#hello hello hello"), None);

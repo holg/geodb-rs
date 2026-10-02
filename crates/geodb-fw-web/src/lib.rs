@@ -97,6 +97,8 @@ struct Remote {
     fresh: bool,
     /// A full screen was drawn, so quick frames may follow; the last frame was quick.
     have_full: bool,
+    /// The board's full-frame count at our last full frame (`ui::fulls`).
+    seen_fulls: u8,
     quick: bool,
 }
 
@@ -429,8 +431,9 @@ pub extern "C" fn apply_state() -> i32 {
         match ui::decode_state(&b.packet) {
             Some((view, spin, fps, shared)) => {
                 ui::set_shared(shared); // the layers and the selected city are the board's
-                let (have_full, quick) =
-                    b.remote.map_or((false, false), |o| (o.have_full, o.quick));
+                let (have_full, quick, seen_fulls) = b
+                    .remote
+                    .map_or((false, false, 0), |o| (o.have_full, o.quick, o.seen_fulls));
                 b.remote = Some(Remote {
                     view,
                     spin,
@@ -438,6 +441,7 @@ pub extern "C" fn apply_state() -> i32 {
                     fps,
                     fresh: true,
                     have_full,
+                    seen_fulls,
                     quick,
                 });
                 1
@@ -719,7 +723,7 @@ impl Board {
             return 0;
         }
         r.fresh = false;
-        let want_quick = moving && r.have_full;
+        let want_quick = moving && r.have_full && ui::fulls() == r.seen_fulls;
         let r = *r;
         let mut view = r.view;
         ui::advance(&mut view, r.spin, r.age.min(0.2));
@@ -749,6 +753,9 @@ impl Board {
         if let Some(rm) = self.remote.as_mut() {
             rm.quick = quick;
             rm.have_full |= !quick;
+            if !quick {
+                rm.seen_fulls = ui::fulls();
+            }
         }
         if !quick {
             ui::draw(
