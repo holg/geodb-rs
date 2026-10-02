@@ -46,26 +46,66 @@ pub fn save_png(name: &str, buf: &[u16]) -> Result<(), String> {
         .map_err(|e| format!("{name}: {e}"))
 }
 
+/// How a video is encoded: H.265 (about half the size of H.264 for the same look) or H.264, quality `crf`
+/// (lower = better and bigger; 32 is a good H.265 value for this content (9 MB for the 80 s demo, 5 MB at 36, 14 MB at 28), 23 a good H.264 one (19 MB)).
+#[derive(Clone, Copy)]
+pub struct Encode {
+    pub h265: bool,
+    pub crf: u32,
+}
+
+impl Default for Encode {
+    fn default() -> Self {
+        Encode {
+            h265: true,
+            crf: 28,
+        }
+    }
+}
+
 /// An `ffmpeg` that takes raw RGB frames on its stdin and writes `name` (an mp4).
-pub fn start_recording(name: &str, fps: u32) -> Option<Child> {
-    Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-s",
-        ])
-        .arg(format!("{}x{}", ui::WIDTH, ui::HEIGHT))
-        .args(["-r", &fps.to_string()])
-        .args(["-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", name])
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| eprintln!("ffmpeg does not start: {e}"))
-        .ok()
+pub fn start_recording(name: &str, fps: u32, enc: Encode) -> Option<Child> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args([
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+    ])
+    .arg(format!("{}x{}", ui::WIDTH, ui::HEIGHT))
+    .args(["-r", &fps.to_string(), "-i", "-"]);
+    if enc.h265 {
+        // hvc1: QuickTime, Safari and iOS play only this tag
+        cmd.args([
+            "-c:v",
+            "libx265",
+            "-preset",
+            "slow",
+            "-tag:v",
+            "hvc1",
+            "-x265-params",
+            "log-level=error",
+        ]);
+    } else {
+        cmd.args(["-c:v", "libx264", "-preset", "slow"]);
+    }
+    cmd.args([
+        "-crf",
+        &enc.crf.to_string(),
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        name,
+    ])
+    .stdin(Stdio::piped())
+    .spawn()
+    .map_err(|e| eprintln!("ffmpeg does not start: {e}"))
+    .ok()
 }
 
 pub fn stop_recording(mut child: Child, name: &str) {

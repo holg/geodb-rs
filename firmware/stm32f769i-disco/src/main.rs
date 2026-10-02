@@ -403,6 +403,7 @@ async fn main(spawner: Spawner) {
     let mut fps = 0u32;
     let mut last_frame = Instant::now();
     let mut last_state = Instant::now();
+    let mut code_rows = 0usize;
     let (mut code_sent, mut last_code) = (ui::code_seq(), Instant::now());
     let mut last_tick = Instant::now();
     let mut inj_seen: Option<Instant> = None; // when a drag from the mirror last moved the globe
@@ -605,6 +606,12 @@ async fn main(spawner: Spawner) {
         }
         if net::INJ_CODE.swap(false, core::sync::atomic::Ordering::Relaxed) {
             redraw = true; // (a quick frame redraws the strip; at rest this is a full frame)
+                           // a strip that shrinks or goes leaves its old pixels: a full frame clears them
+            let rows = ui::code_rows();
+            if rows < code_rows {
+                full = 2;
+            }
+            code_rows = rows;
         }
         let layers = net::INJ_LAYERS.swap(0, core::sync::atomic::Ordering::Relaxed);
         if layers & (1 << 31) != 0 {

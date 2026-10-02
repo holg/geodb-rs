@@ -178,6 +178,23 @@ fn truthy(e: &Expr) -> bool {
     !matches!(e, Expr::Nil)
 }
 
+/// The code as the screen shows it: symbols are read in upper case, so they are lower case again (strings stay).
+fn readable(code: &str) -> String {
+    let mut in_string = false;
+    code.chars()
+        .map(|c| {
+            if c == '"' {
+                in_string = !in_string;
+            }
+            if in_string {
+                c
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
 /// `(name arg ...)` as written, for the code strip.
 fn call_text(name: &str, args: &[Expr]) -> String {
     let mut text = format!("({name}");
@@ -186,7 +203,7 @@ fn call_text(name: &str, args: &[Expr]) -> String {
         text.push_str(&a.to_string());
     }
     text.push(')');
-    text
+    readable(&text)
 }
 
 /// A board command: the screen shows the call while it runs.
@@ -672,7 +689,7 @@ pub fn run_forms(it: &mut Interpreter, board: &dyn Board, source: &str) -> Vec<E
         }
         let shown = form.to_string();
         let text: Vec<&str> = shown.split_whitespace().collect();
-        board.send(&format!("!code {}", text.join(" ")));
+        board.send(&format!("!code {}", readable(&text.join(" "))));
         results.push(it.eval(form));
     }
     board.send("!code");

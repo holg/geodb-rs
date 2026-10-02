@@ -1123,44 +1123,67 @@ pub fn decode_code(p: &[u8]) -> bool {
     true
 }
 
-/// Where the code strip goes: left of the side panel on the landscape screen, above the network line on
-/// the others.
+/// Where the code strip goes: its left edge, the bottom it stands on and its width. On the landscape screen
+/// it stands on the bottom and ends left of the side panel (over the foot of the globe); on the others it
+/// stands on the network line.
 fn code_strip() -> (i32, i32, i32) {
     let l = layout();
     if l.status.0 >= 300 {
-        (0, l.height as i32 - 12, l.status.0 - 6)
+        (0, l.height as i32, l.status.0 - 4)
     } else {
-        (0, l.status.1 - 12, l.width as i32)
+        (0, l.status.1 - 2, l.width as i32)
     }
 }
 
-/// The strip with the running code line at the bottom of the screen (cleared when there is none).
-pub fn draw_code(fb: &mut Fb<'_>) {
-    let (x, y, w) = code_strip();
-    fb.rect(x, y, w, 11, BG);
+const CODE_ROW: i32 = 18;
+
+/// How many rows of text the running code line needs (0: none, at most 2).
+pub fn code_rows() -> usize {
+    let (_, _, w) = code_strip();
+    let per_row = (((w - 8) / 16).max(1)) as usize;
     let mut line = [0u8; CODE_MAX];
-    let n = code_line(&mut line);
-    if n == 0 {
+    code_line(&mut line).div_ceil(per_row).min(2)
+}
+
+/// The running code line over the foot of the screen: big enough to read in a video, two rows at most. It
+/// draws nothing when there is no line (the board redraws the whole screen when the strip shrinks).
+pub fn draw_code(fb: &mut Fb<'_>) {
+    let (x, bottom, w) = code_strip();
+    let rows = code_rows();
+    if rows == 0 {
         return;
     }
-    let room = (((w - 12) / 8).max(0) as usize).min(CODE_MAX);
-    let mut text = [0u8; CODE_MAX + 4];
-    text[..2].copy_from_slice(b"> ");
-    let shown = n.min(room);
-    text[2..2 + shown].copy_from_slice(&line[..shown]);
-    let mut len = 2 + shown;
-    if n > room && room > 2 {
-        text[len - 2..len].copy_from_slice(b"..");
+    let mut line = [0u8; CODE_MAX];
+    let n = code_line(&mut line);
+    let per_row = (((w - 8) / 16).max(1)) as usize;
+    let h = rows as i32 * CODE_ROW + 4;
+    let y = bottom - h;
+    fb.rect(x, y, w, h, BG);
+    for k in 0..w {
+        fb.set(x + k, y, CODE_COLOR);
     }
-    len = len.min(text.len());
-    render::text(
-        fb,
-        x + 2,
-        y + 1,
-        core::str::from_utf8(&text[..len]).unwrap_or(""),
-        1,
-        CODE_COLOR,
-    );
+    for r in 0..rows {
+        let from = r * per_row;
+        let mut to = (from + per_row).min(n);
+        let mut text = [0u8; 64];
+        let mut len = to - from;
+        text[..len].copy_from_slice(&line[from..to]);
+        if r + 1 == rows && n > rows * per_row {
+            // too long for two rows: the end is cut
+            to = from + per_row;
+            len = to - from;
+            text[..len].copy_from_slice(&line[from..to]);
+            text[len - 2..len].copy_from_slice(b"..");
+        }
+        render::text(
+            fb,
+            x + 4,
+            y + 3 + r as i32 * CODE_ROW,
+            core::str::from_utf8(&text[..len]).unwrap_or(""),
+            2,
+            CODE_COLOR,
+        );
+    }
 }
 
 const CODE_COLOR: u16 = rgb565(130, 220, 140);

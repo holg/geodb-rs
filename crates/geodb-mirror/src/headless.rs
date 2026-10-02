@@ -4,7 +4,7 @@
 //! `ui::Interact` for taps and flights, the same `scene::Pictures` for the earth), but always draws full frames.
 //!
 //!   cargo run --release -p geodb-mirror -- --headless demo.lsp \
-//!       [--out demo.mp4] [--fps 30]
+//!       [--out demo.mp4] [--fps 30] [--codec h265|h264] [--crf 32]
 
 use crate::repl::{self, Board, Snapshot};
 use geodb_fw_core::render::{Fb, GlobeLut, View};
@@ -198,6 +198,7 @@ pub fn run(
     script: &str,
     out: &str,
     fps: u32,
+    enc: crate::util::Encode,
 ) {
     // the script's own folder is the working directory (it may (load "lib.LSP")); the video goes where we were
     let out = std::path::absolute(out).unwrap_or_else(|_| out.into());
@@ -209,7 +210,7 @@ pub fn run(
     }
     let source =
         std::fs::read_to_string(&script).unwrap_or_else(|e| panic!("{}: {e}", script.display()));
-    let video = crate::util::start_recording(out, fps);
+    let video = crate::util::start_recording(out, fps, enc);
     if video.is_none() {
         eprintln!("no ffmpeg: nothing is written (the script still runs)");
     }

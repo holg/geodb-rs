@@ -1,7 +1,7 @@
 //! The mirror of the STM32F769I-DISCO board.
 //!
 //!   geodb-mirror [geodb.fw] [--script f.lsp]                     the window: the board's screen and a Lisp console
-//!   geodb-mirror --headless demo.lsp [--out demo.mp4] [--fps 30] no window, no board: a script drives a simulated
+//!   geodb-mirror --headless demo.lsp [--out demo.mp4] [--fps 30] [--codec h265|h264] [--crf 32]  no window, no board: a script drives a simulated
 //!                                                                board into an mp4 (see headless.rs)
 //!
 //! scopekit's flags apply (`--terminal` runs it in a terminal that shows images, `--window` is the default).
@@ -94,6 +94,16 @@ fn main() {
             script,
             value("--out").map_or("demo.mp4", String::as_str),
             value("--fps").and_then(|v| v.parse().ok()).unwrap_or(30),
+            util::Encode {
+                h265: value("--codec").is_none_or(|c| c != "h264"),
+                crf: value("--crf").and_then(|v| v.parse().ok()).unwrap_or(
+                    if value("--codec").is_some_and(|c| c == "h264") {
+                        23
+                    } else {
+                        32
+                    },
+                ),
+            },
         );
         return;
     }

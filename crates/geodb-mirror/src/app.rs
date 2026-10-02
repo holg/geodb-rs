@@ -319,7 +319,7 @@ impl Mirror {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0, |d| d.as_secs())
                 );
-                if let Some(child) = util::start_recording(&name, 30) {
+                if let Some(child) = util::start_recording(&name, 30, util::Encode::default()) {
                     self.notice = format!("recording to {name} (Ctrl-R stops)");
                     self.recording = Some((child, name));
                     self.next_frame = Instant::now();
