@@ -57,11 +57,11 @@ struct Globals {
     patch_centre: [f32; 4],
 }
 
+/// The ground under the camera (nadir, east, north, camera right, camera up, patch centre), see [`Globals`].
+type Ground = ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]);
+
 /// The ground under the camera in f64 (the shader only has f32), see [`Globals`].
-fn ground_under(
-    cam: &OrbitCamera,
-    patch: Option<[f32; 4]>,
-) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+fn ground_under(cam: &OrbitCamera, patch: Option<[f32; 4]>) -> Ground {
     let (lat, lon) = (cam.lat.to_radians(), cam.lon.to_radians());
     // the same axes as `geo::to_vec`: x = cos(lat) sin(lon), y = sin(lat), z = cos(lat) cos(lon)
     let u = [lat.cos() * lon.sin(), lat.sin(), lat.cos() * lon.cos()];
@@ -786,6 +786,44 @@ impl Renderer {
     /// Which relief layers show (when an elevation picture is loaded): hill shading, isohypses.
     pub fn show_relief(&mut self, shading: bool, isohypses: bool) {
         self.relief_on = (shading, isohypses);
+    }
+
+    /// An RGBA8 sRGB picture (`size` x `size`) as a detail patch texture.
+    pub fn patch_view(&self, rgba: &[u8], size: u32) -> wgpu::TextureView {
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("detail patch"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 4),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        tex.create_view(&Default::default())
     }
 
     /// Frees the coastlines.

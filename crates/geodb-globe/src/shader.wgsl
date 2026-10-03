@@ -204,9 +204,9 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     let merc_v = log(tan(quarter + radians(g.detail.y) * 0.5) / tan(quarter + phi * 0.5)) / (6.2831853 * g.detail.z);
     let pv_coarse = select((g.detail.y - lat) / g.detail.z, merc_v, merc);
     // (the coarse numbers above are good to 0.5 m: fine for the globe, not for street maps)
-    let precise = tile_uv(i.clip.xy, merc);
-    let pu = select(pu_coarse, precise.uv.x, precise.ok);
-    let pv = select(pv_coarse, precise.uv.y, precise.ok);
+    let tile = tile_uv(i.clip.xy, merc);
+    let pu = select(pu_coarse, tile.uv.x, tile.ok);
+    let pv = select(pv_coarse, tile.uv.y, tile.ok);
     let pc = textureSampleLevel(patch_tex, earth_sampler, clamp(vec2<f32>(pu, pv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
     let inside = g.detail.w > 0.5 && pu >= 0.0 && pu <= 1.0 && pv >= 0.0 && pv <= 1.0;
     albedo = mix(albedo, pc.rgb, select(0.0, pc.a, inside) * (1.0 - use_right));
