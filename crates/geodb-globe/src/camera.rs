@@ -3,7 +3,9 @@
 use crate::geo::{self, EARTH_RADIUS_KM};
 use glam::{Mat4, Vec3, Vec4};
 
-pub const MIN_DIST: f64 = 1.0003; // ~2 km altitude (street-level map tiles)
+/// ~320 m altitude: street names of the OpenStreetMap tiles (level 18, 19) are readable (the camera can
+/// go lower, but f32 positions then step by 0.8 m).
+pub const MIN_DIST: f64 = 1.00005;
 pub const MAX_DIST: f64 = 8.0;
 const MAX_LAT: f64 = 85.0;
 

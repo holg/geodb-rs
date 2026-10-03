@@ -133,8 +133,19 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     // Latitude and longitude of the point itself: the mesh's interpolated
     // uv drifts by hundreds of metres inside a 1.4 degree triangle, which
     // shows at street level.
-    let lon = degrees(atan2(n.x, n.z));
-    let lat = degrees(asin(clamp(n.y, -1.0, 1.0)));
+    // The mesh is made of chords (its surface is up to half a kilometre below the sphere), so its own position
+    // is off by hundreds of metres where the view is oblique: harmless for the globe, but street maps at
+    // 0.3 m a pixel swim. So the point of the true sphere under the pixel: the ray through the fragment, cut
+    // with the unit sphere (|camera|^2 - 1 as a product: it is 1e-4 near the ground).
+    let ray = normalize(i.world - g.camera.xyz);
+    let b = dot(g.camera.xyz, ray);
+    let disc = b * b - (g.camera.w - 1.0) * (g.camera.w + 1.0);
+    var sn = n;
+    if (disc >= 0.0) {
+        sn = normalize(g.camera.xyz + ray * (-b - sqrt(disc)));
+    }
+    let lon = degrees(atan2(sn.x, sn.z));
+    let lat = degrees(asin(clamp(sn.y, -1.0, 1.0)));
     let merc = g.detail.w > 1.5;
     let dl = lon - g.detail.x;
     let pu = (dl - 360.0 * floor(dl / 360.0)) / (g.detail.z * select(1.0, 360.0, merc));
