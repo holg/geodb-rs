@@ -13,6 +13,11 @@ columns is about 10% smaller than the gzip inside the files.
 
     python3 crates/geodb-globe/scripts/web_release.py            # -> crates/geodb-globe/dist-web/
     python3 crates/geodb-globe/scripts/web_release.py --serve 8770
+    python3 crates/geodb-globe/scripts/web_release.py --deploy      # + rsync to trahe.eu (geodb-rs/geodb-globe)
+
+--fw builds fw.html the same way (both builds and the loader) on the
+cities of the firmware image (assets/fw-raw, assets/fw, from
+`make_fw_assets`) into dist-web-fw/.
 
 Serve the precompressed files, e.g. nginx `brotli_static on; gzip_static on;`
 or Caddy `file_server { precompressed br gzip }`. A server that sends the
@@ -293,6 +298,23 @@ def main() -> None:
     ap.add_argument("--no-build", action="store_true", help="only serve the last release")
     ap.add_argument("--pages", type=Path, metavar="DIR", help="also write a copy for a static host (GitHub Pages)")
     args = ap.parse_args()
+# Where the site lives (trahe.eu): /var/www/trahe/html/geodb-rs/<name>/ for each page (geodb-globe, geodb-fw-web).
+DEPLOY_TARGET = "root@trahe.eu:/var/www/trahe/html/geodb-rs"
+
+
+def deploy(src: Path, name: str, target: str = DEPLOY_TARGET) -> None:
+    """rsync `src` to `<target>/<name>/`: what changed goes up first, the old hashed builds are deleted last
+    (--delete-delay) so the live page never lacks a file. No --delay-updates: it needs room for every new file
+    at once (a nearly full disk then stops halfway and leaves a .~tmp~ directory behind). A checksum dry run
+    afterwards says whether the server matches."""
+    ssh = ["-e", "ssh -o BatchMode=yes"]
+    dest = f"{target.rstrip('/')}/{name}/"
+    subprocess.run(["rsync", "-a", "--delete-delay", "--stats", *ssh, f"{src}/", dest], check=True)
+    out = subprocess.run(["rsync", "-anc", "--delete", *ssh, f"{src}/", dest],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    print(f"deployed {src.name}/ -> {dest}" + ("" if not out else f"\nSTILL DIFFERENT:\n{out}"))
+
+
     if not args.no_build:
         release("flex.html" if args.flex else "mini.html")
     if args.pages:
@@ -303,6 +325,8 @@ def main() -> None:
         if args.tls:
             cert, key = certificate()
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ap.add_argument("--deploy", nargs="?", const=DEPLOY_TARGET, metavar="HOST:DIR",
+                    help=f"rsync the release to the web server (default {DEPLOY_TARGET}, folder geodb-globe)")
             ctx.load_cert_chain(cert, key)
             server.socket = ctx.wrap_socket(server.socket, server_side=True)
             scheme = "https"
@@ -310,6 +334,8 @@ def main() -> None:
         print(f"\nserving {OUT} (br, gzip or plain) on:")
         for h in hosts:
             print(f"  {scheme}://{h}:{args.serve}/")
+    if args.deploy:
+        deploy(OUT, "geodb-globe-fw" if args.fw else "geodb-globe", args.deploy)
         if args.host != "127.0.0.1" and not args.tls:
             print("  note: plain http off localhost is not a secure context (no WebGPU, no brotli); add --tls")
         server.serve_forever()

@@ -3,6 +3,7 @@
 
     python3 crates/geodb-fw-web/build.py                       # -> crates/geodb-fw-web/dist/
     python3 crates/geodb-fw-web/build.py --serve 8792 --host 0.0.0.0 --tls
+    python3 crates/geodb-fw-web/build.py --deploy              # + rsync to trahe.eu (geodb-rs/geodb-fw-web)
 
 dist/ holds index.html, board.wasm (no wasm-bindgen, no JS glue) and geodb.fw
 (firmware/stm32f769i-disco/geodb.fw, from
@@ -223,6 +224,8 @@ def main() -> None:
     ap.add_argument("--no-build", action="store_true", help="only serve the last build")
     ap.add_argument("--no-bundle", action="store_true", help="skip the flash bundle (bootloader, program, image)")
     ap.add_argument("--pages", type=Path, metavar="DIR", help="also write a copy for a static host")
+    ap.add_argument("--deploy", nargs="?", const=web_release.DEPLOY_TARGET, metavar="HOST:DIR",
+                    help=f"rsync dist to the web server (default {web_release.DEPLOY_TARGET}, folder geodb-fw-web)")
     ap.add_argument("--serve", type=int, metavar="PORT", help="serve dist with precompression")
     ap.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0: intranet too)")
     ap.add_argument("--tls", action="store_true", help="HTTPS with web_release.py's self-signed certificate")
@@ -233,6 +236,8 @@ def main() -> None:
             bundle()
     if args.pages:
         pages(args.pages)
+    if args.deploy:
+        web_release.deploy(OUT, "geodb-fw-web", args.deploy)
     if args.serve:
         web_release.OUT = OUT
         web_release.TYPES[".fw"] = "application/octet-stream"
