@@ -35,6 +35,8 @@ pub struct Args {
     search: Option<String>,
     screenshot: Option<String>,
     size: (u32, u32),
+    /// Relief layers: hill shading, isohypses (`--relief`, `--relief shade`, `--relief iso`).
+    relief: Option<(bool, bool)>,
 }
 
 /// Our own flags, from what scopekit's `Config::with_args` left over.
@@ -45,6 +47,7 @@ fn parse_args(rest: Vec<String>) -> Result<Args, String> {
         search: None,
         screenshot: None,
         size: (1400, 900),
+        relief: None,
     };
     let mut it = rest.into_iter();
     while let Some(a) = it.next() {
@@ -61,6 +64,13 @@ fn parse_args(rest: Vec<String>) -> Result<Args, String> {
             "--alt" => args.alt_km = Some(value()?.parse().map_err(|_| "bad --alt")?),
             "--search" => args.search = Some(value()?),
             "--screenshot" => args.screenshot = Some(value()?),
+            "--relief" => {
+                args.relief = Some(match value()?.as_str() {
+                    "shade" => (true, false),
+                    "iso" => (false, true),
+                    _ => (true, true),
+                })
+            }
             "--size" => {
                 let v = value()?;
                 let (w, h) = v.split_once('x').ok_or("--size expects WxH")?;
@@ -174,6 +184,11 @@ fn screenshot(args: &Args, path: &str) -> Result<(), String> {
     let mut globe = GlobeView::new(earth, cam);
     globe.set_query(Some(q));
     globe.set_markers(view::markers(Some(&nearby), None, Some(q), 1.0));
+    if let Some((shading, iso)) = args.relief {
+        let heights =
+            geodb_globe::relief::heights(include_bytes!("../../../assets/mini/elev.bin"))?;
+        globe.set_relief(std::sync::Arc::new(heights), shading, iso);
+    }
     let rgba = scopekit::render_to_rgba(
         &mut globe,
         args.size.0,

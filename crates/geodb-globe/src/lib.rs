@@ -16,6 +16,7 @@ pub mod geoid;
 pub mod mesh;
 pub mod mini;
 pub mod places;
+pub mod relief;
 pub mod render;
 pub mod single_file;
 pub mod source;

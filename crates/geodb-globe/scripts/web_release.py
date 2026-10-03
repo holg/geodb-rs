@@ -166,6 +166,8 @@ def release(page: str) -> None:
         subprocess.run(["brotli", "-q", "11", "-w", "24", "-f", "-o", str(f) + ".br", str(f)], check=True)
         rows.append((f.name, len(data), (f.parent / (f.name + ".gz")).stat().st_size,
                      (f.parent / (f.name + ".br")).stat().st_size))
+    # The elevation of the relief layers (the board's picture, gzipped inside; the page reads both).
+    shutil.copy(GZIPPED / "elev.bin", OUT / "elev.bin")
 
     w = max(len(r[0]) for r in rows)
     print(f"\n{OUT}\n{'file':<{w}} {'plain':>10} {'gzip':>10} {'brotli':>10}")

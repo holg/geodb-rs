@@ -18,6 +18,8 @@ pub struct GlobeView {
     markers: Vec<Marker>,
     markers_dirty: bool,
     changed: bool,
+    /// Elevation (metres) for the relief layers, and which of them show: hill shading, isohypses.
+    relief: Option<(Arc<Vec<f32>>, bool, bool)>,
 }
 
 impl GlobeView {
@@ -32,6 +34,30 @@ impl GlobeView {
             markers: Vec::new(),
             markers_dirty: true,
             changed: true,
+            relief: None,
+        }
+    }
+
+    /// Relief layers on the globe: `heights` is the elevation picture ([`crate::relief::heights`]).
+    pub fn set_relief(&mut self, heights: Arc<Vec<f32>>, shading: bool, isohypses: bool) {
+        self.relief = Some((heights, shading, isohypses));
+        if let Some(r) = self.renderer.as_mut() {
+            Self::apply_relief(r, &self.relief);
+        }
+        self.changed = true;
+    }
+
+    fn apply_relief(r: &mut Renderer, relief: &Option<(Arc<Vec<f32>>, bool, bool)>) {
+        match relief {
+            Some((h, shading, iso)) => {
+                r.set_relief(Some((
+                    h.as_slice(),
+                    crate::relief::WIDTH,
+                    crate::relief::HEIGHT,
+                )));
+                r.show_relief(*shading, *iso);
+            }
+            None => r.set_relief(None),
         }
     }
 
@@ -74,6 +100,9 @@ impl GpuView for GlobeView {
             (1, 1),
             |_| (**earth).clone(),
         ));
+        if let Some(r) = self.renderer.as_mut() {
+            Self::apply_relief(r, &self.relief);
+        }
         self.markers_dirty = true;
         self.changed = true;
     }

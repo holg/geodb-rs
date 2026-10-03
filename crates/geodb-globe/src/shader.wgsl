@@ -14,6 +14,8 @@ struct Globals {
     detail: vec4<f32>,
     // x, y: 1 = the left / right surface is luma + chroma (see ycc.rs)
     surface: vec4<f32>,
+    // Relief: x hill shading (0 off), y isohypses (0 off), z contour step (metres), w exaggeration
+    relief: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -27,6 +29,8 @@ struct Globals {
 // Chroma of luma + chroma surfaces (half size, RG); a placeholder otherwise.
 @group(0) @binding(6) var chroma_left: texture_2d<f32>;
 @group(0) @binding(7) var chroma_right: texture_2d<f32>;
+// Elevation in metres (R16Float, equirectangular, north up), a placeholder until it is loaded.
+@group(0) @binding(8) var relief_tex: texture_2d<f32>;
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
@@ -41,6 +45,49 @@ fn surface_rgb(s: vec4<f32>, chroma: vec2<f32>, ycc: f32) -> vec3<f32> {
     let cr = chroma.y - 0.5;
     let rgb = vec3<f32>(s.r + 1.402 * cr, s.r - 0.344136 * cb - 0.714136 * cr, s.r + 1.772 * cb);
     return select(s.rgb, srgb_to_linear(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0))), ycc > 0.5);
+}
+
+// The height (m) at uv, without derivatives (usable in any control flow).
+fn height_at(uv: vec2<f32>) -> f32 {
+    return textureSampleLevel(relief_tex, earth_sampler, uv, 0.0).r;
+}
+
+// The surface colour under the relief: hill shading (light from the north west, the slope of the
+// elevation picture) and isohypses (lines every `g.relief.z` metres, the sea's every second step, drawn
+// as thin anti-aliased lines at any zoom, because the height is interpolated per pixel).
+fn with_relief(albedo: vec3<f32>, uv: vec2<f32>, h: f32, lat: f32) -> vec3<f32> {
+    var c = albedo;
+    if (g.relief.x > 0.5) {
+        let du = 1.0 / 1024.0;
+        let dv = 1.0 / 512.0;
+        // metres per cell: 360 degrees over 1024 cells, a degree is 111 km (shorter east-west away from the equator)
+        let cell_y = 111195.0 * 180.0 / 512.0;
+        let cell_x = 111195.0 * 360.0 / 1024.0 * max(cos(radians(lat)), 0.05);
+        let de = (height_at(uv + vec2<f32>(du, 0.0)) - height_at(uv - vec2<f32>(du, 0.0))) / (2.0 * cell_x);
+        // uv.y grows to the south
+        let dn = -(height_at(uv + vec2<f32>(0.0, dv)) - height_at(uv - vec2<f32>(0.0, dv))) / (2.0 * cell_y);
+        let normal = normalize(vec3<f32>(-de * g.relief.w, -dn * g.relief.w, 1.0));
+        let light = normalize(vec3<f32>(-0.55, 0.55, 0.65));
+        // 1 on flat ground, lighter towards the light, darker away
+        let shade = dot(normal, light) / light.z;
+        // (the sea floor is coded in coarse steps: shading it would show them as blocks, so only land is shaded)
+        let land = smoothstep(-20.0, 150.0, h);
+        c = c * mix(1.0, clamp(shade, 0.4, 1.7), land);
+    }
+    if (g.relief.y > 0.5) {
+        // sea level is the line of the coast; land every step, sea every second step
+        let interval = g.relief.z;
+        let k = select(h / (2.0 * interval), h / interval, h >= 0.0);
+        let w = fwidth(k);
+        let d = abs(fract(k - 0.5) - 0.5) / max(w, 1e-6);
+        // (flat ground exactly at a level, the coast cells at 0 m for one, is no line)
+        let line = (1.0 - clamp(d - 0.35, 0.0, 1.0)) * select(0.55, 0.8, h >= 0.0) * step(2e-6, w)
+            // (not at sea level: the coast is the vector coastline's, and a 40 km grid draws it in steps)
+            * step(1.0, abs(floor(k + 0.5)));
+        let ink = select(vec3<f32>(0.75, 0.85, 1.0), vec3<f32>(0.95, 0.8, 0.5), h >= 0.0);
+        c = mix(c, ink, line);
+    }
+    return c;
 }
 
 struct VsIn {
@@ -100,6 +147,10 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     let pc = textureSampleLevel(patch_tex, earth_sampler, clamp(vec2<f32>(pu, pv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
     let inside = g.detail.w > 0.5 && pu >= 0.0 && pu <= 1.0 && pv >= 0.0 && pv <= 1.0;
     albedo = mix(albedo, pc.rgb, select(0.0, pc.a, inside) * (1.0 - use_right));
+    // Relief: shading and isohypses over every surface, but under the detail tiles (they have their own).
+    let elevation = textureSample(relief_tex, earth_sampler, i.uv).r;
+    let tile_here = select(0.0, pc.a, inside) * (1.0 - use_right);
+    albedo = mix(with_relief(albedo, i.uv, elevation, lat), albedo, tile_here);
     var col = albedo * (0.16 + 1.05 * max(ndl, 0.0) + 0.12 * day);
 
     // Ocean glint: water is the only strongly blue surface in the texture.
