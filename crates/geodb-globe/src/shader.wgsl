@@ -16,6 +16,16 @@ struct Globals {
     surface: vec4<f32>,
     // Relief: x hill shading (0 off), y isohypses (0 off), z contour step (metres), w exaggeration
     relief: vec4<f32>,
+    // The ground under the camera, for placing the detail tiles to the centimetre (see `tile_uv`): xyz the
+    // unit vector under the camera, w the altitude in earth radii; the east and north unit vectors there;
+    // the camera's right and up vectors, w their tan(fov / 2) (x: with the aspect); the tile patch's uv under
+    // the camera, cos(latitude) there, w 1 when valid.
+    nadir: vec4<f32>,
+    east: vec4<f32>,
+    north: vec4<f32>,
+    cam_right: vec4<f32>,
+    cam_up: vec4<f32>,
+    patch_centre: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -90,6 +100,44 @@ fn with_relief(albedo: vec3<f32>, uv: vec2<f32>, h: f32, lat: f32) -> vec3<f32> 
     return c;
 }
 
+// The patch uv of the ground under pixel `frag` (physical pixels), valid when `ok`. Longitude and latitude
+// as f32 numbers only resolve 0.4 m (and a street map is 0.2 m a pixel), so the offset from the point under
+// the camera is worked out on its own: the ray through the pixel cut with the sphere as a small distance
+// (the root of a quadratic with a tiny constant term, written to avoid the cancellation), expressed in the
+// east and north vectors there, and added to the patch uv of that point (computed in f64 on the CPU).
+struct TileUv {
+    uv: vec2<f32>,
+    ok: bool,
+};
+
+fn tile_uv(frag: vec2<f32>, merc: bool) -> TileUv {
+    var out: TileUv;
+    out.ok = false;
+    out.uv = vec2<f32>(0.0);
+    if (g.patch_centre.w < 0.5) {
+        return out;
+    }
+    let ndc = vec2<f32>(frag.x / g.viewport.x * 2.0 - 1.0, 1.0 - frag.y / g.viewport.y * 2.0);
+    let u = g.nadir.xyz;
+    let alt = g.nadir.w;
+    let ray = normalize(-u + g.cam_right.xyz * (ndc.x * g.cam_right.w) + g.cam_up.xyz * (ndc.y * g.cam_up.w));
+    let b = (1.0 + alt) * dot(u, ray);
+    let c = alt * (2.0 + alt);
+    let disc = b * b - c;
+    if (b >= 0.0 || disc < 0.0) {
+        return out;
+    }
+    let t = c / (-b + sqrt(disc));
+    let d = alt * u + ray * t;
+    let de = dot(d, g.east.xyz);
+    let dn = dot(d, g.north.xyz);
+    let span = radians(g.detail.z * select(1.0, 360.0, merc));
+    let k = select(1.0, 1.0 / g.patch_centre.z, merc);
+    out.uv = vec2<f32>(g.patch_centre.x + de / g.patch_centre.z / span, g.patch_centre.y - dn * k / span);
+    out.ok = true;
+    return out;
+}
+
 struct VsIn {
     @location(0) pos: vec3<f32>,
     @location(1) uv: vec2<f32>,
@@ -148,13 +196,17 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     let lat = degrees(asin(clamp(sn.y, -1.0, 1.0)));
     let merc = g.detail.w > 1.5;
     let dl = lon - g.detail.x;
-    let pu = (dl - 360.0 * floor(dl / 360.0)) / (g.detail.z * select(1.0, 360.0, merc));
+    let pu_coarse = (dl - 360.0 * floor(dl / 360.0)) / (g.detail.z * select(1.0, 360.0, merc));
     // Mercator: the grid distance from the north edge, as the log of a tan
     // ratio (more precise in f32 than subtracting two grid positions).
     let quarter = 0.7853982;
     let phi = radians(clamp(lat, -85.05113, 85.05113));
     let merc_v = log(tan(quarter + radians(g.detail.y) * 0.5) / tan(quarter + phi * 0.5)) / (6.2831853 * g.detail.z);
-    let pv = select((g.detail.y - lat) / g.detail.z, merc_v, merc);
+    let pv_coarse = select((g.detail.y - lat) / g.detail.z, merc_v, merc);
+    // (the coarse numbers above are good to 0.5 m: fine for the globe, not for street maps)
+    let precise = tile_uv(i.clip.xy, merc);
+    let pu = select(pu_coarse, precise.uv.x, precise.ok);
+    let pv = select(pv_coarse, precise.uv.y, precise.ok);
     let pc = textureSampleLevel(patch_tex, earth_sampler, clamp(vec2<f32>(pu, pv), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
     let inside = g.detail.w > 0.5 && pu >= 0.0 && pu <= 1.0 && pv >= 0.0 && pv <= 1.0;
     albedo = mix(albedo, pc.rgb, select(0.0, pc.a, inside) * (1.0 - use_right));
