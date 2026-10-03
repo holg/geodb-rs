@@ -167,11 +167,12 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     // Ocean glint: water is the only strongly blue surface in the texture.
     let water = smoothstep(0.03, 0.12, albedo.b - albedo.r);
     let spec = pow(max(dot(reflect(-sun, n), view), 0.0), 60.0);
-    col += vec3<f32>(1.0, 0.95, 0.85) * spec * water * 0.5 * day;
+    col += vec3<f32>(1.0, 0.95, 0.85) * spec * water * 0.5 * day * (1.0 - tile_here);
 
     // City lights on the night side (faint during the day for orientation).
     let night = 1.0 - day;
-    col += vec3<f32>(1.0, 0.72, 0.36) * tex.a * (0.05 + 1.6 * night);
+    // (not over the detail tiles: a street map has no glow, and the lights' blobs, a few km wide, smear it)
+    col += vec3<f32>(1.0, 0.72, 0.36) * tex.a * (0.05 + 1.6 * night) * (1.0 - tile_here);
 
     // Atmospheric rim.
     let fres = pow(1.0 - max(dot(n, view), 0.0), 3.0);
@@ -185,7 +186,7 @@ fn fs_globe(i: VsOut) -> @location(0) vec4<f32> {
     let grid = vec2<f32>(i.uv.x * 24.0, i.uv.y * 12.0);
     let gd = abs(fract(grid - 0.5) - 0.5) / max(fwidth(grid), vec2<f32>(1e-5));
     let line = 1.0 - min(min(gd.x, gd.y), 1.0);
-    col = mix(col, vec3<f32>(0.55, 0.7, 1.0), line * 0.10);
+    col = mix(col, vec3<f32>(0.55, 0.7, 1.0), line * 0.10 * (1.0 - tile_here));
 
     // Query radius: a soft disc with a crisp ring.
     // The angle from the chord: acos of a dot product cannot resolve less
