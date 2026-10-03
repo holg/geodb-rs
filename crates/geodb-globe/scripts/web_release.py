@@ -303,6 +303,42 @@ DEPLOY_TARGET = "root@trahe.eu:/var/www/trahe/html/geodb-rs"
 
 
 def deploy(src: Path, name: str, target: str = DEPLOY_TARGET) -> None:
+    """rsync `src` to `<target>/<name>/`: what changed goes up first, files that are gone from `src` are
+    deleted last (--delete-delay) so the live page never lacks a file. The hashed builds
+    (`geodb-globe-<hash>.js` / `_bg.wasm`) of the release before stay for three days: a browser that still holds
+    the old index.html (no cache headers: it may for a day) asks for them, and a page without its wasm is a
+    dead page; they go in a later deploy. No --delay-updates: it needs room for every new file at once (a
+    nearly full disk then stops halfway and leaves a .~tmp~ directory behind). A checksum dry run afterwards
+    says whether the server matches."""
+    ssh = ["-e", "ssh -o BatchMode=yes"]
+    host, _, folder = target.partition(":")
+    dest = f"{target.rstrip('/')}/{name}/"
+    protect = ["--filter", "P geodb-globe-*"]
+    subprocess.run(["rsync", "-a", "--delete-delay", "--stats", *protect, *ssh, f"{src}/", dest], check=True)
+    # the hashed builds of releases older than three days
+    remote = f"{folder.rstrip('/')}/{name}"
+    subprocess.run(["ssh", "-o", "BatchMode=yes", host,
+                    f"find {remote} -maxdepth 1 -name 'geodb-globe-*' -mtime +3 -delete 2>/dev/null; true"],
+                   check=True)
+    out = subprocess.run(["rsync", "-anc", "--delete", *protect, *ssh, f"{src}/", dest],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    print(f"deployed {src.name}/ -> {dest}" + ("" if not out else f"\nSTILL DIFFERENT:\n{out}"))
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--flex", action="store_true", help="build flex.html instead of mini.html")
+    ap.add_argument("--serve", type=int, metavar="PORT", help="serve dist-web with precompression")
+    ap.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0: intranet too)")
+    ap.add_argument("--tls", action="store_true", help="HTTPS with a self-signed certificate (.tls/)")
+    ap.add_argument("--no-build", action="store_true", help="only serve the last release")
+    ap.add_argument("--pages", type=Path, metavar="DIR", help="also write a copy for a static host (GitHub Pages)")
+    args = ap.parse_args()
+# Where the site lives (trahe.eu): /var/www/trahe/html/geodb-rs/<name>/ for each page (geodb-globe, geodb-fw-web).
+DEPLOY_TARGET = "root@trahe.eu:/var/www/trahe/html/geodb-rs"
+
+
+def deploy(src: Path, name: str, target: str = DEPLOY_TARGET) -> None:
     """rsync `src` to `<target>/<name>/`: what changed goes up first, the old hashed builds are deleted last
     (--delete-delay) so the live page never lacks a file. No --delay-updates: it needs room for every new file
     at once (a nearly full disk then stops halfway and leaves a .~tmp~ directory behind). A checksum dry run
@@ -335,7 +371,7 @@ def deploy(src: Path, name: str, target: str = DEPLOY_TARGET) -> None:
         for h in hosts:
             print(f"  {scheme}://{h}:{args.serve}/")
     if args.deploy:
-        deploy(OUT, "geodb-globe-fw" if args.fw else "geodb-globe", args.deploy)
+        deploy(OUT, "geodb-globe-fw" if getattr(args, "fw", False) else "geodb-globe", args.deploy)
         if args.host != "127.0.0.1" and not args.tls:
             print("  note: plain http off localhost is not a secure context (no WebGPU, no brotli); add --tls")
         server.serve_forever()
