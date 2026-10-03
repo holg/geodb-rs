@@ -157,6 +157,9 @@ struct App {
     selected: Option<usize>,
     labels: Vec<HtmlElement>,
     last_frame: f64,
+    /// When the address bar was last compared with what is loaded and shown, and what it was set to.
+    url_checked: f64,
+    url_state: String,
     dirty: bool,
     spin: bool,
     spin_deg_s: f64,
@@ -631,6 +634,16 @@ impl App {
 
     fn frame(&mut self, t: f64) {
         let frame_start = now();
+        // The address bar follows what is loaded and shown (the extras ticked, the layers, the view): copy
+        // the URL, paste it, and the page comes up the same. Twice a second at most, only when it changed.
+        if t - self.url_checked >= 500.0 {
+            self.url_checked = t;
+            let query = self.state_query();
+            if query != self.url_state {
+                replace_address(&query);
+                self.url_state = query;
+            }
+        }
         let dt = ((t - self.last_frame) / 1000.0).clamp(0.0, 0.1);
         self.last_frame = t;
 
@@ -2304,6 +2317,55 @@ fn build_files() -> Option<(String, String)> {
     let wasm = names.iter().find(|n| n.ends_with("_bg.wasm"))?.clone();
     let js = wasm.strip_suffix("_bg.wasm")?.to_string() + ".js";
     Some((js, wasm))
+}
+
+/// The query parameters [`App::state_query`] writes: the address bar's other parameters (`?gl`, `?spin=`...)
+/// stay as they are.
+const STATE_PARAMS: [&str; 14] = [
+    "data",
+    "load",
+    "earth",
+    "layers",
+    "positions",
+    "coast",
+    "imagery",
+    "lines",
+    "hidelines",
+    "show",
+    "compare",
+    "tiles",
+    "date",
+    "at",
+];
+
+/// Puts `state` (a `?query` from [`App::state_query`]) into the address bar without reloading, keeping the
+/// parameters it does not manage.
+fn replace_address(state: &str) {
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let search = win.location().search().unwrap_or_default();
+    let kept: Vec<&str> = search
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .filter(|kv| !STATE_PARAMS.contains(&kv.split('=').next().unwrap_or("")))
+        .collect();
+    let mut query = state.trim_start_matches('?').to_string();
+    for kv in kept {
+        if !query.is_empty() {
+            query.push('&');
+        }
+        query.push_str(kv);
+    }
+    let url = format!("?{query}");
+    // history.replaceState(null, "", url); it may throw (file://, sandboxes): then the bar stays as it is
+    let replace = js_sys::Reflect::get(&win, &"history".into()).and_then(|history| {
+        let f: js_sys::Function =
+            js_sys::Reflect::get(&history, &"replaceState".into())?.dyn_into()?;
+        f.call3(&history, &JsValue::NULL, &"".into(), &url.into())
+    });
+    let _ = replace;
 }
 
 /// Saves one HTML file with everything loaded now and the current view:
@@ -4139,6 +4201,8 @@ async fn run() -> Result<(), String> {
         selected: None,
         labels,
         last_frame: now(),
+        url_checked: now(),
+        url_state: String::new(),
         dirty: true,
         spin: false,
         spin_deg_s,
