@@ -405,6 +405,7 @@ async fn main(spawner: Spawner) {
     let mut last_state = Instant::now();
     let mut code_rows = 0usize;
     let mut code_at = Instant::now();
+    let mut hover_at = Instant::now();
     let (mut code_sent, mut last_code) = (ui::code_seq(), Instant::now());
     let mut last_tick = Instant::now();
     let mut inj_seen: Option<Instant> = None; // when a drag from the mirror last moved the globe
@@ -575,6 +576,27 @@ async fn main(spawner: Spawner) {
                 redraw = true;
                 full = 2;
             }
+        }
+        // the pointer of the mirror: the tooltip of the city under it (a redraw only when a tooltip comes, goes
+        // or moves)
+        let hover = net::INJ_HOVER.swap(0, core::sync::atomic::Ordering::Relaxed);
+        if hover != 0 {
+            let before = ui::hover_city(&img, view);
+            let moved_from = ui::hover();
+            let now = (hover & (1 << 31) != 0)
+                .then_some((((hover >> 16) & 0x7ff) as i32, (hover & 0x7ff) as i32));
+            ui::set_hover(now);
+            hover_at = Instant::now();
+            let after = ui::hover_city(&img, view);
+            if (before.is_some() || after.is_some()) && (before != after || moved_from != now) {
+                redraw = true;
+            }
+        }
+        // a pointer that went away without a word (the mirror closed) leaves no tooltip behind
+        if ui::hover().is_some() && hover_at.elapsed() >= Duration::from_secs(5) {
+            ui::set_hover(None);
+            redraw = true;
+            full = 2;
         }
         // scripted state from the mirror's Lisp console (`!view`, `!spin`, `!layers`)
         if net::INJ_VIEW_SET.swap(false, core::sync::atomic::Ordering::Relaxed) {

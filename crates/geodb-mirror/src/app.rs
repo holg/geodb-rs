@@ -53,7 +53,10 @@ pub struct Mirror {
     renders: u32,
     window_fps: f32,
     fps_at: Instant,
+    /// The pointer over the board's screen, and what was last told the board about it.
     hover: Option<(i32, i32)>,
+    hover_sent: Option<((i32, i32), Instant)>,
+    hover_told_gone: bool,
     screen_cells: Option<Rect>,
     cell_px: (f32, f32),
     drag_rest: (f32, f32),
@@ -192,6 +195,8 @@ impl Mirror {
             window_fps: 0.0,
             fps_at: Instant::now(),
             hover: None,
+            hover_sent: None,
+            hover_told_gone: true,
             screen_cells: None,
             cell_px: (8.0, 16.0),
             drag_rest: (0.0, 0.0),
@@ -305,8 +310,7 @@ impl Mirror {
             u64::from(now_view.zoom.to_bits()),
             u64::from(self.spin.on) | u64::from(ui::options()) << 8 | u64::from(ui::fulls()) << 16,
             u64::from(ui::selected().unwrap_or(u32::MAX)) | u64::from(ui::moving()) << 32,
-            self.hover
-                .map_or(0, |(x, y)| (x as u64) << 16 | y as u64 | 1 << 40),
+            ui::hover().map_or(0, |(x, y)| (x as u64) << 16 | y as u64 | 1 << 40),
             u64::from(ui::code_seq()),
         ];
         if self.last_key == Some(key)
@@ -337,9 +341,6 @@ impl Mirror {
         self.have_full |= !quick;
         if !quick {
             self.seen_fulls = ui::fulls();
-        }
-        if let Some((hx, hy)) = self.hover {
-            ui::draw_tooltip(&mut fb, &self.img, now_view, hx, hy);
         }
         {
             let mut f = self.frame.lock().unwrap();
@@ -427,6 +428,31 @@ impl Mirror {
             Ok(()) => format!("copied the console ({} lines)", self.lines.len()),
             Err(e) => format!("copy: {e}"),
         };
+    }
+
+    /// Tells the board where the pointer is (the tooltip is the board's and shows on both screens): when it
+    /// moved enough and not too often, again now and then, and once when it left.
+    fn tell_hover(&mut self) {
+        match (self.hover, self.hover_sent) {
+            (Some(at), sent) => {
+                let moved = sent.is_none_or(|(p, t)| {
+                    ((p.0 - at.0).abs() + (p.1 - at.1).abs() >= 3
+                        && t.elapsed() >= Duration::from_millis(120))
+                        || t.elapsed() >= Duration::from_secs(2)
+                });
+                if moved {
+                    self.send(&format!("!hover {} {}", at.0, at.1));
+                    self.hover_sent = Some((at, Instant::now()));
+                    self.hover_told_gone = false;
+                }
+            }
+            (None, _) if !self.hover_told_gone => {
+                self.send("!hover");
+                self.hover_sent = None;
+                self.hover_told_gone = true;
+            }
+            _ => {}
+        }
     }
 
     fn submit(&mut self) {
@@ -716,6 +742,7 @@ impl App for Mirror {
                             );
                             Self::to_screen(size, pos)
                         });
+                        self.tell_hover();
                     }
                     _ => {}
                 }
@@ -762,6 +789,7 @@ impl App for Mirror {
 
     fn tick(&mut self) -> bool {
         self.listen();
+        self.tell_hover(); // (again now and then while the pointer rests)
         let mut changed = false;
         if self.notice.starts_with("stopping") && self.repl.pending() == 0 {
             self.notice = "stopped".into();

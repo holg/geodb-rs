@@ -121,6 +121,16 @@ impl Sim {
                 ui::pan(&mut self.view, p.next().unwrap_or(0), p.next().unwrap_or(0));
             }
             Some("!release") => {}
+            Some("!hover") => {
+                let mut p = text
+                    .split_whitespace()
+                    .skip(1)
+                    .map(|v| v.parse::<i32>().ok());
+                ui::set_hover(match (p.next().flatten(), p.next().flatten()) {
+                    (Some(x), Some(y)) => Some((x, y)),
+                    _ => None,
+                });
+            }
             Some("!note") => {
                 ui::set_note(text.trim_start().strip_prefix("!note").unwrap_or("").trim())
             }

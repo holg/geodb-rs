@@ -405,6 +405,7 @@ pub fn draw_moving(
     fb.rect(c.0, c.1, c.2, c.3, BG);
     let shown = view.span() * EARTH_RADIUS_KM * 0.75 <= DOTS_MAX_KM;
     side_panel(fb, img, view, spin, extras, &nearest[..n], shown, None);
+    draw_hover(fb, img, view);
     draw_code(fb);
     let t3 = ticks();
     PROFILE[0].store(t1.wrapping_sub(t0), core::sync::atomic::Ordering::Relaxed);
@@ -959,6 +960,7 @@ pub fn draw(
     if let Some((fx, fy)) = layout().footer {
         render::text(fb, fx, fy, detail, 1, DIM);
     }
+    draw_hover(fb, img, view);
     draw_code(fb);
     n
 }
@@ -1268,6 +1270,36 @@ pub fn draw_code(fb: &mut Fb<'_>) {
 const NOTE_COLOR: u16 = rgb565(255, 205, 90);
 const CODE_COLOR: u16 = rgb565(130, 220, 140);
 
+static HOVER_X: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(i32::MIN);
+static HOVER_Y: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+
+/// Where the mouse pointer of the mirror is over the screen, if it is: both screens show the tooltip of the
+/// city under it, so the mirror shows what the board shows.
+pub fn hover() -> Option<(i32, i32)> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let x = HOVER_X.load(Relaxed);
+    (x != i32::MIN).then(|| (x, HOVER_Y.load(Relaxed)))
+}
+
+pub fn set_hover(at: Option<(i32, i32)>) {
+    use core::sync::atomic::Ordering::Relaxed;
+    HOVER_Y.store(at.map_or(0, |p| p.1), Relaxed);
+    HOVER_X.store(at.map_or(i32::MIN, |p| p.0), Relaxed);
+}
+
+/// The city whose tooltip the pointer shows, if any.
+pub fn hover_city(img: &FwImage<'_>, view: View) -> Option<u32> {
+    let (x, y) = hover()?;
+    city_at(img, view, x, y, 12)
+}
+
+/// The tooltip of the city under the pointer ([`hover`]), over a finished frame.
+pub fn draw_hover(fb: &mut Fb<'_>, img: &FwImage<'_>, view: View) {
+    if let Some((x, y)) = hover() {
+        draw_tooltip(fb, img, view, x, y);
+    }
+}
+
 static FULLS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 /// Counts the full frames (the board bumps it after each one while the screen moves: a tap, a layer change).
@@ -1289,6 +1321,8 @@ pub struct Shared {
     pub moving: bool,
     /// [`fulls`]: the board's count of full frames.
     pub fulls: u8,
+    /// [`hover`]: the pointer of the mirror.
+    pub hover: Option<(i32, i32)>,
 }
 
 /// The shared state in force now / puts a received one into force (the mirror and the browser).
@@ -1298,6 +1332,7 @@ pub fn shared() -> Shared {
         selected: selected(),
         moving: moving(),
         fulls: fulls(),
+        hover: hover(),
     }
 }
 
@@ -1306,10 +1341,14 @@ pub fn set_shared(s: Shared) {
     select(s.selected);
     set_moving(s.moving);
     FULLS.store(s.fulls, core::sync::atomic::Ordering::Relaxed);
+    set_hover(s.hover);
 }
 
 /// Bytes of a state packet (see [`encode_state`]).
-pub const STATE_LEN: usize = 25;
+pub const STATE_LEN: usize = 29;
+
+/// The packets of boards before the pointer was shared (no hover) are still read.
+const STATE_LEN_OLD: usize = 25;
 
 /// What the board tells the host viewer about a screen: `V`, latitude, longitude and zoom (f32 LE),
 /// spin on (u8), spin speed (f32 LE), the board's frame rate (u8), the layer options (u8) and the selected
@@ -1329,12 +1368,17 @@ pub fn encode_state(view: View, spin: Spin, fps: u32) -> [u8; STATE_LEN] {
     p[19] = (shared.options & 0x7f) | if shared.moving { 0x80 } else { 0 };
     p[20..24].copy_from_slice(&shared.selected.unwrap_or(u32::MAX).to_le_bytes());
     p[24] = shared.fulls;
+    let (hx, hy) = shared
+        .hover
+        .map_or((i16::MIN, 0), |(x, y)| (x as i16, y as i16));
+    p[25..27].copy_from_slice(&hx.to_le_bytes());
+    p[27..29].copy_from_slice(&hy.to_le_bytes());
     p
 }
 
 /// The inverse of [`encode_state`]; `None` for anything else.
 pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32, Shared)> {
-    if p.len() != STATE_LEN || p[0] != b'V' {
+    if (p.len() != STATE_LEN && p.len() != STATE_LEN_OLD) || p[0] != b'V' {
         return None;
     }
     let f = |at: usize| f32::from_le_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]]);
@@ -1351,6 +1395,15 @@ pub fn decode_state(p: &[u8]) -> Option<(View, Spin, u32, Shared)> {
         options: p[19] & 0x7f,
         moving: p[19] & 0x80 != 0,
         fulls: p[24],
+        hover: (p.len() == STATE_LEN)
+            .then(|| {
+                (
+                    i16::from_le_bytes([p[25], p[26]]),
+                    i16::from_le_bytes([p[27], p[28]]),
+                )
+            })
+            .filter(|h| h.0 != i16::MIN)
+            .map(|(x, y)| (i32::from(x), i32::from(y))),
         selected: match u32::from_le_bytes([p[20], p[21], p[22], p[23]]) {
             u32::MAX => None,
             i => Some(i),
@@ -1796,6 +1849,7 @@ mod tests {
             selected: Some(1234),
             moving: true,
             fulls: 7,
+            hover: Some((410, 133)),
         });
         let p = encode_state(view, spin, 32);
         let shared = shared();
@@ -1805,7 +1859,12 @@ mod tests {
             selected: None,
             moving: false,
             fulls: 0,
+            hover: None,
         });
+        // a packet of a board from before the pointer was shared still reads (without one)
+        let old = decode_state(&p[..25]).unwrap();
+        assert_eq!(old.3.hover, None);
+        assert_eq!(decode_state(&p).unwrap().3.hover, Some((410, 133)));
         assert_eq!(decode_state(&p[..10]), None);
         assert_eq!(decode_state(b"#hello hello hello"), None);
     }
