@@ -41,7 +41,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: com.example.geodb_flutter
+        package: eu.trahe.geodb_flutter
         pluginClass: GeodbFlutterPlugin
       ios:
         pluginClass: GeodbFlutterPlugin

@@ -1,4 +1,4 @@
-package com.example.geodb_flutter
+package eu.trahe.geodb_flutter
 
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel

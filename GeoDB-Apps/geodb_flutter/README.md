@@ -27,7 +27,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  geodb_flutter: ^0.1.8
+  geodb_flutter: ^0.2.0
 ```
 
 ### From Local Path (Development)
@@ -79,6 +79,11 @@ No additional setup required. All architectures are included:
 - `armeabi-v7a` - 32-bit ARM (older phones)
 - `x86_64` - 64-bit Intel (emulators)
 - `x86` - 32-bit Intel (emulators)
+
+**16 KB page size:** Since `0.2.0` the plugin supports Android's 16 KB
+memory page size (required by Google Play for new apps and updates since
+November 2025). The 64-bit native libraries are 16 KB-aligned and the
+bundled JNA dependency (5.17.0+) ships a 16 KB-aligned `libjnidispatch.so`.
 
 ## Usage
 

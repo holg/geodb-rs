@@ -1,4 +1,4 @@
-package com.example.geodb_flutter_example
+package eu.trahe.geodb_flutter_example
 
 import io.flutter.embedding.android.FlutterActivity
 
