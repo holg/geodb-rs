@@ -531,6 +531,13 @@ public protocol GeoDbEngineProtocol: AnyObject, Sendable {
     
     func getCountryTranslation(iso2: String, langCode: String)  -> String?
     
+    /**
+     * Query cities with optional filters for country, region, and city name.
+     * This allows disambiguating cities with common names (e.g., Springfield).
+     * All filters are optional and use substring matching (accent-insensitive).
+     */
+    func queryCities(country: String?, region: String?, city: String?, limit: UInt32)  -> [CityResult]
+    
     func smartSearch(query: String)  -> [CityResult]
     
     func stats()  -> DbStatsDto
@@ -666,6 +673,23 @@ open func getCountryTranslation(iso2: String, langCode: String) -> String?  {
             self.uniffiCloneHandle(),
         FfiConverterString.lower(iso2),
         FfiConverterString.lower(langCode),$0
+    )
+})
+}
+    
+    /**
+     * Query cities with optional filters for country, region, and city name.
+     * This allows disambiguating cities with common names (e.g., Springfield).
+     * All filters are optional and use substring matching (accent-insensitive).
+     */
+open func queryCities(country: String?, region: String?, city: String?, limit: UInt32) -> [CityResult]  {
+    return try!  FfiConverterSequenceTypeCityResult.lift(try! rustCall() {
+    uniffi_geodb_ffi_fn_method_geodbengine_query_cities(
+            self.uniffiCloneHandle(),
+        FfiConverterOptionString.lower(country),
+        FfiConverterOptionString.lower(region),
+        FfiConverterOptionString.lower(city),
+        FfiConverterUInt32.lower(limit),$0
     )
 })
 }
@@ -1126,6 +1150,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_geodb_ffi_checksum_method_geodbengine_get_country_translation() != 49976) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_geodb_ffi_checksum_method_geodbengine_query_cities() != 29465) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_geodb_ffi_checksum_method_geodbengine_smart_search() != 33908) {

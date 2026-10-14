@@ -1207,10 +1207,15 @@ dependencies = [
  "bincode",
  "flate2",
  "geodb-core",
+ "geodb-fw-core",
+ "geodb-globe",
  "once_cell",
+ "png",
+ "pollster",
  "serde",
  "serde_json",
  "uniffi",
+ "wgpu",
 ]
 
 [[package]]

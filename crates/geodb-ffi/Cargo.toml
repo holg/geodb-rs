@@ -30,6 +30,20 @@ once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# The 3D globe (geodb-globe on wgpu/Metal, see src/globe.rs) for the Apple apps; not on watchOS (no Metal).
+[target.'cfg(all(target_vendor = "apple", not(target_os = "watchos")))'.dependencies]
+geodb-globe = { path = "../geodb-globe", default-features = false }
+pollster = "0.4"
+wgpu = { version = "30.0.1", default-features = false, features = ["metal", "std", "wgsl"] }
+
+# The board's software globe (geodb-fw-core on geodb.fw, see src/watch_globe.rs) for watchOS, which has no Metal
+[target.'cfg(target_os = "watchos")'.dependencies]
+geodb-fw-core = { path = "../geodb-fw-core" }
+
 [build-dependencies]
 #uniffi_build = { version = "0.30", features = [ "build" ] }
 uniffi = { version = "0.30", features = ["build"] }
+
+[dev-dependencies]
+geodb-fw-core = { path = "../geodb-fw-core" }
+png = "0.18"
