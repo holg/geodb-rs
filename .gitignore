@@ -127,6 +127,8 @@ GeoDB-Apps/android-app/app/build/outputs/mapping/
 
 # Keep release binaries
 !releases/**
+# ... but not the SwiftPM build folders in them
+releases/**/.build/
 
 # Temporary files
 *.tmp
@@ -181,6 +183,11 @@ crates/geodb-core/data/json-cities.json.gz
 firmware/*/geodb.fw
 firmware/*/preview*.png
 firmware/*/target/
+# kiosk.sh shot (stm32mp135f-dk) and the demo videos the headless mirror renders
+firmware/*/screen.png
+firmware/*/demo/*.mp4
+# a raw earth picture dumped into the repository root
+/earth.rgba
 
 firmware/*/backup/
 firmware/*/app-*.bin
