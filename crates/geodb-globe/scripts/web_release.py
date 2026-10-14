@@ -15,6 +15,10 @@ columns is about 10% smaller than the gzip inside the files.
     python3 crates/geodb-globe/scripts/web_release.py --serve 8770
     python3 crates/geodb-globe/scripts/web_release.py --deploy      # + rsync to trahe.eu (geodb-rs/geodb-globe)
 
+--fw builds fw.html the same way (both builds and the loader) on the
+cities of the firmware image (assets/fw-raw, assets/fw, from
+`make_fw_assets`) into dist-web-fw/.
+
 Serve the precompressed files, e.g. nginx `brotli_static on; gzip_static on;`
 or Caddy `file_server { precompressed br gzip }`. A server that sends the
 plain files would send the raw data uncompressed (2.7 MB): use the
@@ -53,6 +57,12 @@ CRATE = Path(__file__).resolve().parent.parent
 RAW = CRATE / "assets" / "mini-raw"
 GZIPPED = CRATE / "assets" / "mini"
 OUT = CRATE / "dist-web"
+# --fw: the cities of the firmware image (examples/make_fw_assets.rs).
+FW = {
+    "RAW": CRATE / "assets" / "fw-raw",
+    "GZIPPED": CRATE / "assets" / "fw",
+    "OUT": CRATE / "dist-web-fw",
+}
 TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript",
@@ -84,7 +94,7 @@ SIZE_PROFILE = {
 
 
 def build(page: str, dist: Path | None = None) -> Path:
-    dist = dist or CRATE / ("dist-flex" if page == "flex.html" else "dist-mini")
+    dist = dist or CRATE / {"flex.html": "dist-flex", "fw.html": "dist-fw"}.get(page, "dist-mini")
     subprocess.run(["trunk", "build", page, "--release", "--dist", str(dist)], cwd=CRATE, check=True,
                    env={**os.environ, **SIZE_PROFILE})
     return dist
@@ -109,14 +119,16 @@ await init({ module_or_path: build.wasm });
 </script>"""
 
 
-def build_webgl_variant() -> Path:
-    """mini.html with the WebGL2 backend compiled in, built to dist-mini-gl."""
-    page = CRATE / ".mini-gl.html"
-    html = (CRATE / "mini.html").read_text()
+def build_webgl_variant(source: str) -> Path:
+    """mini.html (or fw.html) with the WebGL2 backend compiled in, built to
+    dist-mini-gl (dist-fw-gl)."""
+    stem = source.removesuffix(".html")
+    page = CRATE / f".{stem}-gl.html"
+    html = (CRATE / source).read_text()
     html = html.replace('data-cargo-features="mini"', 'data-cargo-features="mini,webgl"')
     page.write_text(html)
     try:
-        return build(page.name, CRATE / "dist-mini-gl")
+        return build(page.name, CRATE / f"dist-{stem}-gl")
     finally:
         page.unlink(missing_ok=True)
 
@@ -130,14 +142,15 @@ def release(page: str) -> None:
     if not shutil.which("brotli"):
         sys.exit("needs the brotli command (brew install brotli)")
     if not (RAW / "cities.globe").exists():
-        sys.exit("run: cargo run --release -p geodb-globe --example make_mini_assets")
+        example = "make_fw_assets" if page == "fw.html" else "make_mini_assets"
+        sys.exit(f"run: cargo run --release -p geodb-globe --example {example}")
     dist = build(page)
     if OUT.exists():
         shutil.rmtree(OUT)
     shutil.copytree(dist, OUT)
-    if page == "mini.html":
+    if page in ("mini.html", "fw.html"):
         # Second build with WebGL2, and the loader that picks one.
-        gl = build_webgl_variant()
+        gl = build_webgl_variant(page)
         gpu_js, gpu_wasm = glue_pair(dist)
         gl_js, gl_wasm = glue_pair(gl)
         for name in (gl_js, gl_wasm):
@@ -154,6 +167,8 @@ def release(page: str) -> None:
         shutil.copy(raw, OUT / raw.name)
     # The picture the page starts with (in git; not in the raw directory).
     shutil.copy(GZIPPED / "earth-tiny.webp", OUT / "earth-tiny.webp")
+    # The elevation of the relief layers (the board's picture, gzipped inside; the page reads both).
+    shutil.copy(GZIPPED / "elev.bin", OUT / "elev.bin")
     # Earth detail layers (scripts/fetch_detail.py), when made.
     for f in [DETAIL / "coast10m.bin", *sorted(DETAIL.glob("earth-*.webp"))]:
         if f.exists():
@@ -167,8 +182,6 @@ def release(page: str) -> None:
         subprocess.run(["brotli", "-q", "11", "-w", "24", "-f", "-o", str(f) + ".br", str(f)], check=True)
         rows.append((f.name, len(data), (f.parent / (f.name + ".gz")).stat().st_size,
                      (f.parent / (f.name + ".br")).stat().st_size))
-    # The elevation of the relief layers (the board's picture, gzipped inside; the page reads both).
-    shutil.copy(GZIPPED / "elev.bin", OUT / "elev.bin")
 
     w = max(len(r[0]) for r in rows)
     print(f"\n{OUT}\n{'file':<{w}} {'plain':>10} {'gzip':>10} {'brotli':>10}")
@@ -315,6 +328,8 @@ def deploy(src: Path, name: str, target: str = DEPLOY_TARGET) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--flex", action="store_true", help="build flex.html instead of mini.html")
+    ap.add_argument("--fw", action="store_true",
+                    help="build fw.html (the firmware image's cities) into dist-web-fw")
     ap.add_argument("--serve", type=int, metavar="PORT", help="serve dist-web with precompression")
     ap.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0: intranet too)")
     ap.add_argument("--tls", action="store_true", help="HTTPS with a self-signed certificate (.tls/)")
@@ -323,12 +338,14 @@ def main() -> None:
     ap.add_argument("--deploy", nargs="?", const=DEPLOY_TARGET, metavar="HOST:DIR",
                     help=f"rsync the release to the web server (default {DEPLOY_TARGET}, folder geodb-globe)")
     args = ap.parse_args()
+    if args.fw:
+        globals().update(FW)
     if not args.no_build:
-        release("flex.html" if args.flex else "mini.html")
+        release("flex.html" if args.flex else "fw.html" if args.fw else "mini.html")
     if args.pages:
         pages(args.pages)
     if args.deploy:
-        deploy(OUT, "geodb-globe", args.deploy)
+        deploy(OUT, "geodb-globe-fw" if getattr(args, "fw", False) else "geodb-globe", args.deploy)
     if args.serve:
         server = http.server.ThreadingHTTPServer((args.host, args.serve), Precompressed)
         scheme = "http"

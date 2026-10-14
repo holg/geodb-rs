@@ -88,3 +88,7 @@ web-sys = { version = "0.3", features = [
     "Window",
 ] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "webgpu", "wgsl"] }
+
+[dev-dependencies]
+deunicode = { workspace = true }
+geodb-fw-core = { path = "../geodb-fw-core" }
