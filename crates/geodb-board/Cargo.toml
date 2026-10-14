@@ -7,8 +7,18 @@ repository.workspace = true
 description = "Host tools for the geodb STM32 board: the names server and the Ethernet test/control client"
 publish = false
 
+[features]
+# `bridge --probe`: the board through its ST-LINK (probe-rs) instead of the network.
+probe = ["dep:probe-rs"]
+
 [dependencies]
 deunicode = { workspace = true }
 flate2 = { workspace = true }
+geodb-core = { path = "../geodb-core", default-features = false, features = ["compact"] }
+geodb-fw-core = { path = "../geodb-fw-core" }
+probe-rs = { version = "0.32.0", optional = true }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }

@@ -5,6 +5,13 @@
 //!                                     print its log lines
 //! geodb-board test [--host IP]        info, 200 pings (round trip, loss), a 1000 x 512 byte blast
 //! geodb-board info | ping [N] | blast [N] | reset   [--host IP]
+//! geodb-board bridge [--port 8792] [--tls-port 8793] [--host IP | --probe] [--web DIR]
+//!                                     the board in the browser: serves the web simulator and
+//!                                     relays the board's view and the page's touches (bridge.rs);
+//!                                     --probe: through the ST-LINK (feature probe)
+//! geodb-board compare [--host IP | --probe | --no-board] [--fw geodb.fw] [--globe DIR]
+//!                                     the same queries on the board, on geodb.fw here and on the
+//!                                     globe-fw data (compare.rs)
 //! geodb-board ota app-b.bin [--host IP]   update the board over the network (the binary of the slot
 //!                                     that is NOT running; firmware/stm32f769i-disco/build-ota.sh)
 //! ```
@@ -12,6 +19,12 @@
 //! The board is found by listening for its state packets (UDP 7881), else by broadcast; `--host`
 //! names it directly. The board asks `?LAT,LON` (degrees x 1e5) and gets
 //! `=LAT,LON|Name|State, Country` (ASCII) from the full dataset.
+
+mod bridge;
+mod compare;
+#[cfg(feature = "probe")]
+mod probe;
+mod tls;
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -37,6 +50,28 @@ fn main() {
     let count: Option<usize> = args.iter().skip(1).find_map(|a| a.parse().ok());
     match cmd {
         "serve" => serve(&flag("--data").unwrap_or_else(default_data)),
+        "bridge" => bridge::bridge(
+            flag("--port").and_then(|p| p.parse().ok()).unwrap_or(8792),
+            flag("--tls-port")
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(8793),
+            if args.iter().any(|a| a == "--probe") {
+                bridge::Via::Probe
+            } else {
+                bridge::Via::Net(flag("--host").and_then(|h| h.parse().ok()))
+            },
+            &flag("--web").unwrap_or_else(bridge::default_web),
+        ),
+        "compare" => compare::compare(
+            if args.iter().any(|a| a == "--probe") {
+                bridge::Via::Probe
+            } else {
+                bridge::Via::Net(flag("--host").and_then(|h| h.parse().ok()))
+            },
+            &flag("--fw").unwrap_or_else(compare::default_fw),
+            &flag("--globe").unwrap_or_else(compare::default_globe),
+            args.iter().any(|a| a == "--no-board"),
+        ),
         "ota" | "ota-image" => {
             let file = args
                 .iter()
@@ -57,7 +92,7 @@ fn main() {
             client(cmd, flag("--host").and_then(|h| h.parse().ok()), count)
         }
         _ => {
-            eprintln!("usage: geodb-board serve [--data FILE] | test|info|ping [N]|blast [N]|reset [--host IP]");
+            eprintln!("usage: geodb-board serve [--data FILE] | bridge [--port P] [--host IP | --probe] [--web DIR] | compare [--host IP | --probe | --no-board] | test|info|ping [N]|blast [N]|reset [--host IP]");
             std::process::exit(2);
         }
     }
@@ -218,7 +253,12 @@ fn serve(data: &str) {
 
 // ------------------------------------------------------------------------------------ the client
 
-fn ask(sock: &UdpSocket, to: SocketAddr, text: &str, tries: usize) -> Option<(String, SocketAddr)> {
+pub(crate) fn ask(
+    sock: &UdpSocket,
+    to: SocketAddr,
+    text: &str,
+    tries: usize,
+) -> Option<(String, SocketAddr)> {
     let mut buf = [0u8; 2048];
     for _ in 0..tries {
         let _ = sock.send_to(text.as_bytes(), to);
