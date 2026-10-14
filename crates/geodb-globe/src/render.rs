@@ -216,11 +216,15 @@ pub async fn request_device(
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("geodb-globe"),
             // WebGL2 gets its own limits (no compute); WebGPU and native get
-            // compute shaders for the GPU geoid queries.
+            // compute shaders for the GPU geoid queries. A limit the adapter
+            // does not reach is asked for at the adapter's value (the iOS
+            // simulator's Metal has 15 inter-stage shader variables, not 16).
             required_limits: if adapter.get_info().backend == wgpu::Backend::Gl {
                 wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
             } else {
-                wgpu::Limits::default().using_resolution(adapter.limits())
+                wgpu::Limits::default()
+                    .using_resolution(adapter.limits())
+                    .or_worse_values_from(&adapter.limits())
             },
             ..Default::default()
         })
