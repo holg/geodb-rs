@@ -40,9 +40,26 @@ const GLOBE_STEP: i32 = 2;
 pub const EARTH_W: usize = 2048;
 pub const EARTH_H: usize = 1024;
 pub const LUT_CELLS: usize = render::lut_cells(GLOBE_R, GLOBE_STEP);
-/// A moving globe is drawn in coarser blocks (and so needs a table of its own).
+/// A moving globe is drawn in coarser blocks (and so needs a table of its own): 4 pixels, all the F769 has
+/// the time for, unless [`set_move_step`] picked finer ones.
 const MOVE_STEP: i32 = 4;
 pub const MOVE_LUT_CELLS: usize = render::lut_cells(GLOBE_R, MOVE_STEP);
+static MOVE_STEP_PX: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(MOVE_STEP);
+
+/// The block size (pixels, 1 to 4) of a moving globe. A board with the time draws it as fine as a still one
+/// (2, the blocks of a full frame); its coarse table must then hold `render::lut_cells(gr, step)` cells, not
+/// [`Layout::move_cells`].
+pub fn set_move_step(step: i32) {
+    MOVE_STEP_PX.store(
+        step.clamp(1, MOVE_STEP),
+        core::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The block size of a moving globe ([`set_move_step`]).
+pub fn move_step() -> i32 {
+    MOVE_STEP_PX.load(core::sync::atomic::Ordering::Relaxed)
+}
 /// Nearest cities listed.
 pub const LIST: usize = 10;
 
@@ -87,7 +104,7 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// Cells of the tables the globe needs (fine and coarse) for [`GlobeLut`].
+    /// Cells of the tables the globe needs (fine and coarse, at the default block size) for [`GlobeLut`].
     pub const fn fine_cells(&self) -> usize {
         render::lut_cells(self.gr, GLOBE_STEP)
     }
@@ -187,6 +204,44 @@ pub const HD_BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
     (1136, 644, 120, 52, "LAYERS", Action::Layers),
 ];
 
+/// The 4.3 inch 480 x 272 panel of the STM32MP135F-DK: the board's arrangement at 0.6 scale, the text of the
+/// panel in the 8 x 8 font, the spin note on a row of its own, the buttons in two rows.
+pub static SMALL: Layout = Layout {
+    width: 480,
+    height: 272,
+    gx: 136,
+    gy: 136,
+    gr: 130,
+    panel: Panel {
+        title: (284, 4, 2),
+        info: (284, 28, 1),
+        coord: (284, 40, 1),
+        view: (284, 52, 1),
+        label: (284, 76, 1),
+        spin: (476, 64, 1),
+        list: (284, 88, 10, 1, 14),
+        dist: (476, 0, 1),
+    },
+    clear: (282, 2, 198, 186),
+    fps: (476, 6),
+    status: (284, 262, 192),
+    footer: None,
+    buttons: &SMALL_BUTTONS,
+    button_scale: 1,
+    card: (220, 88, 2, 1, 16),
+};
+
+pub const SMALL_BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
+    (284, 192, 52, 32, "SPIN", Action::SpinToggle),
+    (340, 192, 40, 32, "-", Action::SpinSlower),
+    (384, 192, 40, 32, "+", Action::SpinFaster),
+    (428, 192, 48, 32, "<>", Action::SpinReverse),
+    (284, 228, 40, 32, "Z-", Action::ZoomOut),
+    (328, 228, 40, 32, "Z+", Action::ZoomIn),
+    (372, 228, 48, 32, "WORLD", Action::World),
+    (424, 228, 52, 32, "LAYERS", Action::Layers),
+];
+
 pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
     (24, 1166, 180, 48, "SPIN", Action::SpinToggle),
     (216, 1166, 96, 48, "-", Action::SpinSlower),
@@ -201,9 +256,10 @@ pub const PORTRAIT_BUTTONS: [(i32, i32, i32, i32, &str, Action); 8] = [
 static SHAPE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 /// Picks the screen shape: 0 the board's landscape 800 x 480 (the default; the board always runs it),
-/// 1 the portrait 720 x 1280, 2 the landscape 1280 x 720 (the browser simulation shows them).
+/// 1 the portrait 720 x 1280, 2 the landscape 1280 x 720 (the browser simulation shows them), 3 the
+/// 480 x 272 of the STM32MP135F-DK.
 pub fn set_shape(shape: u8) {
-    SHAPE.store(shape.min(2), core::sync::atomic::Ordering::Relaxed);
+    SHAPE.store(shape.min(3), core::sync::atomic::Ordering::Relaxed);
 }
 
 /// The layout in use.
@@ -211,6 +267,7 @@ pub fn layout() -> &'static Layout {
     match SHAPE.load(core::sync::atomic::Ordering::Relaxed) {
         1 => &PORTRAIT,
         2 => &HD,
+        3 => &SMALL,
         _ => &LANDSCAPE,
     }
 }
@@ -364,7 +421,7 @@ fn ticks() -> u32 {
     }
 }
 
-/// Redraws the globe (from the coarse table, [`MOVE_LUT_CELLS`] cells) and the parts that follow the
+/// Redraws the globe (from the coarse table, [`MOVE_LUT_CELLS`] cells, in blocks of [`move_step`]) and the parts that follow the
 /// view (the nearest cities: markers and list) over an earlier [`draw`] of the same buffer: the quick
 /// frame of a spinning or dragged globe. The buttons, the footer and the city dots keep their old
 /// state until the next full draw.
@@ -383,7 +440,7 @@ pub fn draw_moving(
     }
     let l = layout();
     let t0 = ticks();
-    lut.draw(fb, l.gx, l.gy, l.gr, view, picture(earth), MOVE_STEP);
+    lut.draw(fb, l.gx, l.gy, l.gr, view, picture(earth), move_step());
     let t1 = ticks();
     // The strokes of a moving globe are baked into the coarse earth (see [`bake_moving_layers`]); only
     // the browser simulation, which has the time, strokes the vectors itself.
@@ -588,24 +645,34 @@ fn side_panel(
         if view.lon >= 0.0 { 'E' } else { 'W' }
     );
     render::text(fb, p.coord.0, p.coord.1, line.as_str(), p.coord.2, TEXT);
+    // (the big screens print the view at a bigger scale, the small one has a narrow panel: the first wording
+    // that stays inside the panel)
+    let room = layout().width as i32 - p.view.0 - 4;
     let mut line = Line::new();
-    // (the big screens print the view at a bigger scale: a shorter wording keeps it inside the panel)
-    let reach = if p.view.2 > 1 {
-        "in reach"
-    } else {
-        "cities in reach"
-    };
-    if !shown || count.is_none() {
-        let _ = write!(line, "view {:.0} km", visible_km);
-    } else if let (true, Some(count)) = (visible_km >= 100.0, count) {
-        let _ = write!(line, "view {:.0} km, {} {reach}", visible_km, count);
-    } else {
-        let _ = write!(
-            line,
-            "view {:.1} km, {} {reach}",
-            visible_km,
-            count.unwrap_or(0)
-        );
+    for (prefix, reach) in [
+        ("view ", "cities in reach"),
+        ("view ", "in reach"),
+        ("", "in reach"),
+    ] {
+        if p.view.2 > 1 && reach == "cities in reach" {
+            continue;
+        }
+        line = Line::new();
+        if !shown || count.is_none() {
+            let _ = write!(line, "{prefix}{:.0} km", visible_km);
+        } else if let (true, Some(count)) = (visible_km >= 100.0, count) {
+            let _ = write!(line, "{prefix}{:.0} km, {} {reach}", visible_km, count);
+        } else {
+            let _ = write!(
+                line,
+                "{prefix}{:.1} km, {} {reach}",
+                visible_km,
+                count.unwrap_or(0)
+            );
+        }
+        if render::text_width(line.as_str(), p.view.2) <= room {
+            break;
+        }
     }
     render::text(fb, p.view.0, p.view.1, line.as_str(), p.view.2, DIM);
     render::text(fb, p.label.0, p.label.1, "nearest cities", p.label.2, DIM);

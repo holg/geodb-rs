@@ -1,0 +1,5 @@
+# The board: armv7 Linux, musl, linked statically by rust-lld with Rust's own musl (no C toolchain needed).
+# `cargo build --release --target armv7-unknown-linux-musleabihf`; a plain `cargo run` is the host preview.
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+rustflags = ["-C", "target-cpu=cortex-a7", "-C", "link-self-contained=yes"]
