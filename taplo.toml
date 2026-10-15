@@ -3,7 +3,17 @@
 
 # Exclude patterns to avoid conflicts with cargo-sort
 # Cargo.toml files are managed by cargo-sort, so we exclude them from taplo formatting
-exclude = ["config/**", "target/**", "Cargo.toml", "taplo.toml", "crates/*/Cargo.toml", "**/Cargo.lock"]
+# (and the local, git-ignored worktrees of agent sessions and scratch files: .claude/, tmp/)
+exclude = [
+  "config/**",
+  "target/**",
+  "Cargo.toml",
+  "taplo.toml",
+  "crates/*/Cargo.toml",
+  "**/Cargo.lock",
+  ".claude/**",
+  "tmp/**",
+]
 
 # Include patterns - only format non-Cargo TOML files
 include = ["**/*.toml"]

@@ -378,7 +378,11 @@ for crate_name in "${PUBLISH_ORDER[@]}"; do
         continue
     fi
 
-    version=$(grep -m1 '^version = ' "$crate_dir/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
+    # (a crate with version.workspace = true has no version line: the workspace's applies)
+    version=$(grep -m1 '^version = ' "$crate_dir/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/' || true)
+    if [[ -z "$version" ]]; then
+        version=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+    fi
 
     if git tag | grep -q "^${crate_name}-v${version}$"; then
         echo -e "${YELLOW}⚠ Tag ${crate_name}-v${version} already exists${NC}"
@@ -391,13 +395,26 @@ echo ""
 
 # Build documentation as it would appear on docs.rs
 echo -e "${YELLOW}Step 13: Building documentation for review (as on docs.rs)...${NC}"
-echo "Building docs with all features enabled..."
+echo "Building docs per published crate, with the features its [package.metadata.docs.rs] asks for..."
 
 # Clean previous docs
 rm -rf target/doc
 
-# Build docs with docs.rs settings
-if RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --workspace --all-features --no-deps; then
+# Build docs with docs.rs settings: one crate at a time, as docs.rs does (the whole workspace with
+# --all-features cannot build: legacy_model switches every crate to the nested model)
+docs_ok=true
+for crate_name in "${PUBLISH_ORDER[@]}"; do
+    features=""
+    if grep -q '^all-features = true' "crates/$crate_name/Cargo.toml"; then
+        features="--all-features"
+    fi
+    # shellcheck disable=SC2086
+    if ! RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc -p "$crate_name" $features --no-deps; then
+        echo -e "${RED}✗ $crate_name documentation failed${NC}"
+        docs_ok=false
+    fi
+done
+if $docs_ok; then
     echo -e "${GREEN}✓ Documentation built successfully${NC}\n"
 
     # Find the main crate documentation
