@@ -180,7 +180,13 @@ impl GeodbWatchGlobe {
             None => CString::default(),
         };
         // RGB565 to opaque RGBA
-        for (o, &c) in self.rgba.chunks_exact_mut(4).zip(self.pixels.iter()) {
+        for (o, &c) in self
+            .rgba
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(self.pixels.iter())
+        {
             let (r5, g6, b5) = ((c >> 11) & 31, (c >> 5) & 63, c & 31);
             o[0] = ((r5 << 3) | (r5 >> 2)) as u8;
             o[1] = ((g6 << 2) | (g6 >> 4)) as u8;

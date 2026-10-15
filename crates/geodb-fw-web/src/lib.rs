@@ -782,7 +782,7 @@ impl Board {
     }
 
     fn convert(&mut self) {
-        for (c, out) in self.fb.iter().zip(self.rgba.chunks_exact_mut(4)) {
+        for (c, out) in self.fb.iter().zip(self.rgba.as_chunks_mut::<4>().0) {
             let (r, g, b) = ((c >> 11) & 0x1f, (c >> 5) & 0x3f, c & 0x1f);
             out[0] = ((r << 3) | (r >> 2)) as u8;
             out[1] = ((g << 2) | (g >> 4)) as u8;

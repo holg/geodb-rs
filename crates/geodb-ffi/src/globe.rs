@@ -3,7 +3,7 @@
 //!
 //! The app hands in a `CAMetalLayer` and drives everything from the main thread: [`geodb_globe_frame`]
 //! once per display refresh, the gestures in between. Lengths from the app are in points; the layer's
-//! pixels are points times `scale`. The cities come from this crate's embedded database ([`crate::DB`]),
+//! pixels are points times `scale`. The cities come from this crate's embedded database (`DB`),
 //! so the app carries one copy. Built for every Apple platform with Metal (not watchOS).
 //!
 //! The C declarations are in `include/geodb_globe.h`.
