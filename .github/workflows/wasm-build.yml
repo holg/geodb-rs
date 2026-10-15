@@ -22,9 +22,9 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install Trunk
-        run: |
-          cargo install trunk
-          # Note: trunk bundles wasm-bindgen-cli 0.2.105, which matches our pinned version in Cargo.toml
+        # --locked: trunk's own dependency versions (a fresh resolve pulls a lightningcss that
+        # no longer compiles). Trunk fetches the wasm-bindgen CLI that Cargo.lock names.
+        run: cargo install trunk --locked
 
       - name: Build WASM demo
         working-directory: crates/geodb-wasm

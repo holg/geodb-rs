@@ -97,6 +97,20 @@ else
     exit 1
 fi
 
+# The STM32F769I-DISCO firmware has a workspace of its own (thumbv7em, needs geodb.fw from make_image)
+echo -e "${YELLOW}Step 2b: Firmware (fmt, clippy, build)...${NC}"
+if rustup target list --installed 2>/dev/null | grep -q thumbv7em-none-eabihf && [[ -f firmware/stm32f769i-disco/geodb.fw ]]; then
+    if (cd firmware/stm32f769i-disco && { cargo fmt -- --check || { [[ "$AUTO_FIX" == true ]] && cargo fmt; }; } && cargo clippy --release -- -D warnings && cargo build --release) && (cd firmware/bootloader && { cargo fmt -- --check || { [[ "$AUTO_FIX" == true ]] && cargo fmt; }; } && cargo clippy --release -- -D warnings); then
+        echo -e "${GREEN}✓ firmware passed${NC}\n"
+    else
+        echo -e "${RED}✗ firmware failed (fmt, clippy or build)${NC}\n"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}⚠ thumbv7em target or firmware/stm32f769i-disco/geodb.fw missing, skipping firmware${NC}"
+    echo -e "${YELLOW}  rustup target add thumbv7em-none-eabihf; cargo run --release -p geodb-fw-core --features std --example make_image${NC}\n"
+fi
+
 # Run cargo build
 echo -e "${YELLOW}Step 3: Running cargo build...${NC}"
 # Exclude geodb-py as it requires maturin to build
@@ -364,7 +378,11 @@ for crate_name in "${PUBLISH_ORDER[@]}"; do
         continue
     fi
 
-    version=$(grep -m1 '^version = ' "$crate_dir/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
+    # (a crate with version.workspace = true has no version line: the workspace's applies)
+    version=$(grep -m1 '^version = ' "$crate_dir/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/' || true)
+    if [[ -z "$version" ]]; then
+        version=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+    fi
 
     if git tag | grep -q "^${crate_name}-v${version}$"; then
         echo -e "${YELLOW}⚠ Tag ${crate_name}-v${version} already exists${NC}"
@@ -377,13 +395,26 @@ echo ""
 
 # Build documentation as it would appear on docs.rs
 echo -e "${YELLOW}Step 13: Building documentation for review (as on docs.rs)...${NC}"
-echo "Building docs with all features enabled..."
+echo "Building docs per published crate, with the features its [package.metadata.docs.rs] asks for..."
 
 # Clean previous docs
 rm -rf target/doc
 
-# Build docs with docs.rs settings
-if RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --workspace --all-features --no-deps; then
+# Build docs with docs.rs settings: one crate at a time, as docs.rs does (the whole workspace with
+# --all-features cannot build: legacy_model switches every crate to the nested model)
+docs_ok=true
+for crate_name in "${PUBLISH_ORDER[@]}"; do
+    features=""
+    if grep -q '^all-features = true' "crates/$crate_name/Cargo.toml"; then
+        features="--all-features"
+    fi
+    # shellcheck disable=SC2086
+    if ! RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc -p "$crate_name" $features --no-deps; then
+        echo -e "${RED}✗ $crate_name documentation failed${NC}"
+        docs_ok=false
+    fi
+done
+if $docs_ok; then
     echo -e "${GREEN}✓ Documentation built successfully${NC}\n"
 
     # Find the main crate documentation

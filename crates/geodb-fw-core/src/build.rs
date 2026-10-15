@@ -15,8 +15,12 @@ pub struct Source<'a> {
     pub countries: &'a [(String, String)],
     /// (city index, ASCII name), ascending by city.
     pub names: &'a [(u32, String)],
-    /// Earth picture: width, height, RGB565 little-endian pixels.
-    pub texture: (u16, u16, &'a [u8]),
+    /// The packed coastline rings (`coast::Coast` payload).
+    pub coast: &'a [u8],
+    /// The colour picture, 256 x 128 RGB565 little-endian (or empty).
+    pub marble: &'a [u8],
+    /// The elevation picture: raw bytes, width, height (packed into the image), or none.
+    pub elev: Option<(&'a [u8], usize, usize)>,
 }
 
 fn align4(v: &mut Vec<u8>) {
@@ -33,8 +37,6 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         src.names.windows(2).all(|w| w[0].0 < w[1].0),
         "names ascending"
     );
-    let (tw, th, tex) = src.texture;
-    assert_eq!(tex.len(), usize::from(tw) * usize::from(th) * 2);
     let mut out = alloc::vec![0u8; HEADER_LEN];
     let put = |out: &mut Vec<u8>, bytes: &[u8]| -> usize {
         align4(out);
@@ -71,7 +73,24 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
     assert!(cnames.len() <= usize::from(u16::MAX));
     let off_countries = put(&mut out, &table);
     let off_country_names = put(&mut out, &cnames);
-    let off_texture = put(&mut out, tex);
+    let off_coast = put(&mut out, src.coast);
+    assert!(
+        src.marble.is_empty()
+            || src.marble.len() == crate::image::MARBLE_W * crate::image::MARBLE_H * 2
+    );
+    let elev_packed = src.elev.map_or(alloc::vec::Vec::new(), |(px, w, h)| {
+        crate::relief::pack(px, w, h)
+    });
+    let off_marble = if src.marble.is_empty() {
+        0
+    } else {
+        put(&mut out, src.marble)
+    };
+    let off_elev = if elev_packed.is_empty() {
+        0
+    } else {
+        put(&mut out, &elev_packed)
+    };
     align4(&mut out);
     let total = out.len();
     let w32 = |out: &mut Vec<u8>, at: usize, v: usize| {
@@ -82,8 +101,11 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
     w32(&mut out, 8, src.geoids.len());
     w32(&mut out, 12, src.countries.len());
     w32(&mut out, 16, src.names.len());
-    out[20..22].copy_from_slice(&tw.to_le_bytes());
-    out[22..24].copy_from_slice(&th.to_le_bytes());
+    w32(&mut out, 20, src.coast.len());
+    if let Some((_, w, h)) = src.elev {
+        out[80..82].copy_from_slice(&(w as u16).to_le_bytes());
+        out[82..84].copy_from_slice(&(h as u16).to_le_bytes());
+    }
     for (at, v) in [
         (24, off_geoids),
         (28, off_country),
@@ -93,7 +115,11 @@ pub fn build(src: &Source<'_>) -> Vec<u8> {
         (44, names_len),
         (48, off_countries),
         (52, off_country_names),
-        (56, off_texture),
+        (56, off_coast),
+        (64, off_marble),
+        (68, src.marble.len()),
+        (72, off_elev),
+        (76, elev_packed.len()),
         (60, total),
     ] {
         w32(&mut out, at, v);

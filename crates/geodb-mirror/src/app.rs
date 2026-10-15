@@ -1,0 +1,858 @@
+//! The mirror window: the board's screen (drawn here by the board's own code from its state packets), a Lisp
+//! console under it, and a status line. Runs on scopekit, in a window or in a terminal.
+
+use crate::repl::{self, Repl, Request, Snapshot};
+use crate::screen::{self, Frame, SharedFrame};
+use crate::util;
+use geodb_fw_core::render::{Fb, GlobeLut, View};
+use geodb_fw_core::{scene, ui, FwImage};
+use scopekit::crossterm::event::{
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
+use scopekit::ratatui::layout::{Constraint, Layout, Rect};
+use scopekit::ratatui::style::{Color, Modifier, Style};
+use scopekit::ratatui::text::{Line, Span};
+use scopekit::ratatui::widgets::{Block, Borders, Paragraph};
+use scopekit::ratatui::Frame as Ui;
+use scopekit::{App, Flow, GestureKind, ViewSlot, Waker};
+use std::net::{IpAddr, UdpSocket};
+use std::process::Child;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+const STATE_PORT: u16 = 7881;
+const COMMAND_PORT: u16 = 7880;
+
+pub struct Mirror {
+    img: FwImage<'static>,
+    img_len: usize,
+    pictures: scene::Pictures<'static>,
+    luts: (GlobeLut<'static>, GlobeLut<'static>),
+    fb: Vec<u16>,
+    frame: SharedFrame,
+    // the board
+    sock: UdpSocket,
+    cmd: UdpSocket,
+    board: Option<IpAddr>,
+    view: View,
+    spin: ui::Spin,
+    dev_fps: u32,
+    stamp: Instant,
+    heard: Option<Instant>,
+    snapshot: Arc<Mutex<Snapshot>>,
+    board_sync: Option<(String, usize)>,
+    info_asked: Option<Instant>,
+    packets: u32,
+    pps: f32,
+    pps_at: Instant,
+    // drawing
+    have_full: bool,
+    seen_fulls: u8,
+    last_key: Option<[u64; 6]>,
+    last_render: Instant,
+    renders: u32,
+    window_fps: f32,
+    fps_at: Instant,
+    /// The pointer over the board's screen, and what was last told the board about it.
+    hover: Option<(i32, i32)>,
+    hover_sent: Option<((i32, i32), Instant)>,
+    hover_told_gone: bool,
+    screen_cells: Option<Rect>,
+    cell_px: (f32, f32),
+    drag_rest: (f32, f32),
+    // the console
+    repl: Repl,
+    lines: Vec<String>,
+    incoming: Arc<Mutex<Vec<String>>>,
+    input: Vec<char>,
+    cursor: usize,
+    history: Vec<String>,
+    history_at: Option<usize>,
+    /// What was typed when the walk through the history began (only commands starting with it are visited).
+    history_prefix: String,
+    history_saved: String,
+    /// How many lines the console is scrolled back (0: following the output).
+    scroll: usize,
+    console_rows: usize,
+    console_cells: Option<Rect>,
+    status_row: Option<u16>,
+    // recording and pictures
+    recording: Option<(Child, String)>,
+    next_frame: Instant,
+    shots: u32,
+    notice: String,
+}
+
+/// The history file, one command a line like zsh's: `$GEODB_MIRROR_HISTORY`, else `~/.geodb_mirror_history`.
+fn history_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("GEODB_MIRROR_HISTORY")
+        .map(Into::into)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".geodb_mirror_history"))
+        })
+}
+
+/// The last 2000 commands of earlier sessions (without repeats in a row): Up finds them at once.
+fn load_history() -> Vec<String> {
+    let Some(text) = history_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for l in text.lines().filter(|l| !l.trim().is_empty()) {
+        if lines.last().map(String::as_str) != Some(l) {
+            lines.push(l.to_string());
+        }
+    }
+    let excess = lines.len().saturating_sub(2000);
+    lines.drain(..excess);
+    lines
+}
+
+fn save_history_line(line: &str) {
+    use std::io::Write;
+    if let Some(path) = history_path() {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// One step of a history search: the history entry before (`up`) or after `at` that starts with `prefix`.
+/// `Some(Some(i))`: show entry i; `Some(None)`: back to what was typed; `None`: no such entry, stay.
+fn history_search(
+    history: &[String],
+    at: Option<usize>,
+    prefix: &str,
+    up: bool,
+) -> Option<Option<usize>> {
+    let hit = |i: &usize| history[*i].starts_with(prefix);
+    if up {
+        let before = at.unwrap_or(history.len());
+        (0..before).rev().find(hit).map(Some)
+    } else {
+        let from = at?;
+        Some((from + 1..history.len()).find(hit))
+    }
+}
+
+impl Mirror {
+    pub fn new(
+        img: FwImage<'static>,
+        img_len: usize,
+        pictures: scene::Pictures<'static>,
+        luts: (GlobeLut<'static>, GlobeLut<'static>),
+        frame: SharedFrame,
+        script: Option<String>,
+    ) -> Result<Self, String> {
+        let sock = UdpSocket::bind(("0.0.0.0", STATE_PORT))
+            .map_err(|e| format!("UDP port {STATE_PORT} (another mirror running?): {e}"))?;
+        sock.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let cmd = UdpSocket::bind(("0.0.0.0", 0)).map_err(|e| e.to_string())?;
+        cmd.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let snapshot = Arc::new(Mutex::new(Snapshot {
+            view: View::new(30.0, 10.0),
+            spin: ui::Spin::new(),
+            fps: 0,
+            options: ui::options(),
+            selected: None,
+            board: None,
+        }));
+        repl::preload();
+        let repl = Repl::new(snapshot.clone());
+        if let Some(file) = script {
+            repl.run(format!("(load \"{}\")", file.replace('\\', "/")));
+        }
+        Ok(Mirror {
+            img,
+            img_len,
+            pictures,
+            luts,
+            fb: vec![0; ui::WIDTH * ui::HEIGHT],
+            frame,
+            sock,
+            cmd,
+            board: None,
+            view: View::new(30.0, 10.0),
+            spin: ui::Spin::new(),
+            dev_fps: 0,
+            stamp: Instant::now(),
+            heard: None,
+            snapshot,
+            board_sync: None,
+            info_asked: None,
+            packets: 0,
+            pps: 0.0,
+            pps_at: Instant::now(),
+            have_full: false,
+            seen_fulls: ui::fulls(),
+            last_key: None,
+            last_render: Instant::now(),
+            renders: 0,
+            window_fps: 0.0,
+            fps_at: Instant::now(),
+            hover: None,
+            hover_sent: None,
+            hover_told_gone: true,
+            screen_cells: None,
+            cell_px: (8.0, 16.0),
+            drag_rest: (0.0, 0.0),
+            repl,
+            lines: vec![
+                "Lisp (AutoLISP): (help) lists the functions, (help name) tells about one. The help window: click [Help] below, F1 or Ctrl-H, or (help-window).".into(),
+            ],
+            incoming: Arc::new(Mutex::new(Vec::new())),
+            input: Vec::new(),
+            cursor: 0,
+            history: load_history(),
+            history_at: None,
+            history_prefix: String::new(),
+            history_saved: String::new(),
+            scroll: 0,
+            console_rows: 8,
+            console_cells: None,
+            status_row: None,
+            recording: None,
+            next_frame: Instant::now(),
+            shots: 0,
+            notice: String::new(),
+        })
+    }
+
+    fn send(&self, text: &str) {
+        if let Some(ip) = self.board {
+            let _ = self.cmd.send_to(text.as_bytes(), (ip, COMMAND_PORT));
+        }
+    }
+
+    /// Takes in the state and code packets and the replies to `!info`.
+    fn listen(&mut self) {
+        let mut pkt = [0u8; 160];
+        while let Ok((n, from)) = self.sock.recv_from(&mut pkt) {
+            if let Some((v, s, fps, shared)) = ui::decode_state(&pkt[..n]) {
+                (self.view, self.spin, self.dev_fps) = (v, s, fps);
+                ui::set_shared(shared); // the layers, the selected city and what the board draws are its own
+                self.stamp = Instant::now();
+                self.heard = Some(self.stamp);
+                self.board = Some(from.ip());
+                self.packets += 1;
+                *self.snapshot.lock().unwrap() = Snapshot {
+                    view: v,
+                    spin: s,
+                    fps,
+                    options: shared.options,
+                    selected: shared.selected,
+                    board: self.board,
+                };
+            } else {
+                // the running line of a script, and its caption
+                let _ = ui::decode_code(&pkt[..n]) || ui::decode_note(&pkt[..n]);
+            }
+        }
+        if self.board.is_some()
+            && self
+                .info_asked
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(10))
+        {
+            self.info_asked = Some(Instant::now());
+            self.send("!info");
+        }
+        let mut reply = [0u8; 300];
+        while let Ok((n, _)) = self.cmd.recv_from(&mut reply) {
+            let text = String::from_utf8_lossy(&reply[..n]).into_owned();
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let after = |key: &str| {
+                words
+                    .iter()
+                    .position(|w| *w == key)
+                    .and_then(|i| words.get(i + 1))
+            };
+            if let (Some(b), Some(i)) = (
+                after("build"),
+                after("img").and_then(|v| v.parse::<usize>().ok()),
+            ) {
+                self.board_sync = Some(((*b).to_string(), i));
+            }
+        }
+        if self.pps_at.elapsed() >= Duration::from_secs(1) {
+            self.pps = self.packets as f32 / self.pps_at.elapsed().as_secs_f32();
+            self.packets = 0;
+            self.pps_at = Instant::now();
+        }
+        if self.fps_at.elapsed() >= Duration::from_secs(1) {
+            self.window_fps = self.renders as f32 / self.fps_at.elapsed().as_secs_f32();
+            self.renders = 0;
+            self.fps_at = Instant::now();
+        }
+    }
+
+    fn live(&self) -> bool {
+        self.heard
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+    }
+
+    /// Draws the board's screen the way the board does, into the frame the GPU view shows.
+    fn render(&mut self) -> bool {
+        // between packets a spinning globe keeps turning at its speed (the board sends ~60 a second)
+        let mut now_view = self.view;
+        if self.spin.on {
+            ui::advance(
+                &mut now_view,
+                self.spin,
+                self.stamp.elapsed().as_secs_f32().min(0.2),
+            );
+        }
+        let key = [
+            u64::from(now_view.lat.to_bits()) << 32 | u64::from(now_view.lon.to_bits()),
+            u64::from(now_view.zoom.to_bits()),
+            u64::from(self.spin.on) | u64::from(ui::options()) << 8 | u64::from(ui::fulls()) << 16,
+            u64::from(ui::selected().unwrap_or(u32::MAX)) | u64::from(ui::moving()) << 32,
+            ui::hover().map_or(0, |(x, y)| (x as u64) << 16 | y as u64 | 1 << 40),
+            u64::from(ui::code_seq()),
+        ];
+        if self.last_key == Some(key)
+            && !self.spin.on
+            && self.last_render.elapsed() < Duration::from_secs(1)
+        {
+            return false;
+        }
+        self.last_key = Some(key);
+        self.last_render = Instant::now();
+        self.pictures.rebake(&self.img, &mut || {});
+        let (w, h) = (ui::WIDTH, ui::HEIGHT);
+        let mut fb = Fb {
+            px: &mut self.fb,
+            w,
+            h,
+        };
+        // a quick frame only while the board says its screen moves, and once a full one is there
+        let quick = self.pictures.draw_frame(
+            &mut fb,
+            &self.img,
+            now_view,
+            self.spin,
+            &[],
+            ui::moving() && self.have_full && ui::fulls() == self.seen_fulls,
+            &mut self.luts,
+        );
+        self.have_full |= !quick;
+        if !quick {
+            self.seen_fulls = ui::fulls();
+        }
+        {
+            let mut f = self.frame.lock().unwrap();
+            util::rgba8888(&self.fb, &mut f.rgba);
+            f.fresh = true;
+        }
+        self.renders += 1;
+        // a recording takes a frame every 1/30 s of wall time (repeated when the window is slower)
+        if let Some((child, _)) = self.recording.as_mut() {
+            use std::io::Write;
+            while Instant::now() >= self.next_frame {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(&util::rgb888(&self.fb));
+                }
+                self.next_frame += Duration::from_micros(33_333);
+            }
+        }
+        true
+    }
+
+    fn screenshot(&mut self, name: Option<String>) {
+        self.shots += 1;
+        let name = name.unwrap_or_else(|| format!("board-{}.png", self.shots));
+        self.notice = match util::save_png(&name, &self.fb) {
+            Ok(()) => format!("saved {name}"),
+            Err(e) => e,
+        };
+    }
+
+    fn toggle_recording(&mut self) {
+        match self.recording.take() {
+            Some((child, name)) => {
+                util::stop_recording(child, &name);
+                self.notice = format!("recording saved: {name}");
+            }
+            None => {
+                let name = format!(
+                    "board-{}.mp4",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs())
+                );
+                if let Some(child) = util::start_recording(&name, 30, util::Encode::default()) {
+                    self.notice = format!("recording to {name} (Ctrl-R stops)");
+                    self.recording = Some((child, name));
+                    self.next_frame = Instant::now();
+                } else {
+                    self.notice = "ffmpeg does not start".into();
+                }
+            }
+        }
+    }
+
+    /// A position in the GPU view (pixels of a view `size` wide) as a position on the board's screen.
+    fn to_screen(size: (f32, f32), pos: (f32, f32)) -> Option<(i32, i32)> {
+        let (scale, ox, oy) = screen::fit(size.0, size.1);
+        let (x, y) = ((pos.0 - ox) / scale, (pos.1 - oy) / scale);
+        (x >= 0.0 && y >= 0.0 && x < screen::W as f32 && y < screen::H as f32)
+            .then_some((x as i32, y as i32))
+    }
+
+    /// Scrolls the console back by `n` lines (negative: forward).
+    fn scroll_by(&mut self, n: isize) {
+        let top = self.lines.len().saturating_sub(self.console_rows);
+        self.scroll = self.scroll.saturating_add_signed(n).min(top);
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        for c in text.chars().map(|c| if c.is_control() { ' ' } else { c }) {
+            self.input.insert(self.cursor, c);
+            self.cursor += 1;
+        }
+    }
+
+    fn paste(&mut self) {
+        match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+            Ok(text) => self.insert_text(text.trim_end()),
+            Err(e) => self.notice = format!("paste: {e}"),
+        }
+    }
+
+    fn copy_console(&mut self) {
+        let text = self.lines.join("\n");
+        self.notice = match scopekit::clipboard::copy_text(&text) {
+            Ok(()) => format!("copied the console ({} lines)", self.lines.len()),
+            Err(e) => format!("copy: {e}"),
+        };
+    }
+
+    /// Tells the board where the pointer is (the tooltip is the board's and shows on both screens): when it
+    /// moved enough and not too often, again now and then, and once when it left.
+    fn tell_hover(&mut self) {
+        match (self.hover, self.hover_sent) {
+            (Some(at), sent) => {
+                let moved = sent.is_none_or(|(p, t)| {
+                    ((p.0 - at.0).abs() + (p.1 - at.1).abs() >= 3
+                        && t.elapsed() >= Duration::from_millis(120))
+                        || t.elapsed() >= Duration::from_secs(2)
+                });
+                if moved {
+                    self.send(&format!("!hover {} {}", at.0, at.1));
+                    self.hover_sent = Some((at, Instant::now()));
+                    self.hover_told_gone = false;
+                }
+            }
+            (None, _) if !self.hover_told_gone => {
+                self.send("!hover");
+                self.hover_sent = None;
+                self.hover_told_gone = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn submit(&mut self) {
+        let line: String = self.input.drain(..).collect();
+        self.cursor = 0;
+        self.history_at = None;
+        if line.trim().is_empty() {
+            return;
+        }
+        self.scroll = 0;
+        if self.repl.pending() > 0 {
+            self.lines.push(format!(
+                "> {line}   (waits: a script runs, Ctrl-C stops it)"
+            ));
+        } else {
+            self.lines.push(format!("> {line}"));
+        }
+        if self.history.last() != Some(&line) {
+            self.history.push(line.clone());
+            save_history_line(&line);
+        }
+        self.repl.run(line);
+    }
+
+    /// Up/Down through the history like zsh's history-beginning-search: what is typed before the cursor
+    /// is a prefix, and only the commands that start with it are visited; Down past the newest gives
+    /// back what was typed.
+    fn history_step(&mut self, up: bool) {
+        if self.history_at.is_none() {
+            self.history_prefix = self.input[..self.cursor].iter().collect();
+            self.history_saved = self.input.iter().collect();
+        }
+        match history_search(&self.history, self.history_at, &self.history_prefix, up) {
+            Some(Some(i)) => {
+                self.history_at = Some(i);
+                self.input = self.history[i].chars().collect();
+            }
+            Some(None) => {
+                self.history_at = None;
+                self.input = self.history_saved.chars().collect();
+            }
+            None => return, // nothing (more) that starts like that
+        }
+        self.cursor = self.input.len();
+    }
+
+    fn key(&mut self, key: scopekit::crossterm::event::KeyEvent) -> Flow {
+        if key.kind == KeyEventKind::Release {
+            return Flow::Continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            self.history_at = None; // an edit ends the walk through the history
+        }
+        match key.code {
+            KeyCode::Char('q') if ctrl => {
+                self.send("!code");
+                return Flow::Quit;
+            }
+            KeyCode::Char('c') if ctrl => {
+                self.repl.interrupt();
+                self.notice = format!("stopping {} ...", repl::now());
+                self.input.clear();
+                self.cursor = 0;
+            }
+            KeyCode::Char('s') if ctrl => self.screenshot(None),
+            KeyCode::Char('r') if ctrl => self.toggle_recording(),
+            KeyCode::Char('l') if ctrl => self.lines.clear(),
+            // paste (Cmd-V does not reach the app from scopekit's window, Ctrl-V does) and copy the whole console
+            // (Shift-drag selects text and Cmd-C copies it, in scopekit)
+            KeyCode::Char('v' | 'V') if ctrl => self.paste(),
+            KeyCode::Char('y') if ctrl => self.copy_console(),
+            // (Ctrl-H arrives as Backspace with Ctrl in some keyboards' terminals)
+            KeyCode::Char('h' | 'H') if ctrl => {
+                repl::open_help_window();
+            }
+            KeyCode::Backspace if ctrl => {
+                repl::open_help_window();
+            }
+            KeyCode::F(1) => {
+                repl::open_help_window();
+            }
+            KeyCode::Char('a') if ctrl => self.cursor = 0,
+            KeyCode::Char('e') if ctrl => self.cursor = self.input.len(),
+            KeyCode::Char('u') if ctrl => {
+                self.input.drain(..self.cursor);
+                self.cursor = 0;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.input.insert(self.cursor, c);
+                self.cursor += 1;
+            }
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.cursor -= 1;
+                self.input.remove(self.cursor);
+            }
+            KeyCode::Delete if self.cursor < self.input.len() => {
+                self.input.remove(self.cursor);
+            }
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.input.len()),
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => {
+                self.cursor = self.input.len();
+                self.scroll = 0;
+            }
+            KeyCode::Up => self.history_step(true),
+            KeyCode::Down => self.history_step(false),
+            KeyCode::Esc => {
+                self.input.clear();
+                self.cursor = 0;
+            }
+            KeyCode::PageUp => self.scroll_by(self.console_rows as isize - 1),
+            KeyCode::PageDown => self.scroll_by(1 - self.console_rows as isize),
+            KeyCode::Enter => self.submit(),
+            _ => {}
+        }
+        Flow::Continue
+    }
+
+    fn status_line(&self) -> Line<'static> {
+        let dim = Style::default().fg(Color::Gray);
+        let mut spans = vec![Span::styled(
+            "[Help] ",
+            Style::default().fg(Color::Black).bg(Color::Green),
+        )];
+        let board = match (self.board, self.live()) {
+            (Some(ip), true) => Span::styled(
+                format!("board {ip} {} fps", self.dev_fps),
+                Style::default().fg(Color::Green),
+            ),
+            (Some(ip), false) => Span::styled(
+                format!("board {ip}: no packets"),
+                Style::default().fg(Color::Red),
+            ),
+            _ => Span::styled("waiting for the board", Style::default().fg(Color::Yellow)),
+        };
+        spans.push(board);
+        spans.push(Span::styled(
+            format!(
+                "  window {:.0} fps  {:.0} pkt/s  ",
+                self.window_fps, self.pps
+            ),
+            dim,
+        ));
+        if let Some((b, n)) = &self.board_sync {
+            if b == geodb_fw_core::BUILD_ID && *n == self.img_len {
+                spans.push(Span::styled(
+                    format!("in sync (build {b})"),
+                    Style::default().fg(Color::Green),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!(
+                        "OUT OF SYNC: board {b} img {n}, here {} img {}",
+                        geodb_fw_core::BUILD_ID,
+                        self.img_len
+                    ),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+        }
+        if self.recording.is_some() {
+            spans.push(Span::styled(
+                "  REC",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
+        }
+        if !self.notice.is_empty() {
+            spans.push(Span::styled(format!("  {}", self.notice), dim));
+        }
+        spans.push(Span::styled(
+            "   Ctrl-H help window, Ctrl-V paste, Ctrl-Y copy all (Shift-drag selects, Cmd-C copies it), Ctrl-C stops, Ctrl-S png, Ctrl-R mp4, Ctrl-Q quits",
+            dim,
+        ));
+        Line::from(spans)
+    }
+}
+
+impl App for Mirror {
+    fn start(&mut self, waker: Waker) {
+        // the console's output (the interpreter's thread) arrives here and wakes the window
+        let incoming = self.incoming.clone();
+        repl::set_sink(move |line| {
+            incoming.lock().unwrap().push(line.to_string());
+            waker.wake();
+        });
+    }
+
+    fn draw(&mut self, f: &mut Ui, views: &mut ViewSlot) {
+        // the screen gets the height its width needs (at most all but a few rows); the console, which scrolls,
+        // gets the rest, so a taller window shows more of it
+        let area = f.area();
+        let (cw, ch) = views.cell_px();
+        let want =
+            (f32::from(area.width) * cw * screen::H as f32 / screen::W as f32 / ch).ceil() as u16;
+        let screen_rows = want.clamp(8, area.height.saturating_sub(6).max(8));
+        let [screen, console, status] = Layout::vertical([
+            Constraint::Length(screen_rows),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+        views.place("screen", screen);
+        self.screen_cells = Some(screen);
+        self.cell_px = views.cell_px();
+        let green = Style::default().fg(Color::Green);
+        let yellow = Style::default().fg(Color::Yellow);
+        let rows = usize::from(console.height).saturating_sub(2).max(1);
+        self.console_rows = rows;
+        self.console_cells = Some(console);
+        self.scroll = self.scroll.min(self.lines.len().saturating_sub(rows));
+        let end = self.lines.len() - self.scroll;
+        let tail = end.saturating_sub(rows);
+        let mut text: Vec<Line> = self.lines[tail..end]
+            .iter()
+            .map(|l| {
+                if l.starts_with("> ") {
+                    Line::styled(l.clone(), yellow)
+                } else if l.starts_with("=> ") {
+                    Line::styled(l.clone(), green)
+                } else {
+                    Line::raw(l.clone())
+                }
+            })
+            .collect();
+        // the prompt with its cursor
+        let before: String = self.input[..self.cursor].iter().collect();
+        let at: String = self
+            .input
+            .get(self.cursor)
+            .map_or(" ".into(), char::to_string);
+        let after: String = self.input.iter().skip(self.cursor + 1).collect();
+        text.push(Line::from(vec![
+            Span::styled("lisp> ", yellow),
+            Span::raw(before),
+            Span::styled(at, Style::default().add_modifier(Modifier::REVERSED)),
+            Span::raw(after),
+        ]));
+        f.render_widget(
+            Paragraph::new(text).block(Block::default().borders(Borders::TOP).title(
+                if self.repl.pending() > 0 {
+                    format!(
+                        " Lisp: RUNNING {}  ({} waiting)  Ctrl-C stops ",
+                        repl::now(),
+                        self.repl.pending() - 1
+                    )
+                } else if self.scroll > 0 {
+                    format!(" Lisp: {} lines back (End: the newest) ", self.scroll)
+                } else {
+                    " Lisp (wheel, PgUp/PgDn scroll) ".to_string()
+                },
+            )),
+            console,
+        );
+        self.status_row = Some(status.y);
+        f.render_widget(Paragraph::new(self.status_line()), status);
+    }
+
+    fn event(&mut self, event: Event) -> Flow {
+        match event {
+            Event::Key(k) => self.key(k),
+            Event::Paste(text) => {
+                self.insert_text(text.trim_end());
+                Flow::Continue
+            }
+            Event::Mouse(m) => {
+                match m.kind {
+                    MouseEventKind::ScrollUp => self.scroll_by(3),
+                    MouseEventKind::ScrollDown => self.scroll_by(-3),
+                    MouseEventKind::Down(MouseButton::Left)
+                        if self.status_row == Some(m.row) && m.column < 7 =>
+                    {
+                        repl::open_help_window();
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => self.send("!release"),
+                    MouseEventKind::Moved | MouseEventKind::Drag(_) | MouseEventKind::Down(_) => {
+                        // the pointer over the board's screen: the city under it gets a tooltip
+                        self.hover = self.screen_cells.and_then(|r| {
+                            let size = (
+                                f32::from(r.width) * self.cell_px.0,
+                                f32::from(r.height) * self.cell_px.1,
+                            );
+                            let pos = (
+                                (f32::from(m.column) - f32::from(r.x) + 0.5) * self.cell_px.0,
+                                (f32::from(m.row) - f32::from(r.y) + 0.5) * self.cell_px.1,
+                            );
+                            Self::to_screen(size, pos)
+                        });
+                        self.tell_hover();
+                    }
+                    _ => {}
+                }
+                Flow::Continue
+            }
+            _ => Flow::Continue,
+        }
+    }
+
+    fn gesture(&mut self, g: scopekit::Gesture) -> Flow {
+        if g.view != "screen" {
+            return Flow::Continue;
+        }
+        let scale = screen::fit(g.size.0, g.size.1).0;
+        match g.kind {
+            GestureKind::Tap { .. } => {
+                // (a double tap arrives as two taps: the board's own double-tap logic sees both)
+                if let Some((x, y)) = Self::to_screen(g.size, g.pos) {
+                    self.send(&format!("!tap {x} {y}"));
+                }
+            }
+            GestureKind::Pan { dx, dy } => {
+                // whole pixels of the board's screen; the rest is kept for the next move
+                let (fx, fy) = (dx / scale + self.drag_rest.0, dy / scale + self.drag_rest.1);
+                let (ix, iy) = (fx.round() as i32, fy.round() as i32);
+                self.drag_rest = (fx - ix as f32, fy - iy as f32);
+                if ix != 0 || iy != 0 {
+                    self.send(&format!("!drag {ix} {iy}"));
+                }
+            }
+            GestureKind::Zoom { factor } => {
+                let v = self.view;
+                self.send(&format!(
+                    "!view {} {} {}",
+                    v.lat,
+                    v.lon,
+                    (v.zoom * factor).clamp(1.0, 4000.0)
+                ));
+            }
+            _ => {}
+        }
+        Flow::Continue
+    }
+
+    fn tick(&mut self) -> bool {
+        self.listen();
+        self.tell_hover(); // (again now and then while the pointer rests)
+        let mut changed = false;
+        if self.notice.starts_with("stopping") && self.repl.pending() == 0 {
+            self.notice = "stopped".into();
+            changed = true;
+        }
+        let said: Vec<String> = std::mem::take(&mut *self.incoming.lock().unwrap());
+        if !said.is_empty() {
+            self.lines.extend(said);
+            let excess = self.lines.len().saturating_sub(500);
+            self.lines.drain(..excess);
+            changed = true;
+        }
+        if let Some(Request::Screenshot(name)) = self.repl.poll() {
+            self.screenshot(Some(name));
+            changed = true;
+        }
+        self.render() || changed
+    }
+
+    fn tick_interval(&self) -> Option<Duration> {
+        Some(Duration::from_millis(16))
+    }
+
+    fn captures_text(&self) -> bool {
+        true
+    }
+}
+
+/// The view the app registers with scopekit.
+pub fn frame() -> SharedFrame {
+    Arc::new(Mutex::new(Frame::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::history_search;
+
+    #[test]
+    fn up_and_down_visit_only_the_commands_that_start_like_the_typed_text() {
+        let h: Vec<String> = [
+            "(sleep 1)",
+            "(hop \"a\")",
+            "(state)",
+            "(find \"x\")",
+            "(setq i 0)",
+        ]
+        .map(String::from)
+        .to_vec();
+        // "(s": newest first, then older ones
+        let first = history_search(&h, None, "(s", true);
+        assert_eq!(first, Some(Some(4)));
+        let second = history_search(&h, Some(4), "(s", true);
+        assert_eq!(second, Some(Some(2)));
+        assert_eq!(history_search(&h, Some(2), "(s", true), Some(Some(0)));
+        // nothing older: stay
+        assert_eq!(history_search(&h, Some(0), "(s", true), None);
+        // down again, and past the newest back to the typed text
+        assert_eq!(history_search(&h, Some(0), "(s", false), Some(Some(2)));
+        assert_eq!(history_search(&h, Some(4), "(s", false), Some(None));
+        // nothing typed: every command
+        assert_eq!(history_search(&h, None, "", true), Some(Some(4)));
+        assert_eq!(history_search(&h, Some(4), "", true), Some(Some(3)));
+        // no match at all
+        assert_eq!(history_search(&h, None, "(zzz", true), None);
+    }
+}

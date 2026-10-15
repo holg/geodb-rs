@@ -1,0 +1,22 @@
+[package]
+name = "geodb-kiosk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "geodb on the STM32MP135F-DK: the firmware's globe full screen on the 480 x 272 LCD, through Linux DRM and evdev"
+
+# Not a member of the geodb-rs workspace: it builds for the board's Linux (armv7, musl, static).
+[workspace]
+
+[dependencies]
+geodb-fw-core = { path = "../../crates/geodb-fw-core" }
+png = "0.18"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+drm = "0.14"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+panic = "abort"

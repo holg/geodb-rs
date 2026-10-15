@@ -157,6 +157,9 @@ struct App {
     selected: Option<usize>,
     labels: Vec<HtmlElement>,
     last_frame: f64,
+    /// When the address bar was last compared with what is loaded and shown, and what it was set to.
+    url_checked: f64,
+    url_state: String,
     dirty: bool,
     spin: bool,
     spin_deg_s: f64,
@@ -338,6 +341,7 @@ fn network() -> Vec<(String, f64, f64)> {
             || file.ends_with(".foldhangul")
             || file.ends_with(".webp")
             || file == "coast10m.bin"
+            || file == "elev.bin"
         {
             file
         } else if file == "coast.bin" {
@@ -631,6 +635,16 @@ impl App {
 
     fn frame(&mut self, t: f64) {
         let frame_start = now();
+        // The address bar follows what is loaded and shown (the extras ticked, the layers, the view): copy
+        // the URL, paste it, and the page comes up the same. Twice a second at most, only when it changed.
+        if t - self.url_checked >= 500.0 {
+            self.url_checked = t;
+            let query = self.state_query();
+            if query != self.url_state {
+                replace_address(&query);
+                self.url_state = query;
+            }
+        }
         let dt = ((t - self.last_frame) / 1000.0).clamp(0.0, 0.1);
         self.last_frame = t;
 
@@ -647,7 +661,9 @@ impl App {
 
         let spinning = self.spin || self.fps_bench.is_some();
         if spinning && self.press.is_none() {
-            let lon = crate::geo::wrap_lon(self.cam.lon + self.spin_deg_s * dt);
+            // The Earth turns eastward: seen from outside, the surface moves to the right, so the
+            // longitude under the view centre decreases (the same as the board's spin).
+            let lon = crate::geo::wrap_lon(self.cam.lon - self.spin_deg_s * dt);
             self.cam.lon = lon;
             self.cam.fly_to(self.cam.lat, lon, self.cam.target_dist());
             self.dirty = true;
@@ -919,6 +935,23 @@ impl App {
         if !imagery.is_empty() {
             q.push(format!("imagery={}", imagery.join(",")));
         }
+        if self.surface.relief.is_some() {
+            let mut parts = Vec::new();
+            if self.surface.relief_shade {
+                parts.push("shade");
+            }
+            if self.surface.relief_iso {
+                parts.push("iso");
+            }
+            q.push(format!(
+                "relief={}",
+                if parts.is_empty() {
+                    "off".into()
+                } else {
+                    parts.join(",")
+                }
+            ));
+        }
         if self.surface.lines.is_some() {
             q.push("lines=10m".into());
             if !self.surface.lines_on {
@@ -967,6 +1000,9 @@ impl App {
         );
         if self.surface.has("coast-4096") || self.surface.lines.is_some() {
             files.push("coast10m.bin".into());
+        }
+        if self.surface.relief.is_some() {
+            files.push("elev.bin".into());
         }
         for i in IMAGERY {
             if self.surface.has(&format!("imagery-{}", i.px)) {
@@ -1662,6 +1698,11 @@ struct Surface {
     lines_on: bool,
     /// Starts from the tiny picture: the coastline earth can replace it.
     staged: bool,
+    /// The relief layers (the globe's shader): the elevation picture is loaded (its GPU bytes), and which of
+    /// hill shading and isohypses show.
+    relief: Option<f64>,
+    relief_shade: bool,
+    relief_iso: bool,
 }
 
 /// GPU bytes of a `w` x `w/2` RGBA8 texture with its mip chain.
@@ -1671,7 +1712,9 @@ fn texture_bytes(w: u32) -> f64 {
 
 impl Surface {
     fn gpu_bytes(&self) -> f64 {
-        self.list.iter().map(|t| t.bytes).sum::<f64>() + self.lines.unwrap_or(0.0)
+        self.list.iter().map(|t| t.bytes).sum::<f64>()
+            + self.lines.unwrap_or(0.0)
+            + self.relief.unwrap_or(0.0)
     }
 
     fn get(&self, id: &str) -> Option<&SurfaceTex> {
@@ -1829,6 +1872,15 @@ fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, d
             "<button data-texture=\"lines\">Load 1:10m coastlines, lines (0.47 MB)</button>",
         ),
     }
+    match s.relief {
+        Some(_) => html.push_str(
+            "<span class=\"layer on\">✓ relief (elevation) <button class=\"x\" \
+             data-texture=\"unload:relief\" title=\"unload\">✕</button></span>",
+        ),
+        None => html.push_str(
+            "<button data-texture=\"relief\">Load relief and isohypses (elevation, 0.28 MB)</button>",
+        ),
+    }
     for px in COAST_PX {
         if px <= max && !s.has(&format!("coast-{px}")) {
             html.push_str(&format!(
@@ -1850,6 +1902,15 @@ fn render_surface(doc: &Document, s: &Surface, max: u32, tiles: Option<usize>, d
             "<label class=\"posmode\"><input type=\"checkbox\" id=\"show-lines\"{}/> show \
              coastlines</label>",
             if s.lines_on { " checked" } else { "" }
+        ));
+    }
+    if s.relief.is_some() {
+        html.push_str(&format!(
+            "<label class=\"posmode\"><input type=\"checkbox\" id=\"relief-shade\"{}/> hill \
+             shading</label><label class=\"posmode\"><input type=\"checkbox\" id=\"relief-iso\"{}/> \
+             isohypses (lines of equal height, every 100 to 1000 m by zoom)</label>",
+            if s.relief_shade { " checked" } else { "" },
+            if s.relief_iso { " checked" } else { "" }
         ));
     }
     let sources: String = crate::tiles::SOURCES
@@ -2284,6 +2345,79 @@ async fn load_lines(app: Rc<RefCell<App>>) {
     set_html(&doc, "layerstatus", "1:10m coastlines drawn as lines.");
 }
 
+/// The relief layers: the elevation picture (`elev.bin`, 1024 x 512, the board's) goes to the GPU as heights
+/// and the globe's shader draws hill shading and isohypses from it, over any surface, at any zoom.
+async fn load_relief(app: Rc<RefCell<App>>) {
+    const FILE: &str = "elev.bin";
+    if app.borrow().surface.relief.is_some() {
+        return;
+    }
+    let doc = app.borrow().doc.clone();
+    set_html(&doc, "layerstatus", "Loading the elevation…");
+    let t = now();
+    let bytes = match fetch_bytes(FILE).await {
+        Ok(b) => b,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not load: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let fetch_ms = now() - t;
+    let t = now();
+    let heights = match crate::relief::heights(&bytes) {
+        Ok(h) => h,
+        Err(e) => {
+            set_html(
+                &doc,
+                "layerstatus",
+                &format!("Could not read: {}", escape(&e)),
+            );
+            return;
+        }
+    };
+    let gpu = (crate::relief::WIDTH * crate::relief::HEIGHT * 2) as f64;
+    let (shade, iso) = {
+        let mut a = app.borrow_mut();
+        a.renderer.set_relief(Some((
+            &heights,
+            crate::relief::WIDTH,
+            crate::relief::HEIGHT,
+        )));
+        a.surface.relief = Some(gpu);
+        (a.surface.relief_shade, a.surface.relief_iso)
+    };
+    drop(heights);
+    let upload_ms = now() - t;
+    measure_cached().await;
+    let wire = network()
+        .into_iter()
+        .find(|(label, _, _)| label == FILE)
+        .map_or(bytes.len() as f64, |n| n.1);
+    let mut a = app.borrow_mut();
+    a.renderer.show_relief(shade, iso);
+    a.cost.layers.push(LayerCost {
+        key: "relief".into(),
+        file: format!("{FILE} (elevation, relief and isohypses)"),
+        wire,
+        unpacked: bytes.len() as f64,
+        fetch_ms,
+        action: "upload",
+        attach_ms: upload_ms,
+        heap_added: 0.0,
+        gpu_added: gpu,
+    });
+    surface_changed(&mut a);
+    set_html(
+        &doc,
+        "layerstatus",
+        "Relief: hill shading and isohypses over the earth.",
+    );
+}
+
 /// The running build's glue and wasm: named by the release loader (or a
 /// single file), else found in the Resource Timing entries (trunk pages).
 fn build_files() -> Option<(String, String)> {
@@ -2302,6 +2436,56 @@ fn build_files() -> Option<(String, String)> {
     let wasm = names.iter().find(|n| n.ends_with("_bg.wasm"))?.clone();
     let js = wasm.strip_suffix("_bg.wasm")?.to_string() + ".js";
     Some((js, wasm))
+}
+
+/// The query parameters [`App::state_query`] writes: the address bar's other parameters (`?gl`, `?spin=`...)
+/// stay as they are.
+const STATE_PARAMS: [&str; 15] = [
+    "data",
+    "load",
+    "earth",
+    "layers",
+    "positions",
+    "coast",
+    "imagery",
+    "lines",
+    "hidelines",
+    "relief",
+    "show",
+    "compare",
+    "tiles",
+    "date",
+    "at",
+];
+
+/// Puts `state` (a `?query` from [`App::state_query`]) into the address bar without reloading, keeping the
+/// parameters it does not manage.
+fn replace_address(state: &str) {
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let search = win.location().search().unwrap_or_default();
+    let kept: Vec<&str> = search
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .filter(|kv| !STATE_PARAMS.contains(&kv.split('=').next().unwrap_or("")))
+        .collect();
+    let mut query = state.trim_start_matches('?').to_string();
+    for kv in kept {
+        if !query.is_empty() {
+            query.push('&');
+        }
+        query.push_str(kv);
+    }
+    let url = format!("?{query}");
+    // history.replaceState(null, "", url); it may throw (file://, sandboxes): then the bar stays as it is
+    let replace = js_sys::Reflect::get(&win, &"history".into()).and_then(|history| {
+        let f: js_sys::Function =
+            js_sys::Reflect::get(&history, &"replaceState".into())?.dyn_into()?;
+        f.call3(&history, &JsValue::NULL, &"".into(), &url.into())
+    });
+    let _ = replace;
 }
 
 /// Saves one HTML file with everything loaded now and the current view:
@@ -4077,7 +4261,8 @@ async fn run() -> Result<(), String> {
     let spin_deg_s = param("spin")
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(SPIN_DEG_S)
-        .clamp(0.0, SPIN_MAX_DEG_S);
+        // negative turns it the other way round (the default is the Earth's own direction)
+        .clamp(-SPIN_MAX_DEG_S, SPIN_MAX_DEG_S);
     let renderer_base_view = renderer.primary_view();
     let app = Rc::new(RefCell::new(App {
         doc: doc.clone(),
@@ -4121,6 +4306,9 @@ async fn run() -> Result<(), String> {
             lines: None,
             lines_on: true,
             staged,
+            relief: None,
+            relief_shade: true,
+            relief_iso: true,
         },
         tiny,
         coast: None,
@@ -4136,6 +4324,8 @@ async fn run() -> Result<(), String> {
         selected: None,
         labels,
         last_frame: now(),
+        url_checked: now(),
+        url_state: String::new(),
         dirty: true,
         spin: false,
         spin_deg_s,
@@ -4272,7 +4462,7 @@ async fn run() -> Result<(), String> {
                 .value()
                 .parse::<f64>()
                 .unwrap_or(SPIN_DEG_S)
-                .clamp(0.0, SPIN_MAX_DEG_S);
+                .clamp(-SPIN_MAX_DEG_S, SPIN_MAX_DEG_S);
             let mut app = app.borrow_mut();
             app.spin_deg_s = v;
             set_html(&app.doc, "spin-value", &format!("{v:.0}°/s"));
@@ -4462,6 +4652,15 @@ async fn run() -> Result<(), String> {
                 ));
             } else if which == "lines" {
                 wasm_bindgen_futures::spawn_local(load_lines(a.clone()));
+            } else if which == "relief" {
+                wasm_bindgen_futures::spawn_local(load_relief(a.clone()));
+            } else if which == "unload:relief" {
+                let mut app = a.borrow_mut();
+                app.renderer.set_relief(None);
+                app.surface.relief = None;
+                mark_unloaded(&mut app.cost, "relief");
+                surface_changed(&mut app);
+                set_html(&app.doc, "layerstatus", "Unloaded the relief.");
             } else if which == "unload:lines" {
                 let mut app = a.borrow_mut();
                 app.renderer.clear_coastlines();
@@ -4483,9 +4682,26 @@ async fn run() -> Result<(), String> {
         });
         let a = app.clone();
         listen(&surface, "change", true, move |e: web_sys::Event| {
-            if let Some(check) = element_tagged::<HtmlInputElement>(e.target(), "input")
-                .filter(|i| i.id() == "show-lines" || i.id() == "tiles-date")
+            if let Some(check) =
+                element_tagged::<HtmlInputElement>(e.target(), "input").filter(|i| {
+                    matches!(
+                        i.id().as_str(),
+                        "show-lines" | "tiles-date" | "relief-shade" | "relief-iso"
+                    )
+                })
             {
+                if check.id().starts_with("relief-") {
+                    let mut app = a.borrow_mut();
+                    if check.id() == "relief-shade" {
+                        app.surface.relief_shade = check.checked();
+                    } else {
+                        app.surface.relief_iso = check.checked();
+                    }
+                    let (shade, iso) = (app.surface.relief_shade, app.surface.relief_iso);
+                    app.renderer.show_relief(shade, iso);
+                    app.dirty = true;
+                    return;
+                }
                 if check.id() == "tiles-date" {
                     let v = check.value();
                     let mut app = a.borrow_mut();
@@ -4592,12 +4808,20 @@ async fn run() -> Result<(), String> {
         let lines = deepest || param("lines").is_some();
         let (show, compare) = (param("show"), param("compare"));
         let earth_coast = param("earth").as_deref() == Some("coast");
+        // ?relief=shade,iso (or shade, or iso, or off): the elevation and which relief layers show
+        let relief: Option<(bool, bool)> = param("relief").map(|v| {
+            (
+                v.split(',').any(|p| p == "shade" || p == "1" || p == "on"),
+                v.split(',').any(|p| p == "iso" || p == "1" || p == "on"),
+            )
+        });
         let any = earth_coast
             || !layers.is_empty()
             || !coasts.is_empty()
             || !imagery.is_empty()
             || show.is_some()
             || compare.is_some()
+            || relief.is_some()
             || lines;
         // The cities load on demand (the button, the search box, a click on
         // the globe, running the queries): at start only when asked for
@@ -4627,6 +4851,14 @@ async fn run() -> Result<(), String> {
                 }
                 for px in imagery {
                     load_imagery(a.clone(), px.min(max)).await;
+                }
+                if let Some((shade, iso)) = relief {
+                    {
+                        let mut app = a.borrow_mut();
+                        app.surface.relief_shade = shade;
+                        app.surface.relief_iso = iso;
+                    }
+                    load_relief(a.clone()).await;
                 }
                 if lines {
                     load_lines(a.clone()).await;

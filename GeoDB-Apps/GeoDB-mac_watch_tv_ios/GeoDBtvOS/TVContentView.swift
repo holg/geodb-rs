@@ -375,6 +375,7 @@ struct CardButtonStyle: ButtonStyle {
 // MARK: - City Detail View
 struct CityDetailView: View {
     @EnvironmentObject var geoDatabase: GeoDatabase
+    @EnvironmentObject var navigator: AppNavigator
     @State var city: CityResult
 
     @State private var nearestCities: [CityResult] = []
@@ -518,6 +519,21 @@ struct CityDetailView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 14)
                 .background(selectedTab == 1 ? Color.blue : Color.white.opacity(0.1))
+                .cornerRadius(10)
+            }
+            .buttonStyle(.card)
+
+            Button {
+                navigator.showOnGlobe(latitude: city.lat, longitude: city.lng)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "globe.europe.africa.fill")
+                    Text("Show on Globe")
+                }
+                .font(.body)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(Color.white.opacity(0.1))
                 .cornerRadius(10)
             }
             .buttonStyle(.card)
@@ -1252,5 +1268,6 @@ extension CityResult: @retroactive Identifiable {
 #Preview {
     ContentView()
         .environmentObject(GeoDatabase())
+        .environmentObject(AppNavigator())
 }
 #endif

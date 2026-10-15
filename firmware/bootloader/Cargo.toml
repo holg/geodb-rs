@@ -1,0 +1,21 @@
+[package]
+name = "geodb-bootloader"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A/B slot bootloader of the geodb STM32F769I-DISCO firmware: picks the slot, counts trial boots, falls back"
+publish = false
+
+# Own workspace: it builds for thumbv7em-none-eabihf, the host crates must not see it.
+[workspace]
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
+panic-halt = "1"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = 1

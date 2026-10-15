@@ -1,0 +1,34 @@
+#!/bin/sh
+# The geodb globe full screen on the LCD, on the board (installed as /usr/local/bin/globe by kiosk.sh deploy).
+#   globe [start] [flags]   Weston gives up the display, the globe starts (flags: --no-spin, --move-step 4)
+#   globe stop              the globe stops, Weston starts again
+#   globe log               what the globe printed (frame times)
+#   globe shot              the screen into /tmp/kiosk.png
+D=/usr/local/geodb
+case "${1:-start}" in
+start | -*)
+    [ "$1" = start ] && shift
+    systemctl stop weston-launch.service
+    killall -q geodb-kiosk && sleep 1
+    nohup $D/geodb-kiosk $D/geodb.fw "$@" > /tmp/kiosk.log 2>&1 < /dev/null &
+    echo "globe started (log: /tmp/kiosk.log)"
+    ;;
+stop)
+    killall -q geodb-kiosk
+    systemctl start weston-launch.service
+    echo "globe stopped, Weston started"
+    ;;
+log)
+    cat /tmp/kiosk.log
+    ;;
+shot)
+    rm -f /tmp/kiosk.png
+    touch /tmp/kiosk-shot
+    sleep 1.5
+    ls -la /tmp/kiosk.png
+    ;;
+*)
+    sed -n '2,6p' "$0"
+    exit 2
+    ;;
+esac

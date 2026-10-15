@@ -10,7 +10,9 @@
 		21DB893D2EE35A2C009FB3C1 /* GeodbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 21DB893C2EE35A2C009FB3C1 /* GeodbKit */; };
 		21FFACC82EE357AF001B4E94 /* GeodbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 21FFACC72EE357AF001B4E94 /* GeodbKit */; };
 		21FFACCA2EE358C6001B4E94 /* GeodbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 21FFACC92EE358C6001B4E94 /* GeodbKit */; };
+		21GLOBE012EE000000000003 /* GeodbGlobe in Frameworks */ = {isa = PBXBuildFile; productRef = 21GLOBE012EE000000000002 /* GeodbGlobe */; };
 		21WATCH012EDFABC100000001 /* GeoDb Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2119A0D62EDA2200009A4814 /* GeoDb Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		21WGLOBE12EE000000000003 /* GeodbWatchGlobe in Frameworks */ = {isa = PBXBuildFile; productRef = 21WGLOBE12EE000000000002 /* GeodbWatchGlobe */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -102,6 +104,11 @@
 			path = GeoDBUITests;
 			sourceTree = "<group>";
 		};
+		21GEODB012EE000000000001 /* GeoDB */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = GeoDB;
+			sourceTree = "<group>";
+		};
 		21TVOS0012EE0000000000001 /* GeoDBtvOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = GeoDBtvOS;
@@ -115,6 +122,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				21DB893D2EE35A2C009FB3C1 /* GeodbKit in Frameworks */,
+				21WGLOBE12EE000000000003 /* GeodbWatchGlobe in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -138,6 +146,7 @@
 			files = (
 				21FFACC82EE357AF001B4E94 /* GeodbKit in Frameworks */,
 				21FFACCA2EE358C6001B4E94 /* GeodbKit in Frameworks */,
+				21GLOBE012EE000000000003 /* GeodbGlobe in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -183,6 +192,7 @@
 			isa = PBXGroup;
 			children = (
 				21TVOS0012EE0000000000001 /* GeoDBtvOS */,
+				21GEODB012EE000000000001 /* GeoDB */,
 				21F5D4F42ED9FAE70070BF4C /* GeoDBTests */,
 				21F5D4FE2ED9FAE70070BF4C /* GeoDBUITests */,
 				2119A0DA2EDA2200009A4814 /* GeoDb Watch App */,
@@ -190,6 +200,7 @@
 				2119A0F22EDA2201009A4814 /* GeoDb Watch AppUITests */,
 				2119A1252EDA2AB1009A4814 /* Frameworks */,
 				21F5D4E02ED9FAE50070BF4C /* Products */,
+				21F9CCF4308003050089578E /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -204,6 +215,15 @@
 				2119A0EF2EDA2201009A4814 /* GeoDb Watch AppUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		21F9CCF4308003050089578E /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				2189BCDB2EE33FE000E3AE2A /* GeoDB.xcodeproj */,
+				2189BD732EE3419400E3AE2A /* GeoDB.xcodeproj */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -227,6 +247,7 @@
 			name = "GeoDb Watch App";
 			packageProductDependencies = (
 				21DB893C2EE35A2C009FB3C1 /* GeodbKit */,
+				21WGLOBE12EE000000000002 /* GeodbWatchGlobe */,
 			);
 			productName = "GeoDb Watch App";
 			productReference = 2119A0D62EDA2200009A4814 /* GeoDb Watch App.app */;
@@ -293,12 +314,14 @@
 				21WATCH032EDFABC100000003 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+				21GEODB012EE000000000001 /* GeoDB */,
 				21TVOS0012EE0000000000001 /* GeoDBtvOS */,
 			);
 			name = GeoDB;
 			packageProductDependencies = (
 				21FFACC72EE357AF001B4E94 /* GeodbKit */,
 				21FFACC92EE358C6001B4E94 /* GeodbKit */,
+				21GLOBE012EE000000000002 /* GeodbGlobe */,
 			);
 			productName = GeoDB;
 			productReference = 21F5D4DF2ED9FAE50070BF4C /* GeoDB.app */;
@@ -547,7 +570,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				ENABLE_PREVIEWS = YES;
@@ -559,7 +582,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -581,7 +604,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				ENABLE_PREVIEWS = YES;
@@ -593,7 +616,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -615,10 +638,10 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -638,10 +661,10 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -661,10 +684,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -683,10 +706,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "eu.trahe.geodb-Watch-AppUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -827,7 +850,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -858,7 +881,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -885,7 +908,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -916,7 +939,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodb;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -939,12 +962,12 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -965,12 +988,12 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -990,12 +1013,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -1015,12 +1038,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = U4GT5CZ7J7;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = eu.trahe.geodbUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -1123,6 +1146,14 @@
 		21FFACC92EE358C6001B4E94 /* GeodbKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = GeodbKit;
+		};
+		21GLOBE012EE000000000002 /* GeodbGlobe */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GeodbGlobe;
+		};
+		21WGLOBE12EE000000000002 /* GeodbWatchGlobe */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GeodbWatchGlobe;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

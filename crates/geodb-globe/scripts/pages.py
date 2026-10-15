@@ -7,7 +7,8 @@ with --deploy, push it to the gh-pages branch.
 
 Layout: index.html (pages/index.html), globe/ (web_release.py --pages:
 both builds and the loader, data gzipped inside, the Earth detail layers
-when scripts/fetch_detail.py made them), one-in-all.html, blog/.
+when scripts/fetch_detail.py made them), globe-fw/ (the same on the
+52,088 cities of the firmware image: web_release.py --fw --pages), one-in-all.html, blog/.
 
 Pages sends files as they are (no .br) and without COOP/COEP, so the
 timer is the coarse one there; everything else runs as on a full server.
@@ -37,6 +38,8 @@ def build(no_build: bool) -> None:
     OUT.mkdir()
     release = [sys.executable, str(CRATE / "scripts" / "web_release.py"), "--pages", str(OUT / "globe")]
     subprocess.run(release + (["--no-build"] if no_build else []), check=True)
+    release_fw = [sys.executable, str(CRATE / "scripts" / "web_release.py"), "--fw", "--pages", str(OUT / "globe-fw")]
+    subprocess.run(release_fw + (["--no-build"] if no_build else []), check=True)
     if not no_build:
         subprocess.run([sys.executable, str(CRATE / "scripts" / "one_in_all.py")], check=True)
     shutil.copy(CRATE / "dist-one" / "one-in-all.html", OUT / "one-in-all.html")
@@ -81,7 +84,7 @@ def deploy() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--no-build", action="store_true", help="reuse dist-web and dist-one")
+    ap.add_argument("--no-build", action="store_true", help="reuse dist-web, dist-web-fw and dist-one")
     ap.add_argument("--deploy", action="store_true", help="push the site to the gh-pages branch")
     args = ap.parse_args()
     build(args.no_build)

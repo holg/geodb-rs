@@ -30,6 +30,9 @@ struct ContentView: View {
                                 .onSubmit {
                                     performSearch()
                                 }
+                            NavigationLink(destination: WatchGlobeScreen()) {
+                                Label("Globe", systemImage: "globe.europe.africa.fill")
+                            }
                         }
 
                         if isSearching {
@@ -139,6 +142,10 @@ struct WatchCityDetailView: View {
                         .foregroundColor(.secondary)
                     Text(String(format: "%.4f, %.4f", city.lat, city.lng))
                         .font(.footnote)
+                }
+
+                NavigationLink(destination: WatchGlobeScreen(focus: city)) {
+                    Label("Show on Globe", systemImage: "globe.europe.africa.fill")
                 }
 
                 if let distance = city.distanceKm {

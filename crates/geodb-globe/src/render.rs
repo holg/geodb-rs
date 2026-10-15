@@ -11,6 +11,25 @@ const SAMPLES: u32 = 4;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MAX_MARKERS: usize = 1024;
 
+/// How steep the hill shading looks (the heights are exaggerated this much against the cell size).
+const RELIEF_EXAGGERATION: f32 = 24.0;
+
+/// An f32 as the bits of an f16 (rounded; heights of a few thousand metres, no NaN or infinity needed).
+fn f16_bits(v: f32) -> u16 {
+    let b = v.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xff) as i32 - 127 + 15;
+    let man = b & 0x007f_ffff;
+    if exp <= 0 {
+        return sign; // (smaller than any height that matters)
+    }
+    if exp >= 31 {
+        return sign | 0x7bff;
+    }
+    let rounded = (((exp as u32) << 10) | (man >> 13)) + ((man >> 12) & 1);
+    sign | rounded.min(0x7bff) as u16
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Globals {
@@ -24,6 +43,71 @@ struct Globals {
     patch: [f32; 4],
     /// x, y: 1 = the left / right surface is luma + chroma.
     surface: [f32; 4],
+    /// Relief: x hill shading (strength, 0 off), y isohypses (0 off), z contour step in metres, w the
+    /// exaggeration of the shading.
+    relief: [f32; 4],
+    /// The ground under the camera for placing the detail tiles to the centimetre (see the shader's
+    /// `tile_uv`): unit vector under the camera and the altitude in earth radii; east; north; the camera's
+    /// right and up with tan(fov / 2); the patch uv under the camera, cos(latitude), 1 when valid.
+    nadir: [f32; 4],
+    east: [f32; 4],
+    north: [f32; 4],
+    cam_right: [f32; 4],
+    cam_up: [f32; 4],
+    patch_centre: [f32; 4],
+}
+
+/// The ground under the camera (nadir, east, north, camera right, camera up, patch centre), see [`Globals`].
+type Ground = ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]);
+
+/// The ground under the camera in f64 (the shader only has f32), see [`Globals`].
+fn ground_under(cam: &OrbitCamera, patch: Option<[f32; 4]>) -> Ground {
+    let (lat, lon) = (cam.lat.to_radians(), cam.lon.to_radians());
+    // the same axes as `geo::to_vec`: x = cos(lat) sin(lon), y = sin(lat), z = cos(lat) cos(lon)
+    let u = [lat.cos() * lon.sin(), lat.sin(), lat.cos() * lon.cos()];
+    let east = [lon.cos(), 0.0, -lon.sin()];
+    let north = [-lat.sin() * lon.sin(), lat.cos(), -lat.sin() * lon.cos()];
+    // look_at_rh(eye, 0, Y): forward = -u, right = forward x Y, up = right x forward
+    let f = [-u[0], -u[1], -u[2]];
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let norm = |a: [f64; 3]| {
+        let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-12);
+        [a[0] / l, a[1] / l, a[2] / l]
+    };
+    let right = norm(cross(f, [0.0, 1.0, 0.0]));
+    let up = cross(right, f);
+    let th = (f64::from(cam.fov_y) / 2.0).tan();
+    let v4 = |a: [f64; 3], w: f64| [a[0] as f32, a[1] as f32, a[2] as f32, w as f32];
+    // the patch uv under the camera: the shader's coarse formulas, in f64
+    let centre = patch.map_or([0.0, 0.0, 1.0, 0.0], |p| {
+        let (west, north_deg, z, proj) = (f64::from(p[0]), f64::from(p[1]), f64::from(p[2]), p[3]);
+        let merc = proj > 1.5;
+        let dl = (cam.lon - west).rem_euclid(360.0);
+        let pu = dl / (z * if merc { 360.0 } else { 1.0 });
+        let pv = if merc {
+            let q = std::f64::consts::FRAC_PI_4;
+            let phi = cam.lat.clamp(-85.05113, 85.05113).to_radians();
+            ((q + north_deg.to_radians() / 2.0).tan() / (q + phi / 2.0).tan()).ln()
+                / (std::f64::consts::TAU * z)
+        } else {
+            (north_deg - cam.lat) / z
+        };
+        [pu as f32, pv as f32, lat.cos() as f32, 1.0]
+    });
+    (
+        v4(u, cam.dist - 1.0),
+        v4(east, 0.0),
+        v4(north, 0.0),
+        v4(right, th * f64::from(cam.aspect)),
+        v4(norm(up), th),
+        centre,
+    )
 }
 
 #[repr(C)]
@@ -78,6 +162,10 @@ pub struct Renderer {
     /// Colour right of the split; a 1x1 placeholder without a split.
     right_view: SurfaceView,
     placeholder_view: wgpu::TextureView,
+    /// The elevation picture (metres, R16Float, equirectangular) of the relief layers, once loaded.
+    relief_view: Option<wgpu::TextureView>,
+    /// What the relief shows: hill shading, isohypses.
+    relief_on: (bool, bool),
     /// Split position as a fraction of the width, when comparing.
     split: Option<f32>,
     /// Detail patch: texture and its `detail` uniform (see
@@ -128,11 +216,15 @@ pub async fn request_device(
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("geodb-globe"),
             // WebGL2 gets its own limits (no compute); WebGPU and native get
-            // compute shaders for the GPU geoid queries.
+            // compute shaders for the GPU geoid queries. A limit the adapter
+            // does not reach is asked for at the adapter's value (the iOS
+            // simulator's Metal has 15 inter-stage shader variables, not 16).
             required_limits: if adapter.get_info().backend == wgpu::Backend::Gl {
                 wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
             } else {
-                wgpu::Limits::default().using_resolution(adapter.limits())
+                wgpu::Limits::default()
+                    .using_resolution(adapter.limits())
+                    .or_worse_values_from(&adapter.limits())
             },
             ..Default::default()
         })
@@ -363,6 +455,16 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let earth_view = earth_tex.create_view(&Default::default());
@@ -376,6 +478,7 @@ impl Renderer {
             [
                 &earth_view,
                 &earth_view,
+                &placeholder_view,
                 &placeholder_view,
                 &placeholder_view,
                 &placeholder_view,
@@ -545,6 +648,8 @@ impl Renderer {
             left_view: left_view_init.into(),
             right_view: placeholder_view.clone().into(),
             placeholder_view,
+            relief_view: None,
+            relief_on: (false, false),
             split: None,
             patch: None,
             globals,
@@ -639,6 +744,92 @@ impl Renderer {
         bytes
     }
 
+    /// Gives the globe an elevation picture: `heights` are metres (`w` x `h`, north up, longitude -180..180),
+    /// shown as hill shading and isohypses once switched on with [`Renderer::show_relief`]. `None` frees it.
+    pub fn set_relief(&mut self, heights: Option<(&[f32], u32, u32)>) {
+        self.relief_view = heights.map(|(m, w, h)| {
+            let bits: Vec<u16> = m.iter().map(|&v| f16_bits(v)).collect();
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("elevation"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&bits),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 2),
+                    rows_per_image: Some(h),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            tex.create_view(&Default::default())
+        });
+        self.rebind();
+    }
+
+    /// Which relief layers show (when an elevation picture is loaded): hill shading, isohypses.
+    pub fn show_relief(&mut self, shading: bool, isohypses: bool) {
+        self.relief_on = (shading, isohypses);
+    }
+
+    /// An RGBA8 sRGB picture (`size` x `size`) as a detail patch texture.
+    pub fn patch_view(&self, rgba: &[u8], size: u32) -> wgpu::TextureView {
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("detail patch"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 4),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        tex.create_view(&Default::default())
+    }
+
     /// Frees the coastlines.
     pub fn clear_coastlines(&mut self) {
         self.coast = None;
@@ -673,6 +864,7 @@ impl Renderer {
                     .chroma
                     .as_ref()
                     .unwrap_or(&self.placeholder_view),
+                self.relief_view.as_ref().unwrap_or(&self.placeholder_view),
             ],
         );
     }
@@ -766,7 +958,15 @@ impl Renderer {
     ) {
         let eye = cam.eye();
         let (qc, qr) = scene.query.unwrap_or((Vec3::Y, -1.0));
+        let (nadir, east, north, cam_right, cam_up, patch_centre) =
+            ground_under(cam, self.patch.as_ref().map(|p| p.1));
         let globals = Globals {
+            nadir,
+            east,
+            north,
+            cam_right,
+            cam_up,
+            patch_centre,
             view_proj: cam.view_proj().to_cols_array_2d(),
             camera: [eye.x, eye.y, eye.z, cam.dist as f32],
             sun: scene.sun_dir.extend(0.0).to_array(),
@@ -784,6 +984,26 @@ impl Renderer {
                 0.0,
                 0.0,
             ],
+            relief: {
+                // the contour step follows the height of the eye: far, a line every 1000 m; close, every 100 m
+                let alt = cam.dist as f32 - 1.0;
+                let step = if alt > 0.8 {
+                    1000.0
+                } else if alt > 0.25 {
+                    500.0
+                } else if alt > 0.06 {
+                    250.0
+                } else {
+                    100.0
+                };
+                let loaded = self.relief_view.is_some();
+                [
+                    if loaded && self.relief_on.0 { 1.0 } else { 0.0 },
+                    if loaded && self.relief_on.1 { 1.0 } else { 0.0 },
+                    step,
+                    RELIEF_EXAGGERATION,
+                ]
+            },
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1020,15 +1240,15 @@ fn upload_earth(device: &wgpu::Device, queue: &wgpu::Queue, earth: &EarthTexture
 }
 
 /// `views`: city lights (earth), left and right surface, detail patch,
-/// left and right chroma.
+/// left and right chroma, the elevation picture.
 fn make_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     globals: &wgpu::Buffer,
     sampler: &wgpu::Sampler,
-    views: [&wgpu::TextureView; 6],
+    views: [&wgpu::TextureView; 7],
 ) -> wgpu::BindGroup {
-    let [earth, left, right, patch, chroma_left, chroma_right] = views;
+    let [earth, left, right, patch, chroma_left, chroma_right, relief] = views;
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
         layout,
@@ -1064,6 +1284,10 @@ fn make_bind_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: wgpu::BindingResource::TextureView(chroma_right),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(relief),
             },
         ],
     })

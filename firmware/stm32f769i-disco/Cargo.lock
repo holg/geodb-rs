@@ -333,6 +333,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-net"
+version = "0.9.1"
+source = "git+https://github.com/embassy-rs/embassy?rev=d5e5b579ad0d61776887738263c2dd0c3c63d564#d5e5b579ad0d61776887738263c2dd0c3c63d564"
+dependencies = [
+ "defmt",
+ "document-features",
+ "embassy-futures",
+ "embassy-sync",
+ "embassy-time",
+ "embedded-io-async 0.7.0",
+ "heapless",
+ "xarxa",
+ "xarxa-driver",
+]
+
+[[package]]
 name = "embassy-ptp-driver"
 version = "0.1.0"
 source = "git+https://github.com/embassy-rs/embassy?rev=d5e5b579ad0d61776887738263c2dd0c3c63d564#d5e5b579ad0d61776887738263c2dd0c3c63d564"
@@ -635,6 +651,7 @@ dependencies = [
  "defmt",
  "defmt-rtt",
  "embassy-executor",
+ "embassy-net",
  "embassy-stm32",
  "embassy-time",
  "embedded-display-controller",
@@ -642,6 +659,7 @@ dependencies = [
  "geodb-fw-core",
  "otm8009a",
  "panic-probe",
+ "static_cell",
  "stm32-fmc",
 ]
 
@@ -667,6 +685,7 @@ version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
 dependencies = [
+ "defmt",
  "hash32",
  "stable_deref_trait",
 ]
@@ -958,6 +977,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "static_cell"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0530892bb4fa575ee0da4b86f86c667132a94b74bb72160f58ee5a4afec74c23"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
 name = "stm32-fmc"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1189,6 +1217,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "xarxa"
+version = "0.1.0"
+source = "git+https://github.com/embassy-rs/xarxa?rev=e5bc1b0408773f804f8d165257f34c3a11ae0181#e5bc1b0408773f804f8d165257f34c3a11ae0181"
+dependencies = [
+ "bitflags 2.13.2",
+ "byteorder",
+ "defmt",
+ "document-features",
+ "heapless",
+ "xarxa-driver",
 ]
 
 [[package]]

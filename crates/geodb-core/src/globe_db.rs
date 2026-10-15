@@ -35,7 +35,8 @@
 use crate::error::{GeoError, Result};
 use crate::spatial::{decode_geoid, generate_geoid, haversine_distance, RadiusBounds};
 #[cfg(not(feature = "legacy_model"))]
-use crate::text::{fold_key, FoldTable};
+use crate::text::fold_key;
+use crate::text::FoldTable;
 #[cfg(not(feature = "legacy_model"))]
 use crate::traits::GeoBackend;
 use serde::{Deserialize, Serialize};
@@ -360,7 +361,7 @@ impl CompactGlobeDb {
 
     /// Encode in the compact format with `geoid_bits` of geoid precision
     /// (even, 32..=64; see the module docs). Cities must be sorted by geoid,
-    /// as [`from_db`](Self::from_db) leaves them. The payload is gzipped
+    /// as `from_db` leaves them. The payload is gzipped
     /// with the `compact` feature.
     pub fn to_bytes(&self, geoid_bits: u8) -> Result<Vec<u8>> {
         self.encode(geoid_bits, cfg!(feature = "compact"))

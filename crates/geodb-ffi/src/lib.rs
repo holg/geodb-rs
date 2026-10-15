@@ -5,6 +5,12 @@ use error::FfiError;
 
 // C API for Cangjie FFI (separate from UniFFI)
 pub mod c_api;
+// The 3D globe for the Apple apps (C API, include/geodb_globe.h)
+#[cfg(all(target_vendor = "apple", not(target_os = "watchos")))]
+pub mod globe;
+// The board's software globe for watchOS (C API, include/geodb_watch_globe.h)
+#[cfg(any(target_os = "watchos", all(test, geodb_fw_image)))]
+pub mod watch_globe;
 use flate2::read::GzDecoder;
 use geodb_core::prelude::*;
 use std::io::Read;

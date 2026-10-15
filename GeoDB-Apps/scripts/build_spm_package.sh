@@ -53,6 +53,16 @@ fi
 
 echo -e "${GREEN}  ✓ Swift bindings generated from library${NC}"
 
+# The globe's C interface (src/globe.rs) goes into the same framework; the header hides it on watchOS.
+# watchOS gets the board's software globe instead (src/watch_globe.rs), its header only shows there.
+cp "$FFI_CRATE/include/geodb_globe.h" "$FFI_CRATE/include/geodb_watch_globe.h" generated/
+
+# The watch globe reads the board's image, firmware/stm32f769i-disco/geodb.fw (git-ignored: made here)
+if [ ! -f "$ROOT_DIR/firmware/stm32f769i-disco/geodb.fw" ]; then
+    echo "  • Making the board's image (geodb.fw) for the watch globe..."
+    (cd "$ROOT_DIR" && cargo run --release -p geodb-fw-core --features std --example make_image)
+fi
+
 # Step 3: Build Rust library for remaining platforms
 step "Building Rust libraries for iOS platforms..."
 cd "$FFI_CRATE"
@@ -86,11 +96,12 @@ echo "  • Linking tvOS arm64 dylib..."
 xcrun -sdk appletvos clang -arch arm64 -dynamiclib \
     -install_name @rpath/GeodbFfi.framework/GeodbFfi \
     -mtvos-version-min=13.0 \
-    -Wl,-all_load \
+    -Wl,-all_load -Wl,-dead_strip \
     -g \
     -o "$TVOS_DYLIB_DIR/GeodbFfi-arm64.dylib" \
     "$TARGET_DIR/aarch64-apple-tvos/release/libgeodb_ffi.a" \
-    -framework CoreFoundation -framework Security -liconv -lSystem 2>&1 | grep -v "ignoring duplicate" || true
+    -framework CoreFoundation -framework Security -liconv -lSystem \
+    -framework Metal -framework QuartzCore -framework CoreGraphics -framework Foundation -lobjc 2>&1 | grep -v "ignoring duplicate" || true
 
 # Fix minimum OS version using vtool
 echo "  • Setting minos to 13.0 using vtool..."
@@ -253,6 +264,8 @@ create_framework() {
         cat > "$fw_dir/Versions/A/Headers/module.modulemap" <<EOF
 framework module GeodbFfi {
     umbrella header "geodb_ffiFFI.h"
+    header "geodb_globe.h"
+    header "geodb_watch_globe.h"
     export *
 }
 EOF
@@ -322,6 +335,8 @@ EOF
     cat > "$fw_dir/Headers/module.modulemap" <<EOF
 framework module GeodbFfi {
     umbrella header "geodb_ffiFFI.h"
+    header "geodb_globe.h"
+    header "geodb_watch_globe.h"
     export *
 }
 EOF
@@ -541,6 +556,16 @@ let package = Package(
             name: "GeodbKit",
             targets: ["GeodbKit"]
         ),
+        // The 3D globe (wgpu on Metal) as a SwiftUI view; not on watchOS
+        .library(
+            name: "GeodbGlobe",
+            targets: ["GeodbGlobe"]
+        ),
+        // The board's software globe for watchOS
+        .library(
+            name: "GeodbWatchGlobe",
+            targets: ["GeodbWatchGlobe"]
+        ),
     ],
     targets: [
         // Binary FFI target - the framework module name is GeodbFfi
@@ -554,6 +579,24 @@ let package = Package(
             name: "GeodbKit",
             dependencies: ["GeodbFfi"],
             path: "Sources/GeodbKit"
+        ),
+
+        // The globe view over the C interface of crates/geodb-ffi/src/globe.rs
+        .target(
+            name: "GeodbGlobe",
+            dependencies: ["GeodbFfi"],
+            path: "Sources/GeodbGlobe",
+            linkerSettings: [
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+            ]
+        ),
+
+        // The watch globe view over the C interface of crates/geodb-ffi/src/watch_globe.rs
+        .target(
+            name: "GeodbWatchGlobe",
+            dependencies: ["GeodbFfi"],
+            path: "Sources/GeodbWatchGlobe"
         ),
 
         // Tests
